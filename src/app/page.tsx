@@ -5,7 +5,7 @@ import StripeKeyInput from './components/StripeKeyInput';
 import DisputesTable from './components/DisputesTable';
 import Header from './components/Header';
 import GoogleSignInButton from './components/GoogleSignInButton';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '@/lib/firebase/firebase';
 import DisputeTable from '@/app/components/DisputeTable';
@@ -16,7 +16,7 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState(true);
   const [showStripeKeyModal, setShowStripeKeyModal] = useState(false);
 
-  const checkStripeKey = async () => {
+  const checkStripeKey = useCallback(async () => {
     if (!user?.email) {
       setIsLoading(false);
       return;
@@ -32,11 +32,11 @@ export default function Home() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [user?.email]);
 
   useEffect(() => {
     checkStripeKey();
-  }, [user?.email]);
+  }, [checkStripeKey]);
 
   const handleStripeKeySuccess = () => {
     checkStripeKey();

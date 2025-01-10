@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '@/lib/hooks/useAuth';
 import { CalendarDays, Clock } from 'lucide-react';
 import EmailComposer from './EmailComposer';
@@ -55,7 +55,7 @@ export default function EmailCorrespondence({ customerEmail }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [showComposer, setShowComposer] = useState(false);
 
-  const fetchEmails = async () => {
+  const fetchEmails = useCallback(async () => {
     if (!user || !gmailAccessToken || !customerEmail) {
       setLoading(false);
       return;
@@ -83,13 +83,6 @@ export default function EmailCorrespondence({ customerEmail }: Props) {
         new Date(a.date).getTime() - new Date(b.date).getTime()
       );
       
-      // Debug log the messages
-      console.log('Sorted messages:', sortedMessages.map((m: EmailMessage) => ({
-        id: m.id,
-        date: m.date,
-        subject: m.subject
-      })));
-      
       setMessages(sortedMessages);
     } catch (err) {
       console.error('Error fetching emails:', err);
@@ -97,11 +90,11 @@ export default function EmailCorrespondence({ customerEmail }: Props) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [user, gmailAccessToken, customerEmail]);
 
   useEffect(() => {
     fetchEmails();
-  }, [user, gmailAccessToken, customerEmail]);
+  }, [fetchEmails]);
 
   if (!user || !gmailAccessToken) {
     return (
