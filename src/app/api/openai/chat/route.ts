@@ -1,15 +1,29 @@
-import { openai } from "@ai-sdk/openai";
-import { convertToCoreMessages, streamText } from "ai";
+import { OpenAI } from "openai";
+import { StreamingTextResponse, OpenAIStream } from 'ai';
 
 export const runtime = "edge";
 
 export async function POST(req: Request) {
-  const { messages } = await req.json();
-  const result = await streamText({
-    model: openai("gpt-4"),
-    messages: convertToCoreMessages(messages),
-    system: "You are a helpful AI assistant",
-  });
+  try {
+    const { messages } = await req.json();
+    
+    const openai = new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY,
+    });
 
-  return result.toDataStreamResponse();
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4',
+      messages,
+      stream: true,
+    });
+
+    const stream = OpenAIStream(response);
+    return new StreamingTextResponse(stream);
+  } catch (error) {
+    console.error('Error in chat:', error);
+    return new Response(
+      JSON.stringify({ error: 'Failed to process chat request' }), 
+      { status: 500, headers: { 'Content-Type': 'application/json' } }
+    );
+  }
 }
