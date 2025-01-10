@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import Stripe from 'stripe';
-import { db } from '@/lib/firebase/firebase';
+import { getFirebaseDB } from '@/lib/firebase/firebase';
 import { collection, query, where, getDocs } from 'firebase/firestore';
 
 // Statuses that require attention
@@ -15,6 +15,11 @@ export async function GET(request: Request) {
     const userEmail = request.headers.get('X-User-Email');
     if (!userEmail) {
       return NextResponse.json({ error: 'No user email provided' }, { status: 401 });
+    }
+
+    const db = getFirebaseDB();
+    if (!db) {
+      return NextResponse.json({ error: 'Database not initialized' }, { status: 500 });
     }
 
     // Get Stripe API key from Firebase

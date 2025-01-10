@@ -1,7 +1,7 @@
 import { useAuth } from '@/lib/hooks/useAuth';
 import { useState, useEffect } from 'react';
 import { collection, query, where, getDocs } from 'firebase/firestore';
-import { db } from '@/lib/firebase/firebase';
+import { getFirebaseDB } from '@/lib/firebase/firebase';
 import Image from 'next/image';
 
 interface Props {
@@ -17,6 +17,12 @@ export default function Header({ onStripeLogoClick }: Props) {
       if (!user?.email) return;
 
       try {
+        const db = getFirebaseDB();
+        if (!db) {
+          console.error('Database not initialized');
+          return;
+        }
+
         const stripeKeysRef = collection(db, 'stripeKeys');
         const q = query(stripeKeysRef, where('userEmail', '==', user.email));
         const querySnapshot = await getDocs(q);

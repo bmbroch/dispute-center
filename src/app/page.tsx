@@ -7,7 +7,7 @@ import Header from './components/Header';
 import GoogleSignInButton from './components/GoogleSignInButton';
 import { useState, useEffect, useCallback } from 'react';
 import { collection, query, where, getDocs } from 'firebase/firestore';
-import { db } from '@/lib/firebase/firebase';
+import { getFirebaseDB } from '@/lib/firebase/firebase';
 import DisputeTable from '@/app/components/DisputeTable';
 
 export default function Home() {
@@ -23,6 +23,13 @@ export default function Home() {
     }
 
     try {
+      const db = getFirebaseDB();
+      if (!db) {
+        console.error('Database not initialized');
+        setIsLoading(false);
+        return;
+      }
+
       const stripeKeysRef = collection(db, 'stripeKeys');
       const q = query(stripeKeysRef, where('userEmail', '==', user.email));
       const querySnapshot = await getDocs(q);
