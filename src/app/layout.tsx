@@ -11,7 +11,7 @@ const roboto = Roboto({
 })
 
 export const metadata: Metadata = {
-  title: 'Dispute Center',
+  title: 'Stripe Dispute Center',
   description: 'Your platform for managing and resolving disputes efficiently.',
 }
 

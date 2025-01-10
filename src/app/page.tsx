@@ -60,7 +60,7 @@ export default function Home() {
         <Header onStripeLogoClick={handleStripeLogoClick} />
         <div className="min-h-screen flex items-center justify-center bg-gray-50">
           <div className="text-center">
-            <h1 className="text-2xl font-bold text-gray-900 mb-4">Welcome to Dispute Center</h1>
+            <h1 className="text-2xl font-bold text-gray-900 mb-4">Welcome to Stripe Dispute Center</h1>
             <p className="text-gray-600 mb-6">Please sign in to continue.</p>
             <GoogleSignInButton />
           </div>
