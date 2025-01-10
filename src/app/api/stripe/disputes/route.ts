@@ -27,7 +27,7 @@ export async function GET(request: Request) {
     }
 
     const stripeKey = querySnapshot.docs[0].data().apiKey;
-    const stripe = new Stripe(stripeKey, { apiVersion: '2023-10-16' });
+    const stripe = new Stripe(stripeKey, { apiVersion: '2024-12-18.acacia' });
 
     // Fetch all disputes and filter by relevant statuses
     const disputes = await stripe.disputes.list({
