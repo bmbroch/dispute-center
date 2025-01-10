@@ -49,54 +49,41 @@ const decodeEmailBody = (body: string) => {
 };
 
 export default function EmailCorrespondence({ customerEmail }: Props) {
-  const { user, gmailAccessToken } = useAuth();
+  const { user } = useAuth();
   const [messages, setMessages] = useState<EmailMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showComposer, setShowComposer] = useState(false);
 
-  const fetchEmails = useCallback(async () => {
-    if (!user || !gmailAccessToken || !customerEmail) {
-      setLoading(false);
-      return;
-    }
-
-    setLoading(true);
-    setError(null);
-
+  const fetchEmails = async () => {
+    if (!user?.accessToken) return;
+    
     try {
       const response = await fetch('/api/gmail', {
         headers: {
-          'X-Gmail-Access-Token': gmailAccessToken,
-          'X-Customer-Email': customerEmail,
-        },
+          'Authorization': `Bearer ${user.accessToken}`,
+          'X-Dispute-Email': customerEmail
+        }
       });
 
-      const data = await response.json();
-
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to fetch emails');
+        throw new Error('Failed to fetch emails');
       }
 
-      // Sort messages by date in ascending order (oldest first)
-      const sortedMessages = data.messages.sort((a: EmailMessage, b: EmailMessage) => 
-        new Date(a.date).getTime() - new Date(b.date).getTime()
-      );
-      
-      setMessages(sortedMessages);
+      const data = await response.json();
+      setMessages(data.messages || []);
     } catch (err) {
-      console.error('Error fetching emails:', err);
       setError(err instanceof Error ? err.message : 'Failed to fetch emails');
     } finally {
       setLoading(false);
     }
-  }, [user, gmailAccessToken, customerEmail]);
+  };
 
   useEffect(() => {
     fetchEmails();
-  }, [fetchEmails]);
+  }, [user, customerEmail]);
 
-  if (!user || !gmailAccessToken) {
+  if (!user) {
     return (
       <div className="p-4 text-gray-600">
         <p>Please sign in with your Google account to view email correspondence.</p>

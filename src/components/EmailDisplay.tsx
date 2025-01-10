@@ -28,14 +28,20 @@ interface Email {
 export default function EmailDisplay({ userEmail }: { userEmail: string }) {
   const [emails, setEmails] = useState<Email[]>([]);
   const [loading, setLoading] = useState(false);
-  const { gmailAccessToken } = useAuth();
+  const { user } = useAuth();
 
   const fetchEmails = async () => {
-    if (!gmailAccessToken) return;
+    if (!user?.accessToken) return;
     
     setLoading(true);
     try {
-      const gmailService = new GmailService(gmailAccessToken);
+      const response = await fetch('/api/gmail', {
+        headers: {
+          'Authorization': `Bearer ${user.accessToken}`,
+          'X-Dispute-Email': userEmail
+        }
+      });
+      const gmailService = new GmailService(user.accessToken);
       const messageList = await gmailService.listEmails(10); // Fetch last 10 emails
       
       const emailDetails = await Promise.all(

@@ -86,13 +86,12 @@ export default function Header({ onStripeLogoClick }: Props) {
             {/* User Profile */}
             <div className="flex items-center space-x-3">
               <div className="flex items-center space-x-2">
-                {user.photoURL ? (
+                {user.picture ? (
                   <div className="w-8 h-8 rounded-full overflow-hidden">
                     <img
-                      src={user.photoURL}
-                      alt="Profile"
+                      src={user.picture}
+                      alt={user.name || 'User'}
                       className="w-full h-full object-cover"
-                      referrerPolicy="no-referrer"
                     />
                   </div>
                 ) : (

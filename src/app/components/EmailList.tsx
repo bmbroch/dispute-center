@@ -15,31 +15,20 @@ interface EmailMessage {
 }
 
 export default function EmailList() {
-  const { user, gmailAccessToken } = useAuth();
+  const { user } = useAuth();
   const [emails, setEmails] = useState<EmailMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchEmails = async () => {
-      if (!user || !gmailAccessToken) {
-        console.log('Missing required auth:', { 
-          hasUser: !!user, 
-          hasToken: !!gmailAccessToken 
-        });
-        setLoading(false);
-        return;
-      }
-
-      setLoading(true);
-      setError(null);
-
+      if (!user?.accessToken) return;
+      
       try {
-        console.log('Fetching emails with token:', gmailAccessToken.substring(0, 10) + '...');
         const response = await fetch('/api/gmail', {
           headers: {
-            'X-Gmail-Access-Token': gmailAccessToken,
-          },
+            'Authorization': `Bearer ${user.accessToken}`
+          }
         });
 
         const data = await response.json();
@@ -66,14 +55,10 @@ export default function EmailList() {
     };
 
     fetchEmails();
-  }, [user, gmailAccessToken]);
+  }, [user]);
 
   if (!user) {
     return <div className="p-4">Please sign in to view your emails.</div>;
-  }
-
-  if (!gmailAccessToken) {
-    return <div className="p-4">Gmail access not granted. Please sign in with Gmail permissions.</div>;
   }
 
   if (loading) {

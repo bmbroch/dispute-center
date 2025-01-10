@@ -16,7 +16,7 @@ interface Props {
 }
 
 export default function EmailComposer({ customerEmail, onClose, onEmailSent, latestEmail }: Props) {
-  const { user, gmailAccessToken } = useAuth();
+  const { user } = useAuth();
   const [subject, setSubject] = useState('');
   const [body, setBody] = useState('');
   const [isSending, setIsSending] = useState(false);
@@ -24,58 +24,26 @@ export default function EmailComposer({ customerEmail, onClose, onEmailSent, lat
 
   useEffect(() => {
     if (latestEmail) {
-      // Format subject as a reply if it doesn't already start with Re:
-      const replySubject = latestEmail.subject.startsWith('Re:') 
-        ? latestEmail.subject 
-        : `Re: ${latestEmail.subject}`;
-      setSubject(replySubject);
-
-      // Format the quoted text exactly like Gmail
-      const formattedDate = new Date(latestEmail.date).toLocaleString('en-US', {
-        weekday: 'short',
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric',
-        hour: 'numeric',
-        minute: 'numeric',
-        hour12: true
-      });
-
-      // Gmail style quoted text with proper line breaks and formatting
-      const quotedText = `
-
-On ${formattedDate}, ${latestEmail.from} wrote:
-> ${latestEmail.body.split('\n').join('\n> ')}`;
-      
-      setBody(quotedText);
+      setSubject(latestEmail.subject.startsWith('Re:') ? latestEmail.subject : `Re: ${latestEmail.subject}`);
+      setBody('');
     }
   }, [latestEmail]);
 
   const handleSend = async () => {
-    if (!gmailAccessToken) {
-      setError('Gmail access not granted');
-      return;
-    }
-
-    if (!subject.trim() || !body.trim()) {
-      setError('Subject and body are required');
-      return;
-    }
-
+    if (!user?.accessToken) return;
+    
     setIsSending(true);
-    setError('');
-
     try {
-      const response = await fetch('/api/gmail', {
+      const response = await fetch('/api/gmail/send', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': `Bearer ${user.accessToken}`
         },
         body: JSON.stringify({
           subject,
           body: body.trim(),
           to: customerEmail,
-          accessToken: gmailAccessToken,
         }),
       });
 
