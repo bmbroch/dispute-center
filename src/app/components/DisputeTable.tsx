@@ -28,16 +28,16 @@ export default function DisputeTable() {
   const [expandedRow, setExpandedRow] = useState<string | null>(null);
   const [emails, setEmails] = useState<Record<string, Email[]>>({});
   const [loading, setLoading] = useState<Record<string, boolean>>({});
-  const { gmailAccessToken } = useAuth();
+  const { user } = useAuth();
 
   const fetchEmails = async (userEmail: string) => {
-    if (loading[userEmail]) return;
+    if (loading[userEmail] || !user?.accessToken) return;
     
     setLoading(prev => ({ ...prev, [userEmail]: true }));
     try {
       const response = await fetch('/api/gmail', {
         headers: {
-          'Authorization': `Bearer ${gmailAccessToken}`,
+          'Authorization': `Bearer ${user.accessToken}`,
           'X-Dispute-Email': userEmail
         }
       });
