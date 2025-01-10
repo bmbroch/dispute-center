@@ -13,7 +13,7 @@ export async function POST(request: Request) {
 
     // Validate the API key by making a test call to Stripe
     try {
-      const stripe = new Stripe(apiKey, { apiVersion: '2023-10-16' });
+      const stripe = new Stripe(apiKey, { apiVersion: '2024-12-18.acacia' });
       await stripe.balance.retrieve(); // Simple test call
     } catch (error) {
       return NextResponse.json({ error: 'Invalid Stripe API key' }, { status: 400 });
