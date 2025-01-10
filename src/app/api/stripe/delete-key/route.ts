@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { db } from '@/lib/firebase/firebase';
+import { getFirebaseDB } from '@/lib/firebase/firebase';
 import { collection, query, where, getDocs, deleteDoc } from 'firebase/firestore';
 
 export async function POST(request: Request) {
@@ -8,6 +8,11 @@ export async function POST(request: Request) {
 
     if (!userEmail) {
       return NextResponse.json({ error: 'User email is required' }, { status: 400 });
+    }
+
+    const db = getFirebaseDB();
+    if (!db) {
+      return NextResponse.json({ error: 'Database not initialized' }, { status: 500 });
     }
 
     // Find and delete the key

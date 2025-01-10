@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { db } from '@/lib/firebase/firebase';
+import { getFirebaseDB } from '@/lib/firebase/firebase';
 import { collection, query, where, getDocs, addDoc, updateDoc } from 'firebase/firestore';
 import Stripe from 'stripe';
 
@@ -17,6 +17,11 @@ export async function POST(request: Request) {
       await stripe.balance.retrieve(); // Simple test call
     } catch (error) {
       return NextResponse.json({ error: 'Invalid Stripe API key' }, { status: 400 });
+    }
+
+    const db = getFirebaseDB();
+    if (!db) {
+      return NextResponse.json({ error: 'Database not initialized' }, { status: 500 });
     }
 
     // Check if a key already exists for this user
