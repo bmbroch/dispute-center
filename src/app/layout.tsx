@@ -1,6 +1,14 @@
 import type { Metadata } from 'next'
 import './globals.css'
 import { Providers } from './providers'
+import { Roboto } from 'next/font/google'
+
+const roboto = Roboto({
+  weight: ['400', '500'],
+  subsets: ['latin'],
+  display: 'swap',
+  variable: '--font-roboto',
+})
 
 export const metadata: Metadata = {
   title: 'Dispute Center',
@@ -13,14 +21,8 @@ export default function RootLayout({
   children: React.ReactNode
 }) {
   return (
-    <html lang="en">
-      <head>
-        <link
-          href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500&display=swap"
-          rel="stylesheet"
-        />
-      </head>
-      <body>
+    <html lang="en" className={roboto.variable}>
+      <body className="font-sans">
         <Providers>
           {children}
         </Providers>
