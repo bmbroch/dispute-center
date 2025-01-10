@@ -45,7 +45,7 @@ export async function GET(request: Request) {
       let customerEmail = 'N/A';
       if (dispute.charge && typeof dispute.charge !== 'string') {
         const customer = dispute.charge.customer;
-        if (customer && typeof customer !== 'string') {
+        if (customer && typeof customer !== 'string' && !('deleted' in customer)) {
           customerEmail = customer.email || 'N/A';
         }
       }
