@@ -1,38 +1,35 @@
 "use client";
 
 import React, { createContext, useEffect, useState } from "react";
-import { User } from "firebase/auth";
 
-interface AuthContextType {
-  user: User | null;
-  loading: boolean;
-  gmailAccessToken: string | null;
-  signInWithGoogle: () => Promise<void>;
-  signOut: () => Promise<void>;
-  refreshGmailToken: () => Promise<void>;
+interface GoogleUser {
+  email: string;
+  name: string | null;
+  picture: string | null;
+  accessToken: string;
+  refreshToken?: string;
+  tokenExpiry?: number;
 }
 
-interface StoredUserData {
-  email: string;
-  displayName: string | null;
-  photoURL: string | null;
-  tokenExpiry?: number;
-  refreshToken?: string;
+interface AuthContextType {
+  user: GoogleUser | null;
+  loading: boolean;
+  signInWithGoogle: () => Promise<void>;
+  signOut: () => Promise<void>;
+  refreshToken: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType>({
   user: null,
   loading: true,
-  gmailAccessToken: null,
   signInWithGoogle: async () => {},
   signOut: async () => {},
-  refreshGmailToken: async () => {},
+  refreshToken: async () => {},
 });
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<GoogleUser | null>(null);
   const [loading, setLoading] = useState(true);
-  const [gmailAccessToken, setGmailAccessToken] = useState<string | null>(null);
 
   const checkTokenExpiration = (tokenExpiry?: number) => {
     if (!tokenExpiry) return true;
@@ -43,38 +40,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Load persisted data on mount
   useEffect(() => {
     try {
-      const storedToken = localStorage.getItem('gmailAccessToken');
       const storedUserData = localStorage.getItem('userData');
       
-      if (storedToken && storedUserData) {
-        const userData = JSON.parse(storedUserData) as StoredUserData;
+      if (storedUserData) {
+        const userData = JSON.parse(storedUserData) as GoogleUser;
         
         // Check if token is expired
         if (!checkTokenExpiration(userData.tokenExpiry)) {
-          setGmailAccessToken(storedToken);
-          // Create a minimal User object with the stored data
-          setUser({
-            email: userData.email,
-            displayName: userData.displayName,
-            photoURL: userData.photoURL,
-            emailVerified: true,
-            isAnonymous: false,
-            uid: userData.email,
-            providerData: [],
-            metadata: {},
-            refreshToken: userData.refreshToken || '',
-            tenantId: null,
-            phoneNumber: null,
-            providerId: 'google.com',
-            delete: async () => {},
-            getIdToken: async () => storedToken,
-            getIdTokenResult: async () => ({ token: storedToken } as any),
-            reload: async () => {},
-            toJSON: () => ({}),
-          } as User);
+          setUser(userData);
         } else {
           // Token is expired, clear storage and trigger sign in
-          localStorage.removeItem('gmailAccessToken');
           localStorage.removeItem('userData');
           signInWithGoogle().catch(console.error);
         }
@@ -82,7 +57,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch (error) {
       console.error('Error loading persisted data:', error);
       // Clear potentially corrupted data
-      localStorage.removeItem('gmailAccessToken');
       localStorage.removeItem('userData');
     } finally {
       setLoading(false);
@@ -91,7 +65,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signInWithGoogle = async () => {
     try {
-      // Create the OAuth URL with all necessary scopes for both authentication and Gmail
+      // Create the OAuth URL with all necessary scopes
       const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
       authUrl.searchParams.append('client_id', process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || '');
       authUrl.searchParams.append('redirect_uri', `${process.env.NEXT_PUBLIC_APP_URL}/auth/callback`);
@@ -128,9 +102,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 const { access_token, refresh_token, tokenExpiry } = event.data;
                 
                 if (access_token) {
-                  console.log('Got access token with Gmail permissions');
-                  setGmailAccessToken(access_token);
-                  
                   // Fetch user info
                   const userResponse = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
                     headers: {
@@ -144,39 +115,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                   
                   const userInfo = await userResponse.json();
                   
-                  // Store user data with token expiry and refresh token
-                  const userData: StoredUserData = {
+                  // Create user data object
+                  const userData: GoogleUser = {
                     email: userInfo.email,
-                    displayName: userInfo.name,
-                    photoURL: userInfo.picture,
-                    tokenExpiry,
-                    refreshToken: refresh_token
+                    name: userInfo.name,
+                    picture: userInfo.picture,
+                    accessToken: access_token,
+                    refreshToken: refresh_token,
+                    tokenExpiry
                   };
                   
-                  localStorage.setItem('gmailAccessToken', access_token);
                   localStorage.setItem('userData', JSON.stringify(userData));
-                  
-                  // Create a User object
-                  setUser({
-                    email: userInfo.email,
-                    displayName: userInfo.name,
-                    photoURL: userInfo.picture,
-                    emailVerified: true,
-                    isAnonymous: false,
-                    uid: userInfo.email,
-                    providerData: [],
-                    metadata: {},
-                    refreshToken: refresh_token || '',
-                    tenantId: null,
-                    phoneNumber: null,
-                    providerId: 'google.com',
-                    delete: async () => {},
-                    getIdToken: async () => access_token,
-                    getIdTokenResult: async () => ({ token: access_token } as any),
-                    reload: async () => {},
-                    toJSON: () => ({}),
-                  } as User);
-                  
+                  setUser(userData);
                   resolve();
                 } else {
                   reject(new Error('No access token received'));
@@ -214,21 +164,54 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const signOutUser = async () => {
+  const refreshToken = async () => {
+    if (!user?.refreshToken) {
+      throw new Error('No refresh token available');
+    }
+
+    try {
+      const response = await fetch('/api/auth/refresh', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ refreshToken: user.refreshToken }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to refresh token');
+      }
+
+      const { access_token, tokenExpiry } = await response.json();
+      
+      const updatedUser = {
+        ...user,
+        accessToken: access_token,
+        tokenExpiry,
+      };
+
+      localStorage.setItem('userData', JSON.stringify(updatedUser));
+      setUser(updatedUser);
+    } catch (error) {
+      console.error('Error refreshing token:', error);
+      // If refresh fails, sign out user
+      await signOut();
+      throw error;
+    }
+  };
+
+  const signOut = async () => {
     setUser(null);
-    setGmailAccessToken(null);
-    localStorage.removeItem('gmailAccessToken');
     localStorage.removeItem('userData');
   };
 
   return (
     <AuthContext.Provider value={{ 
       user, 
-      loading, 
-      gmailAccessToken,
+      loading,
       signInWithGoogle, 
-      signOut: signOutUser,
-      refreshGmailToken: signInWithGoogle
+      signOut,
+      refreshToken
     }}>
       {children}
     </AuthContext.Provider>
