@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '@/lib/hooks/useAuth';
 import EmailComposer from './EmailComposer';
 import he from 'he';
@@ -139,7 +139,7 @@ export default function EmailCorrespondence({ customerEmail }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [showComposer, setShowComposer] = useState(false);
 
-  const fetchEmails = async () => {
+  const fetchEmails = useCallback(async () => {
     if (!user?.accessToken) return;
     
     setLoading(true);
@@ -177,11 +177,11 @@ export default function EmailCorrespondence({ customerEmail }: Props) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [user, customerEmail]);
 
   useEffect(() => {
     fetchEmails();
-  }, [user, customerEmail]);
+  }, [user, customerEmail, fetchEmails]);
 
   if (loading) {
     return <div className="py-4 text-center text-gray-500">Loading emails...</div>;
@@ -261,7 +261,7 @@ export default function EmailCorrespondence({ customerEmail }: Props) {
               </div>
             </div>
 
-            {nextMessage && getDaysBetweenMessages() > 0 && (
+            {nextMessage && getDaysBetweenMessages() !== null && getDaysBetweenMessages()! > 0 && (
               <div className="relative py-8">
                 <div className="absolute inset-0 flex items-center">
                   <div className="border-t border-gray-200 w-full"></div>
