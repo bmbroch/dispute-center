@@ -1,7 +1,7 @@
 'use client';
 
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { safeWindow, getEthereum, safelyAccessExtensionProperty } from '../utils/browserUtils';
+import { getEthereum, safelyAccessExtensionProperty } from '../utils/browserUtils';
 
 interface ExtensionSafetyContextType {
   ethereum: any;
