@@ -88,10 +88,13 @@ export default function Header({ onStripeLogoClick }: Props) {
               <div className="flex items-center space-x-2">
                 {user.picture ? (
                   <div className="w-8 h-8 rounded-full overflow-hidden">
-                    <img
+                    <Image
                       src={user.picture}
                       alt={user.name || 'User'}
-                      className="w-full h-full object-cover"
+                      width={32}
+                      height={32}
+                      className="object-cover w-full h-full"
+                      priority
                     />
                   </div>
                 ) : (

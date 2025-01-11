@@ -172,8 +172,10 @@ export default function DisputesTable({ onDisputeCountChange }: Props) {
                 </tr>
                 {expandedDispute === dispute.id && (
                   <tr>
-                    <td colSpan={6} className="px-6 py-4">
-                      <EmailCorrespondence customerEmail={dispute.customerEmail} />
+                    <td colSpan={6}>
+                      <div className="p-4 bg-gray-50">
+                        <EmailCorrespondence customerEmail={dispute.customerEmail} />
+                      </div>
                     </td>
                   </tr>
                 )}

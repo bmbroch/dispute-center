@@ -31,3 +31,38 @@ body {
     text-wrap: balance;
   }
 }
+
+/* Add these styles for email content */
+.email-content {
+  white-space: normal;
+  word-wrap: break-word;
+  line-height: normal;
+}
+
+.email-content br {
+  display: block;
+  height: 0.5em;
+}
+
+.email-content p {
+  margin: 0;
+  padding: 0;
+}
+
+.email-content strong,
+.email-content b {
+  font-weight: 700;
+  display: inline;
+}
+
+.email-content em,
+.email-content i {
+  font-style: italic;
+  display: inline;
+}
+
+.email-content img {
+  max-width: 100%;
+  height: auto;
+  margin: 0.5em 0;
+}

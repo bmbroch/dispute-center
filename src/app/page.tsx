@@ -5,6 +5,7 @@ import StripeKeyInput from './components/StripeKeyInput';
 import DisputesTable from './components/DisputesTable';
 import Header from './components/Header';
 import GoogleSignInButton from './components/GoogleSignInButton';
+import DownArrow from './components/DownArrow';
 import { useState, useEffect, useCallback } from 'react';
 import { collection, query, where, getDocs } from 'firebase/firestore';
 import { getFirebaseDB } from '@/lib/firebase/firebase';
@@ -58,11 +59,22 @@ export default function Home() {
     return (
       <>
         <Header onStripeLogoClick={handleStripeLogoClick} />
-        <div className="min-h-screen flex items-center justify-center bg-gray-50">
-          <div className="text-center">
-            <h1 className="text-2xl font-bold text-gray-900 mb-4">Welcome to Stripe Dispute Center</h1>
-            <p className="text-gray-600 mb-6">Please sign in to continue.</p>
-            <GoogleSignInButton />
+        <div className="min-h-screen flex flex-col items-center justify-center bg-white px-4">
+          <div className="text-center max-w-[800px] w-full space-y-8">
+            <div className="space-y-6">
+              <h1 className="text-[80px] font-medium text-gray-900 leading-tight tracking-tight">
+                Stripe Dispute Center
+              </h1>
+              <p className="text-4xl text-gray-500 font-light">
+                Manage your disputes with ease.
+              </p>
+            </div>
+            <div className="space-y-4">
+              <DownArrow />
+              <div className="flex justify-center">
+                <GoogleSignInButton />
+              </div>
+            </div>
           </div>
         </div>
       </>

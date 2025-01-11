@@ -5,6 +5,7 @@ export async function GET(request: NextRequest) {
   const disputeEmail = request.headers.get('X-Dispute-Email');
   
   if (!authHeader || !disputeEmail) {
+    console.error('Missing auth header or dispute email');
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
@@ -23,10 +24,17 @@ export async function GET(request: NextRequest) {
     );
 
     if (!response.ok) {
+      console.error('Gmail API response not ok:', await response.text());
       throw new Error('Failed to fetch emails');
     }
 
     const data = await response.json();
+    
+    if (!data.messages || !Array.isArray(data.messages)) {
+      console.log('No messages found in Gmail API response:', data);
+      return NextResponse.json({ messages: [] });
+    }
+
     const emails = await Promise.all(
       data.messages.slice(0, 10).map(async (message: { id: string }) => {
         const emailResponse = await fetch(
@@ -78,19 +86,41 @@ export async function GET(request: NextRequest) {
         body = decodeBody(email.payload.body.data);
       }
 
+      // Ensure we get a proper date from the headers
+      const dateHeader = email.payload.headers.find((h: any) => h.name === 'Date')?.value;
+      const date = dateHeader 
+        ? new Date(dateHeader).toISOString() 
+        : new Date(parseInt(email.internalDate)).toISOString();
+
       return {
         id: email.id,
         subject: email.payload.headers.find((h: any) => h.name === 'Subject')?.value || 'No Subject',
         from: email.payload.headers.find((h: any) => h.name === 'From')?.value || '',
         to: email.payload.headers.find((h: any) => h.name === 'To')?.value || '',
-        date: email.payload.headers.find((h: any) => h.name === 'Date')?.value || '',
+        date: date,
         body: body || email.snippet || ''
       };
     }));
 
-    return NextResponse.json({ emails: formattedEmails });
+    // Sort emails by date before sending
+    const sortedEmails = formattedEmails.sort((a, b) => {
+      const dateA = new Date(a.date).getTime();
+      const dateB = new Date(b.date).getTime();
+      return dateA - dateB;
+    });
+
+    // Add logging before sending response
+    console.log(`Found ${sortedEmails.length} emails for ${disputeEmail}`);
+    
+    return NextResponse.json({ 
+      messages: sortedEmails,
+      count: sortedEmails.length 
+    });
   } catch (error) {
     console.error('Error fetching emails:', error);
-    return NextResponse.json({ error: 'Failed to fetch emails' }, { status: 500 });
+    return NextResponse.json({ 
+      error: 'Failed to fetch emails',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    }, { status: 500 });
   }
 } 

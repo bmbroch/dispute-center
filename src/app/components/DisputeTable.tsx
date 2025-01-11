@@ -2,9 +2,6 @@
 
 import { useState, Fragment } from 'react';
 import { useAuth } from '@/lib/hooks/useAuth';
-import createDOMPurifier from 'isomorphic-dompurify';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 
 interface Dispute {
   userEmail: string;
@@ -42,7 +39,13 @@ export default function DisputeTable() {
         }
       });
       const data = await response.json();
-      setEmails(prev => ({ ...prev, [userEmail]: data.emails }));
+      
+      // Sort emails by date before setting state
+      const sortedEmails = (data.messages || []).sort((a: Email, b: Email) => {
+        return new Date(a.date).getTime() - new Date(b.date).getTime();
+      });
+      
+      setEmails(prev => ({ ...prev, [userEmail]: sortedEmails }));
     } catch (error) {
       console.error('Error fetching emails:', error);
     } finally {
@@ -69,7 +72,7 @@ export default function DisputeTable() {
       .replace(/`image: .*`/g, '') // Remove image placeholders
       .replace(/-Interview sidekick/g, '') // Remove signature
       .replace(/ben@interviewsidekick\.com/g, '') // Remove email addresses
-      .replace(/\r?\n\s*\r?\n/g, '\n\n') // Normalize multiple newlines
+      .replace(/\r\n/g, '\n') // Normalize line endings
       .trim();
     
     return cleaned;
@@ -79,18 +82,19 @@ export default function DisputeTable() {
     const cleanedBody = cleanEmailBody(body);
     
     // Process the body to handle all formatting cases
-    return cleanedBody
-      // First handle any escaped characters
-      .replace(/\\([*_])/g, '\\\\$1')
-      // Convert Gmail's bold markers to HTML
-      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-      .replace(/\*([^*]+)\*/g, '<strong>$1</strong>')
-      // Convert Gmail's italic markers to HTML
+    let formattedBody = cleanedBody
+      // Handle bold text (before line breaks)
+      .replace(/\*\*([^\*]+)\*\*/g, '<strong>$1</strong>')  // Double asterisk
+      .replace(/\*([^\*]+)\*/g, '<strong>$1</strong>')      // Single asterisk
+      // Handle italics
       .replace(/_([^_]+)_/g, '<em>$1</em>')
-      // Remove any remaining special formatting
-      .replace(/\[([^\]]+)\]/g, '$1')
-      // Clean up any remaining escape characters
-      .replace(/\\\\([*_])/g, '$1');
+      .replace(/\/([^\/]+)\//g, '<em>$1</em>')
+      // Handle line breaks
+      .replace(/\n/g, '<br>')
+      .replace(/\s*<br>\s*/g, '<br>');
+
+    // Wrap the content in a div with proper styling
+    return `<div class="email-content">${formattedBody}</div>`;
   };
 
   return (
@@ -138,19 +142,51 @@ export default function DisputeTable() {
                     {loading[dispute.userEmail] ? (
                       <div className="text-center py-4">Loading emails...</div>
                     ) : emails[dispute.userEmail]?.length ? (
-                      <div className="space-y-4">
-                        {emails[dispute.userEmail].map((email) => (
-                          <div key={email.id} className="bg-white p-4 rounded shadow">
-                            <div className="flex justify-between text-sm text-gray-600">
-                              <span>From: {email.from}</span>
-                              <span>{new Date(email.date).toLocaleDateString()}</span>
+                      <div className="space-y-8">
+                        {emails[dispute.userEmail].map((email, index) => (
+                          <div key={email.id}>
+                            <div className="bg-white p-4 rounded shadow">
+                              <div className="flex justify-between text-sm text-gray-600">
+                                <span>From: {email.from}</span>
+                                <span>{new Date(email.date).toLocaleDateString()}</span>
+                              </div>
+                              <div className="font-medium mt-1">{email.subject}</div>
+                              <div className="mt-2 text-gray-700">
+                                <div dangerouslySetInnerHTML={{ 
+                                  __html: formatEmailBody(email.body)
+                                }} />
+                              </div>
                             </div>
-                            <div className="font-medium mt-1">{email.subject}</div>
-                            <div className="mt-2 text-gray-700">
-                              <div dangerouslySetInnerHTML={{ 
-                                __html: createDOMPurifier.sanitize(formatEmailBody(email.body)) 
-                              }} />
-                            </div>
+
+                            {index < emails[dispute.userEmail].length - 1 && (
+                              <div className="relative py-8">
+                                <div className="absolute inset-0 flex items-center">
+                                  <div className="border-t-2 border-gray-200 w-full"></div>
+                                </div>
+                                <div className="relative flex justify-center">
+                                  {(() => {
+                                    const currentDate = new Date(email.date);
+                                    const nextDate = new Date(emails[dispute.userEmail][index + 1].date);
+                                    const diffTime = Math.abs(nextDate.getTime() - currentDate.getTime());
+                                    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                                    
+                                    if (diffDays > 0) {
+                                      return (
+                                        <span className="px-4 py-2 bg-white text-sm text-gray-500 border border-gray-300 rounded-full shadow-sm flex items-center space-x-2">
+                                          <svg className="w-4 h-4 text-gray-400" fill="currentColor" viewBox="0 0 20 20">
+                                            <path d="M6 2a1 1 0 00-1 1v1H4a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V6a2 2 0 00-2-2h-1V3a1 1 0 10-2 0v1H7V3a1 1 0 00-1-1zm0 5a1 1 0 000 2h8a1 1 0 100-2H6z"/>
+                                          </svg>
+                                          <span>
+                                            {diffDays} {diffDays === 1 ? 'day' : 'days'} between messages
+                                          </span>
+                                        </span>
+                                      );
+                                    }
+                                    return null;
+                                  })()}
+                                </div>
+                              </div>
+                            )}
                           </div>
                         ))}
                       </div>
