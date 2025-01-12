@@ -174,7 +174,7 @@ export default function DisputesTable({ onDisputeCountChange }: Props) {
                   <tr>
                     <td colSpan={6}>
                       <div className="p-4 bg-gray-50">
-                        <EmailCorrespondence customerEmail={dispute.customerEmail} />
+                        <EmailCorrespondence messages={[]} />
                       </div>
                     </td>
                   </tr>
