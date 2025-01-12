@@ -8,9 +8,11 @@ interface ExtensionSafetyContextType {
   safelyAccessProperty: <T>(propertyName: string, defaultValue: T) => T;
 }
 
+const defaultSafelyAccessProperty = <T,>(propertyName: string, defaultValue: T): T => defaultValue;
+
 const ExtensionSafetyContext = createContext<ExtensionSafetyContextType>({
   ethereum: null,
-  safelyAccessProperty: <T>(propertyName: string, defaultValue: T) => defaultValue,
+  safelyAccessProperty: defaultSafelyAccessProperty,
 });
 
 export function ExtensionSafetyProvider({ children }: { children: React.ReactNode }) {
