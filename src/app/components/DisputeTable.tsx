@@ -65,36 +65,67 @@ export default function DisputeTable() {
   };
 
   const cleanEmailBody = (body: string) => {
-    // Remove quoted replies and correspondence markers
-    const cleaned = body
-      .split(/On .* wrote:|On .* at .* Ben Broch/)[0] // Remove quoted content
+    // First split by quoted content and only take the first part
+    const parts = body.split(/On .* wrote:|On .* at .* Ben Broch/);
+    const mainContent = parts[0];
+    
+    // Clean up the content while preserving original line breaks
+    let cleaned = mainContent
       .replace(/^>.*$/gm, '') // Remove quoted lines starting with >
       .replace(/`image: .*`/g, '') // Remove image placeholders
       .replace(/-Interview sidekick/g, '') // Remove signature
       .replace(/ben@interviewsidekick\.com/g, '') // Remove email addresses
-      .replace(/\r\n/g, '\n') // Normalize line endings
+      .replace(/\r\n/g, '\n') // Normalize Windows line endings to Unix
       .trim();
+    
+    // Preserve consecutive line breaks but limit to max 2
+    cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
     
     return cleaned;
   };
 
   const formatEmailBody = (body: string) => {
-    const cleanedBody = cleanEmailBody(body);
+    // Debug: Log the original body
+    console.log('Original body:', body);
     
-    // Process the body to handle all formatting cases
-    let formattedBody = cleanedBody
-      // Handle bold text (before line breaks)
-      .replace(/\*\*([^\*]+)\*\*/g, '<strong>$1</strong>')  // Double asterisk
-      .replace(/\*([^\*]+)\*/g, '<strong>$1</strong>')      // Single asterisk
-      // Handle italics
-      .replace(/_([^_]+)_/g, '<em>$1</em>')
-      .replace(/\/([^\/]+)\//g, '<em>$1</em>')
-      // Handle line breaks
-      .replace(/\n/g, '<br>')
-      .replace(/\s*<br>\s*/g, '<br>');
+    let formattedBody = cleanEmailBody(body);
+    
+    // Debug: Log the cleaned body
+    console.log('Cleaned body:', formattedBody);
+    
+    // Split into paragraphs (double line breaks)
+    const paragraphs = formattedBody.split(/\n\n+/);
+    
+    // Process each paragraph
+    const htmlContent = paragraphs
+      .map(paragraph => {
+        const lines = paragraph
+          .split('\n')
+          .filter(line => line.trim() !== '');
 
-    // Wrap the content in a div with proper styling
-    return `<div class="email-content">${formattedBody}</div>`;
+        // Debug: Log each line before processing
+        console.log('Lines before processing:', lines);
+
+        const processedLines = lines.map(line => {
+          const processed = line
+            .replace(/\*([^*]+)\*/g, (match, p1) => {
+              // Debug: Log each bold text replacement
+              console.log('Found bold text:', match, '→', p1);
+              return `<strong>${p1}</strong>`;
+            });
+          // Debug: Log the processed line
+          console.log('Processed line:', processed);
+          return processed;
+        });
+
+        return `<p style="margin-bottom: 1.5em; line-height: 1.4;">${processedLines.join('<br>')}</p>`;
+      })
+      .join('');
+
+    // Debug: Log final HTML
+    console.log('Final HTML:', htmlContent);
+
+    return `<div class="email-content">${htmlContent}</div>`;
   };
 
   return (
@@ -151,19 +182,24 @@ export default function DisputeTable() {
                                 <span>{new Date(email.date).toLocaleDateString()}</span>
                               </div>
                               <div className="font-medium mt-1">{email.subject}</div>
-                              <div className="mt-2 text-gray-700">
-                                <div dangerouslySetInnerHTML={{ 
-                                  __html: formatEmailBody(email.body)
-                                }} />
+                              
+                              {/* Only show the formatted email content */}
+                              <div className="mt-4 p-4 bg-white rounded overflow-x-auto">
+                                <div 
+                                  className="email-wrapper text-base leading-relaxed"
+                                  dangerouslySetInnerHTML={{ 
+                                    __html: formatEmailBody(email.body)
+                                  }} 
+                                />
                               </div>
                             </div>
 
                             {index < emails[dispute.userEmail].length - 1 && (
                               <div className="relative py-8">
                                 <div className="absolute inset-0 flex items-center">
-                                  <div className="border-t-2 border-gray-200 w-full"></div>
+                                  <div className="border-t border-gray-200 w-full"></div>
                                 </div>
-                                <div className="relative flex justify-center">
+                                <div className="relative flex justify-center w-full">
                                   {(() => {
                                     const currentDate = new Date(email.date);
                                     const nextDate = new Date(emails[dispute.userEmail][index + 1].date);
@@ -172,14 +208,16 @@ export default function DisputeTable() {
                                     
                                     if (diffDays > 0) {
                                       return (
-                                        <span className="px-4 py-2 bg-white text-sm text-gray-500 border border-gray-300 rounded-full shadow-sm flex items-center space-x-2">
-                                          <svg className="w-4 h-4 text-gray-400" fill="currentColor" viewBox="0 0 20 20">
-                                            <path d="M6 2a1 1 0 00-1 1v1H4a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V6a2 2 0 00-2-2h-1V3a1 1 0 10-2 0v1H7V3a1 1 0 00-1-1zm0 5a1 1 0 000 2h8a1 1 0 100-2H6z"/>
-                                          </svg>
-                                          <span>
-                                            {diffDays} {diffDays === 1 ? 'day' : 'days'} between messages
+                                        <div className="absolute left-1/2 transform -translate-x-1/2">
+                                          <span className="px-4 py-2 bg-white text-sm text-gray-500 border border-gray-300 rounded-full shadow-sm flex items-center space-x-2">
+                                            <svg className="w-4 h-4 text-gray-400" fill="currentColor" viewBox="0 0 20 20">
+                                              <path d="M6 2a1 1 0 00-1 1v1H4a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V6a2 2 0 00-2-2h-1V3a1 1 0 10-2 0v1H7V3a1 1 0 00-1-1zm0 5a1 1 0 000 2h8a1 1 0 100-2H6z"/>
+                                            </svg>
+                                            <span>
+                                              {diffDays} {diffDays === 1 ? 'day' : 'days'} between messages
+                                            </span>
                                           </span>
-                                        </span>
+                                        </div>
                                       );
                                     }
                                     return null;

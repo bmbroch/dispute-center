@@ -66,3 +66,11 @@ body {
   height: auto;
   margin: 0.5em 0;
 }
+
+.email-content strong {
+  font-weight: 700;
+}
+
+.email-wrapper strong {
+  font-weight: 700;
+}
