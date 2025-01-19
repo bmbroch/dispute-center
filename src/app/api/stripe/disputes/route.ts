@@ -38,22 +38,16 @@ export async function GET(request: Request) {
       apiVersion: '2024-12-18.acacia'
     });
 
-    // Fetch disputes that need response
-    const needsResponseDisputes = await stripe.disputes.list({
+    // Fetch all disputes and filter by status
+    const disputes = await stripe.disputes.list({
       limit: 100,
-      expand: ['data.charge', 'data.charge.customer'],
-      status: 'needs_response'
+      expand: ['data.charge', 'data.charge.customer']
     });
 
-    // Fetch disputes with warning
-    const warningDisputes = await stripe.disputes.list({
-      limit: 100,
-      expand: ['data.charge', 'data.charge.customer'],
-      status: 'warning_needs_response'
-    });
-
-    // Combine both sets of disputes
-    const allDisputes = [...needsResponseDisputes.data, ...warningDisputes.data];
+    // Filter disputes by status
+    const allDisputes = disputes.data.filter(dispute => 
+      dispute.status === 'needs_response' || dispute.status === 'warning_needs_response'
+    );
 
     return NextResponse.json(allDisputes);
   } catch (error) {
