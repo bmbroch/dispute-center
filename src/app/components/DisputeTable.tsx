@@ -85,13 +85,7 @@ export default function DisputeTable() {
   };
 
   const formatEmailBody = (body: string) => {
-    // Debug: Log the original body
-    console.log('Original body:', body);
-    
-    let formattedBody = cleanEmailBody(body);
-    
-    // Debug: Log the cleaned body
-    console.log('Cleaned body:', formattedBody);
+    const formattedBody = cleanEmailBody(body);
     
     // Split into paragraphs (double line breaks)
     const paragraphs = formattedBody.split(/\n\n+/);
@@ -103,18 +97,11 @@ export default function DisputeTable() {
           .split('\n')
           .filter(line => line.trim() !== '');
 
-        // Debug: Log each line before processing
-        console.log('Lines before processing:', lines);
-
         const processedLines = lines.map(line => {
-          const processed = line
-            .replace(/\*([^*]+)\*/g, (match, p1) => {
-              // Debug: Log each bold text replacement
-              console.log('Found bold text:', match, '→', p1);
-              return `<strong>${p1}</strong>`;
-            });
-          // Debug: Log the processed line
-          console.log('Processed line:', processed);
+          // Process asterisks into HTML strong tags with explicit styling
+          const processed = line.replace(/\*([^*]+)\*/g, (match, p1) => {
+            return `<strong style="font-weight: 700 !important;">${p1}</strong>`;
+          });
           return processed;
         });
 
@@ -122,10 +109,11 @@ export default function DisputeTable() {
       })
       .join('');
 
-    // Debug: Log final HTML
-    console.log('Final HTML:', htmlContent);
-
-    return `<div class="email-content">${htmlContent}</div>`;
+    return {
+      raw: body,
+      cleaned: formattedBody,
+      html: `<div class="email-content" style="font-family: sans-serif;">${htmlContent}</div>`
+    };
   };
 
   return (
@@ -176,21 +164,41 @@ export default function DisputeTable() {
                       <div className="space-y-8">
                         {emails[dispute.userEmail].map((email, index) => (
                           <div key={email.id}>
-                            <div className="bg-white p-4 rounded shadow">
+                            <div className="bg-white p-4 rounded shadow space-y-6">
                               <div className="flex justify-between text-sm text-gray-600">
                                 <span>From: {email.from}</span>
                                 <span>{new Date(email.date).toLocaleDateString()}</span>
                               </div>
-                              <div className="font-medium mt-1">{email.subject}</div>
+                              <div className="font-medium">{email.subject}</div>
                               
-                              {/* Only show the formatted email content */}
-                              <div className="mt-4 p-4 bg-white rounded overflow-x-auto">
-                                <div 
-                                  className="email-wrapper text-base leading-relaxed"
-                                  dangerouslySetInnerHTML={{ 
-                                    __html: formatEmailBody(email.body)
-                                  }} 
-                                />
+                              {/* Debug Sections */}
+                              <div className="space-y-4">
+                                {/* Raw Email */}
+                                <div className="border-l-4 border-red-500 pl-4">
+                                  <div className="text-xs text-red-600 font-mono mb-1">RAW EMAIL:</div>
+                                  <pre className="whitespace-pre-wrap text-sm bg-red-50 p-2 rounded">
+                                    {formatEmailBody(email.body).raw}
+                                  </pre>
+                                </div>
+                                
+                                {/* Cleaned Email */}
+                                <div className="border-l-4 border-yellow-500 pl-4">
+                                  <div className="text-xs text-yellow-600 font-mono mb-1">CLEANED EMAIL:</div>
+                                  <pre className="whitespace-pre-wrap text-sm bg-yellow-50 p-2 rounded">
+                                    {formatEmailBody(email.body).cleaned}
+                                  </pre>
+                                </div>
+                                
+                                {/* Final Formatted HTML */}
+                                <div className="border-l-4 border-green-500 pl-4">
+                                  <div className="text-xs text-green-600 font-mono mb-1">FORMATTED EMAIL:</div>
+                                  <div 
+                                    className="email-wrapper text-base leading-relaxed bg-green-50 p-2 rounded"
+                                    dangerouslySetInnerHTML={{ 
+                                      __html: formatEmailBody(email.body).html
+                                    }} 
+                                  />
+                                </div>
                               </div>
                             </div>
 

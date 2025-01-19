@@ -22,9 +22,9 @@ Just checking in here, can you please consider contacting your bank? This would 
       date: "1/6/2025",
       body: `Hey there!
 
-It looks like you reported this payment as fraudulent. This indicates that you were not, in fact, the user who initiated the purchase. **The resume information that you submitted to our system seems consistent with your name, etc.**
+It looks like you reported this payment as fraudulent. This indicates that you were not, in fact, the user who initiated the purchase. *The resume information that you submitted to our system seems consistent with your name, etc.*
 
-**We will unfortunately be forced to proceed with supporting evidence that you falsely reported a fraudulent purchase.** Are you open to withdrawing this purchase? In return, we'd be happy to send you via venmo /paypal your money back. If so, let us know the email and we'll send the money back to you that way right away. This is the last time we'll reach out to you.
+*We will unfortunately be forced to proceed with supporting evidence that you falsely reported a fraudulent purchase.* Are you open to withdrawing this purchase? In return, we'd be happy to send you via venmo /paypal your money back. If so, let us know the email and we'll send the money back to you that way right away. This is the last time we'll reach out to you.
 
 [image: image.png]`
     }

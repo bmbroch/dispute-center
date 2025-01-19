@@ -21,34 +21,55 @@ export default function EmailCorrespondence({ messages }: EmailCorrespondencePro
     const paragraphs = content.split(/\n\n+/);
     
     return (
-      <div className="email-content space-y-2 text-base leading-relaxed">
-        {paragraphs.map((paragraph, paragraphIndex) => {
-          // Split paragraph into lines
-          const lines = paragraph.split('\n').filter(line => line.trim() !== '');
-          
-          return (
-            <p key={paragraphIndex} className="mb-4">
-              {lines.map((line, lineIndex) => {
-                // Process bold text (now using double asterisks)
-                const parts = line.split(/(\*\*[^*]+\*\*)/);
-                const processedLine = parts.map((part, partIndex) => {
-                  if (part.startsWith('**') && part.endsWith('**')) {
-                    const boldText = part.slice(2, -2);
-                    return <strong key={partIndex}>{boldText}</strong>;
-                  }
-                  return part;
-                });
+      <div className="space-y-6">
+        {/* Raw Content */}
+        <div className="border-l-4 border-red-500 pl-4">
+          <div className="text-xs text-red-600 font-mono mb-1">RAW EMAIL:</div>
+          <pre className="whitespace-pre-wrap text-sm bg-red-50 p-2 rounded">
+            {content}
+          </pre>
+        </div>
+        
+        {/* Formatted Content */}
+        <div className="border-l-4 border-green-500 pl-4">
+          <div className="text-xs text-green-600 font-mono mb-1">FORMATTED EMAIL:</div>
+          <div className="email-content space-y-2 text-base leading-relaxed bg-green-50 p-2 rounded font-sans">
+            {paragraphs.map((paragraph, paragraphIndex) => {
+              const lines = paragraph.split('\n').filter(line => line.trim() !== '');
+              
+              return (
+                <p key={paragraphIndex} className="mb-4">
+                  {lines.map((line, lineIndex) => {
+                    // Split on asterisk pairs
+                    const parts = line.split(/(\*[^*]+\*)/g);
+                    const processedLine = parts.map((part, partIndex) => {
+                      if (part.startsWith('*') && part.endsWith('*')) {
+                        const boldText = part.slice(1, -1);
+                        return (
+                          <strong 
+                            key={partIndex} 
+                            className="font-bold"
+                            style={{ fontWeight: 700 }}
+                          >
+                            {boldText}
+                          </strong>
+                        );
+                      }
+                      return part;
+                    });
 
-                return (
-                  <React.Fragment key={lineIndex}>
-                    {processedLine}
-                    {lineIndex < lines.length - 1 && <br />}
-                  </React.Fragment>
-                );
-              })}
-            </p>
-          );
-        })}
+                    return (
+                      <React.Fragment key={lineIndex}>
+                        {processedLine}
+                        {lineIndex < lines.length - 1 && <br />}
+                      </React.Fragment>
+                    );
+                  })}
+                </p>
+              );
+            })}
+          </div>
+        </div>
       </div>
     );
   };

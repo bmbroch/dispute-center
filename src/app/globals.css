@@ -68,9 +68,15 @@ body {
 }
 
 .email-content strong {
-  font-weight: 700;
+  font-weight: 700 !important;
 }
 
 .email-wrapper strong {
-  font-weight: 700;
+  font-weight: 700 !important;
+}
+
+/* Add specific styles for the formatted email section */
+.email-content .formatted-email strong {
+  font-weight: 700 !important;
+  display: inline-block;
 }
