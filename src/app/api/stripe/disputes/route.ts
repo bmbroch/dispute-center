@@ -38,11 +38,12 @@ export async function GET(request: Request) {
       apiVersion: '2024-12-18.acacia'
     });
 
-    // Fetch all disputes and filter by status
-    const disputes = await stripe.disputes.list({
-      limit: 100,
+    // Fetch all disputes
+    const params: Stripe.DisputeListParams = {
       expand: ['data.charge', 'data.charge.customer']
-    });
+    };
+
+    const disputes = await stripe.disputes.list(params);
 
     // Filter disputes by status
     const allDisputes = disputes.data.filter(dispute => 
