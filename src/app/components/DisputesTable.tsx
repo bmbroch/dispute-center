@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, Fragment } from 'react';
-import { Dispute } from 'stripe';
+import type Stripe from 'stripe';
 import EmailCorrespondence from './EmailCorrespondence';
 import { useAuth } from '@/lib/hooks/useAuth';
 
@@ -11,7 +11,7 @@ interface DisputesTableProps {
 
 export default function DisputesTable({ onDisputeCountChange }: DisputesTableProps) {
   const { user } = useAuth();
-  const [disputes, setDisputes] = useState<Dispute[]>([]);
+  const [disputes, setDisputes] = useState<Stripe.Dispute[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
   const [expandedDispute, setExpandedDispute] = useState<string | null>(null);
