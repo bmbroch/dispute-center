@@ -1,9 +1,8 @@
 import { initializeApp, getApps, getApp, FirebaseApp } from "firebase/app";
-import { getAuth, Auth } from "firebase/auth";
+import { getAuth, Auth, onAuthStateChanged } from "firebase/auth";
 import { getFirestore, Firestore } from "firebase/firestore";
-import { getStorage, FirebaseStorage } from "firebase/storage";
 
-// Prevent multiple initializations during SSR
+// Firebase configuration
 const FIREBASE_CONFIG = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
   authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
@@ -13,49 +12,57 @@ const FIREBASE_CONFIG = {
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
 };
 
-let app: FirebaseApp | undefined;
-let auth: Auth | undefined;
-let db: Firestore | undefined;
-let storage: FirebaseStorage | undefined;
+let app: FirebaseApp;
+let auth: Auth | null = null;
+let db: Firestore | null = null;
+let isInitialized = false;
 
 function initializeFirebase() {
-  if (typeof window === 'undefined') {
-    return null; // Return null during SSR
+  if (isInitialized) {
+    return { app, auth, db };
   }
 
   try {
-    if (!FIREBASE_CONFIG.apiKey) {
-      console.warn('Firebase configuration is missing. Make sure to set the environment variables.');
-      return null;
-    }
-
-    // Initialize Firebase only if not already initialized
-    if (!app) {
-      app = getApps().length ? getApp() : initializeApp(FIREBASE_CONFIG);
+    // Initialize Firebase app if not already initialized
+    app = getApps().length ? getApp() : initializeApp(FIREBASE_CONFIG);
+    
+    if (typeof window !== 'undefined') {
+      // Client-side initialization
       auth = getAuth(app);
       db = getFirestore(app);
-      storage = getStorage(app);
+    } else {
+      // Server-side initialization
+      db = getFirestore(app);
     }
 
-    return { app, auth, db, storage };
+    // Set initialized flag
+    isInitialized = true;
   } catch (error) {
     console.error('Error initializing Firebase:', error);
-    return null;
+    throw error;
   }
+
+  return { app, auth, db };
 }
 
+// Initialize on module load
+initializeFirebase();
+
 export function getFirebaseApp() {
-  return initializeFirebase()?.app;
+  return app;
 }
 
 export function getFirebaseAuth() {
-  return initializeFirebase()?.auth;
+  return auth;
 }
 
 export function getFirebaseDB() {
-  return initializeFirebase()?.db;
+  if (!isInitialized) {
+    throw new Error('Firebase not fully initialized');
+  }
+  return db;
 }
 
-export function getFirebaseStorage() {
-  return initializeFirebase()?.storage;
+export function isFirebaseInitialized() {
+  return isInitialized;
 }

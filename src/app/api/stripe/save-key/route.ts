@@ -32,7 +32,10 @@ export async function POST(request: Request) {
     if (!querySnapshot.empty) {
       // Update existing key
       const doc = querySnapshot.docs[0];
-      await updateDoc(doc.ref, { apiKey });
+      await updateDoc(doc.ref, { 
+        apiKey,
+        updatedAt: new Date().toISOString()
+      });
     } else {
       // Create new key
       await addDoc(stripeKeysRef, {

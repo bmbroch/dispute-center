@@ -1,4 +1,4 @@
-import { getFirebaseAuth, getFirebaseDB, getFirebaseStorage } from "./firebase";
+import { getFirebaseAuth, getFirebaseDB } from "./firebase";
 import {
   signOut,
   GoogleAuthProvider,
@@ -14,19 +14,17 @@ import {
   deleteDoc,
   Firestore,
 } from "firebase/firestore";
-import { ref, uploadBytes, getDownloadURL, FirebaseStorage } from "firebase/storage";
 
 // Helper function to ensure Firebase is initialized
-function ensureInitialized(): { auth: Auth; db: Firestore; storage: FirebaseStorage } | null {
+function ensureInitialized(): { auth: Auth; db: Firestore } | null {
   const auth = getFirebaseAuth();
   const db = getFirebaseDB();
-  const storage = getFirebaseStorage();
 
-  if (!auth || !db || !storage) {
+  if (!auth || !db) {
     throw new Error('Firebase not initialized');
   }
 
-  return { auth, db, storage };
+  return { auth, db };
 }
 
 // Auth functions
@@ -78,14 +76,4 @@ export const deleteDocument = async (collectionName: string, id: string) => {
   const firebase = ensureInitialized();
   if (!firebase) throw new Error('Firebase not initialized');
   return deleteDoc(doc(firebase.db, collectionName, id));
-};
-
-// Storage functions
-export const uploadFile = async (file: File, path: string) => {
-  const firebase = ensureInitialized();
-  if (!firebase) throw new Error('Firebase not initialized');
-
-  const storageRef = ref(firebase.storage, path);
-  await uploadBytes(storageRef, file);
-  return getDownloadURL(storageRef);
 };

@@ -1,0 +1,86 @@
+[debug] [2025-01-19T05:21:20.231Z] ----------------------------------------------------------------------
+[debug] [2025-01-19T05:21:20.233Z] Command:       /opt/homebrew/Cellar/node/23.5.0/bin/node /opt/homebrew/bin/firebase init firestore
+[debug] [2025-01-19T05:21:20.234Z] CLI Version:   13.29.1
+[debug] [2025-01-19T05:21:20.234Z] Platform:      darwin
+[debug] [2025-01-19T05:21:20.234Z] Node Version:  v23.5.0
+[debug] [2025-01-19T05:21:20.234Z] Time:          Sun Jan 19 2025 10:51:20 GMT+0530 (India Standard Time)
+[debug] [2025-01-19T05:21:20.234Z] ----------------------------------------------------------------------
+[debug] 
+[debug] [2025-01-19T05:21:20.238Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2025-01-19T05:21:20.238Z] > authorizing via signed-in user (bmbroch@gmail.com)
+[info] 
+     ######## #### ########  ######## ########     ###     ######  ########
+     ##        ##  ##     ## ##       ##     ##  ##   ##  ##       ##
+     ######    ##  ########  ######   ########  #########  ######  ######
+     ##        ##  ##    ##  ##       ##     ## ##     ##       ## ##
+     ##       #### ##     ## ######## ########  ##     ##  ######  ########
+
+You're about to initialize a Firebase project in this directory:
+
+  /Users/benbroch/Downloads/dispute_center
+
+[info] 
+=== Project Setup
+[info] 
+[info] First, let's associate this project directory with a Firebase project.
+[info] You can create multiple project aliases by running firebase use --add, 
+[info] but for now we'll just set up a default project.
+[info] 
+[debug] [2025-01-19T05:21:23.098Z] Checked if tokens are valid: false, expires at: 1737023767070
+[debug] [2025-01-19T05:21:23.099Z] Checked if tokens are valid: false, expires at: 1737023767070
+[debug] [2025-01-19T05:21:23.099Z] > refreshing access token with scopes: []
+[debug] [2025-01-19T05:21:23.100Z] >>> [apiv2][query] POST https://www.googleapis.com/oauth2/v3/token [none]
+[debug] [2025-01-19T05:21:23.100Z] >>> [apiv2][body] POST https://www.googleapis.com/oauth2/v3/token [omitted]
+[debug] [2025-01-19T05:21:24.153Z] <<< [apiv2][status] POST https://www.googleapis.com/oauth2/v3/token 200
+[debug] [2025-01-19T05:21:24.154Z] <<< [apiv2][body] POST https://www.googleapis.com/oauth2/v3/token [omitted]
+[debug] [2025-01-19T05:21:24.164Z] >>> [apiv2][query] GET https://firebase.googleapis.com/v1beta1/projects pageSize=100
+[debug] [2025-01-19T05:21:25.447Z] <<< [apiv2][status] GET https://firebase.googleapis.com/v1beta1/projects 200
+[debug] [2025-01-19T05:21:25.447Z] <<< [apiv2][body] GET https://firebase.googleapis.com/v1beta1/projects [omitted]
+[info] i  Using project stripe-ageny (Stripe Agent) 
+[info] 
+=== Firestore Setup
+[debug] [2025-01-19T05:21:26.928Z] Checked if tokens are valid: true, expires at: 1737267683154
+[debug] [2025-01-19T05:21:26.928Z] Checked if tokens are valid: true, expires at: 1737267683154
+[debug] [2025-01-19T05:21:26.928Z] >>> [apiv2][query] GET https://serviceusage.googleapis.com/v1/projects/stripe-ageny/services/firestore.googleapis.com [none]
+[debug] [2025-01-19T05:21:26.928Z] >>> [apiv2][(partial)header] GET https://serviceusage.googleapis.com/v1/projects/stripe-ageny/services/firestore.googleapis.com x-goog-quota-user=projects/stripe-ageny
+[debug] [2025-01-19T05:21:28.293Z] <<< [apiv2][status] GET https://serviceusage.googleapis.com/v1/projects/stripe-ageny/services/firestore.googleapis.com 200
+[debug] [2025-01-19T05:21:28.293Z] <<< [apiv2][body] GET https://serviceusage.googleapis.com/v1/projects/stripe-ageny/services/firestore.googleapis.com [omitted]
+[debug] [2025-01-19T05:21:28.293Z] Checked if tokens are valid: true, expires at: 1737267683154
+[debug] [2025-01-19T05:21:28.293Z] Checked if tokens are valid: true, expires at: 1737267683154
+[debug] [2025-01-19T05:21:28.293Z] >>> [apiv2][query] GET https://firestore.googleapis.com/v1/projects/stripe-ageny/databases/(default) [none]
+[debug] [2025-01-19T05:21:29.220Z] <<< [apiv2][status] GET https://firestore.googleapis.com/v1/projects/stripe-ageny/databases/(default) 200
+[debug] [2025-01-19T05:21:29.221Z] <<< [apiv2][body] GET https://firestore.googleapis.com/v1/projects/stripe-ageny/databases/(default) {"name":"projects/stripe-ageny/databases/(default)","uid":"b793e9bb-626e-42bf-ba85-54107be8f4bf","createTime":"2025-01-19T03:46:26.342762Z","updateTime":"2025-01-19T03:46:26.342762Z","locationId":"nam5","type":"FIRESTORE_NATIVE","concurrencyMode":"PESSIMISTIC","versionRetentionPeriod":"3600s","earliestVersionTime":"2025-01-19T04:21:29.331135Z","appEngineIntegrationMode":"DISABLED","keyPrefix":"s","pointInTimeRecoveryEnablement":"POINT_IN_TIME_RECOVERY_DISABLED","deleteProtectionState":"DELETE_PROTECTION_DISABLED","etag":"ILXms4eFgYsDMOqGgejvgIsD"}
+[debug] [2025-01-19T05:21:29.221Z] database_type: FIRESTORE_NATIVE
+[debug] [2025-01-19T05:21:29.221Z] database_type: FIRESTORE_NATIVE
+[debug] [2025-01-19T05:21:29.221Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2025-01-19T05:21:29.221Z] > authorizing via signed-in user (bmbroch@gmail.com)
+[debug] [2025-01-19T05:21:29.221Z] [iam] checking project stripe-ageny for permissions ["firebase.projects.get"]
+[debug] [2025-01-19T05:21:29.222Z] Checked if tokens are valid: true, expires at: 1737267683154
+[debug] [2025-01-19T05:21:29.222Z] Checked if tokens are valid: true, expires at: 1737267683154
+[debug] [2025-01-19T05:21:29.222Z] >>> [apiv2][query] POST https://cloudresourcemanager.googleapis.com/v1/projects/stripe-ageny:testIamPermissions [none]
+[debug] [2025-01-19T05:21:29.222Z] >>> [apiv2][(partial)header] POST https://cloudresourcemanager.googleapis.com/v1/projects/stripe-ageny:testIamPermissions x-goog-quota-user=projects/stripe-ageny
+[debug] [2025-01-19T05:21:29.222Z] >>> [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/stripe-ageny:testIamPermissions {"permissions":["firebase.projects.get"]}
+[debug] [2025-01-19T05:21:30.363Z] <<< [apiv2][status] POST https://cloudresourcemanager.googleapis.com/v1/projects/stripe-ageny:testIamPermissions 200
+[debug] [2025-01-19T05:21:30.364Z] <<< [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/stripe-ageny:testIamPermissions {"permissions":["firebase.projects.get"]}
+[info] 
+[info] Firestore Security Rules allow you to define how and when to allow
+[info] requests. You can keep these rules in your project directory
+[info] and publish them with firebase deploy.
+[info] 
+[debug] [2025-01-19T05:21:37.871Z] Checked if tokens are valid: true, expires at: 1737267683154
+[debug] [2025-01-19T05:21:37.871Z] Checked if tokens are valid: true, expires at: 1737267683154
+[debug] [2025-01-19T05:21:37.871Z] >>> [apiv2][query] GET https://firebaserules.googleapis.com/v1/projects/stripe-ageny/releases pageSize=10&pageToken=
+[debug] [2025-01-19T05:21:39.061Z] <<< [apiv2][status] GET https://firebaserules.googleapis.com/v1/projects/stripe-ageny/releases 200
+[debug] [2025-01-19T05:21:39.061Z] <<< [apiv2][body] GET https://firebaserules.googleapis.com/v1/projects/stripe-ageny/releases {"releases":[{"name":"projects/stripe-ageny/releases/cloud.firestore","rulesetName":"projects/stripe-ageny/rulesets/8761ed9c-3e9c-4239-99b6-3e3273c76b1a","createTime":"2025-01-19T03:46:29.750958Z","updateTime":"2025-01-19T04:51:40.548841Z"},{"name":"projects/stripe-ageny/releases/firebase.storage","rulesetName":"projects/stripe-ageny/rulesets/63fd37ef-df6b-445b-9fcf-b29662da17a4","createTime":"2025-01-19T03:51:09.756354Z","updateTime":"2025-01-19T03:51:09.756354Z"},{"name":"projects/stripe-ageny/releases/firebase.storage/stripe-ageny.firebasestorage.app","rulesetName":"projects/stripe-ageny/rulesets/c809e7b0-3982-42cc-b0a8-36817a6887e2","createTime":"2025-01-19T03:51:05.180917Z","updateTime":"2025-01-19T04:47:09.850135Z"}]}
+[debug] [2025-01-19T05:21:39.061Z] Found ruleset: projects/stripe-ageny/rulesets/8761ed9c-3e9c-4239-99b6-3e3273c76b1a
+[debug] [2025-01-19T05:21:39.062Z] Checked if tokens are valid: true, expires at: 1737267683154
+[debug] [2025-01-19T05:21:39.062Z] Checked if tokens are valid: true, expires at: 1737267683154
+[debug] [2025-01-19T05:21:39.062Z] >>> [apiv2][query] GET https://firebaserules.googleapis.com/v1/projects/stripe-ageny/rulesets/8761ed9c-3e9c-4239-99b6-3e3273c76b1a [none]
+[debug] [2025-01-19T05:21:39.452Z] <<< [apiv2][status] GET https://firebaserules.googleapis.com/v1/projects/stripe-ageny/rulesets/8761ed9c-3e9c-4239-99b6-3e3273c76b1a 200
+[debug] [2025-01-19T05:21:39.453Z] <<< [apiv2][body] GET https://firebaserules.googleapis.com/v1/projects/stripe-ageny/rulesets/8761ed9c-3e9c-4239-99b6-3e3273c76b1a [omitted]
+[info] 
+[info] Firestore indexes allow you to perform complex queries while
+[info] maintaining performance that scales with the size of the result
+[info] set. You can keep index definitions in your project directory
+[info] and publish them with firebase deploy.
+[info] 
