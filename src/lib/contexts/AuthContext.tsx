@@ -16,7 +16,7 @@ interface AuthContextType {
   loading: boolean;
   signInWithGoogle: () => Promise<void>;
   signOut: () => Promise<void>;
-  refreshToken: () => Promise<void>;
+  refreshToken: () => Promise<GoogleUser>;
 }
 
 const AuthContext = createContext<AuthContextType>({
@@ -24,7 +24,9 @@ const AuthContext = createContext<AuthContextType>({
   loading: true,
   signInWithGoogle: async () => {},
   signOut: async () => {},
-  refreshToken: async () => {},
+  refreshToken: async () => {
+    throw new Error('Not implemented');
+  },
 });
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -47,6 +49,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!tokenExpiry) return true;
     // Check if token is expired or will expire in the next 5 minutes
     return Date.now() >= (tokenExpiry - 5 * 60 * 1000);
+  }, []);
+
+  const scheduleTokenRefresh = useCallback((tokenExpiry: number) => {
+    if (refreshTimerRef.current) {
+      clearTimeout(refreshTimerRef.current);
+    }
+
+    const timeUntilExpiry = tokenExpiry - Date.now();
+    const refreshTime = Math.max(0, timeUntilExpiry - (5 * 60 * 1000));
+
+    if (refreshTime <= 0) {
+      refreshToken().catch(console.error);
+      return;
+    }
+
+    refreshTimerRef.current = setTimeout(() => {
+      if (mountedRef.current) {
+        refreshToken().catch(console.error);
+      }
+    }, refreshTime);
   }, []);
 
   const signOut = useCallback(async () => {
@@ -111,26 +133,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       throw error;
     }
   }, [user, signOut]);
-
-  const scheduleTokenRefresh = useCallback((tokenExpiry: number) => {
-    if (refreshTimerRef.current) {
-      clearTimeout(refreshTimerRef.current);
-    }
-
-    const timeUntilExpiry = tokenExpiry - Date.now();
-    const refreshTime = Math.max(0, timeUntilExpiry - (5 * 60 * 1000));
-
-    if (refreshTime <= 0) {
-      refreshToken().catch(console.error);
-      return;
-    }
-
-    refreshTimerRef.current = setTimeout(() => {
-      if (mountedRef.current) {
-        refreshToken().catch(console.error);
-      }
-    }, refreshTime);
-  }, [refreshToken]);
 
   const signInWithGoogle = useCallback(async () => {
     try {
@@ -246,53 +248,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       console.error("Error signing in with Google:", error);
       throw error;
     }
-  }, []);
+  }, [scheduleTokenRefresh]);
 
-  // Load persisted data on mount
+  // Effect for token refresh scheduling
   useEffect(() => {
-    const loadPersistedData = async () => {
-      try {
-        const storedUserData = localStorage.getItem('userData');
-        if (!storedUserData || !mountedRef.current) return;
-
-        const userData = JSON.parse(storedUserData) as GoogleUser;
-        
-        if (checkTokenExpiration(userData.tokenExpiry)) {
-          try {
-            const refreshedUser = await refreshToken();
-            if (mountedRef.current && refreshedUser) {
-              setUser(refreshedUser);
-              scheduleTokenRefresh(refreshedUser.tokenExpiry || 0);
-            }
-          } catch (error) {
-            console.error('Error refreshing expired token:', error);
-            localStorage.removeItem('userData');
-            if (mountedRef.current) {
-              setUser(null);
-            }
-          }
-        } else {
-          setUser(userData);
-          scheduleTokenRefresh(userData.tokenExpiry || 0);
-        }
-      } catch (error) {
-        console.error('Error loading persisted data:', error);
-        localStorage.removeItem('userData');
-      } finally {
-        if (mountedRef.current) {
-          setLoading(false);
-        }
+    if (user?.tokenExpiry) {
+      if (checkTokenExpiration(user.tokenExpiry)) {
+        refreshToken().catch(console.error);
+      } else {
+        scheduleTokenRefresh(user.tokenExpiry);
       }
-    };
-
-    loadPersistedData();
-  }, []); // Empty dependency array since we only want this to run once on mount
+    }
+  }, [user?.tokenExpiry, checkTokenExpiration, refreshToken, scheduleTokenRefresh]);
 
   return (
-    <AuthContext.Provider value={{ 
-      user, 
+    <AuthContext.Provider value={{
+      user,
       loading,
-      signInWithGoogle, 
+      signInWithGoogle,
       signOut,
       refreshToken
     }}>
