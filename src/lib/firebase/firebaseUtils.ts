@@ -16,10 +16,11 @@ import {
   query,
   where,
 } from "firebase/firestore";
-import { ref, uploadBytes, getDownloadURL, Storage } from "firebase/storage";
+import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import type { FirebaseStorage } from "firebase/storage";
 
 // Helper function to ensure Firebase is initialized
-function ensureInitialized(): { auth: Auth; db: Firestore; storage: Storage } | null {
+function ensureInitialized(): { auth: Auth; db: Firestore; storage: FirebaseStorage } | null {
   const auth = getFirebaseAuth();
   const db = getFirebaseDB();
   const storage = getFirebaseStorage();
