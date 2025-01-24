@@ -28,6 +28,14 @@ const nextConfig = {
         protocol: "https",
         hostname: "*.googleusercontent.com",
       },
+      {
+        protocol: "https",
+        hostname: "hebbkx1anhila5yf.public.blob.vercel-storage.com",
+      },
+      {
+        protocol: "https",
+        hostname: "images.unsplash.com",
+      }
     ],
     domains: ["lh3.googleusercontent.com"],
     dangerouslyAllowSVG: true,

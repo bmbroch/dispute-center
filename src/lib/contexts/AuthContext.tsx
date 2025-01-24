@@ -49,9 +49,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (!checkTokenExpiration(userData.tokenExpiry)) {
           setUser(userData);
         } else {
-          // Token is expired, clear storage and trigger sign in
+          // Token is expired, just clear storage
           localStorage.removeItem('userData');
-          signInWithGoogle().catch(console.error);
         }
       }
     } catch (error) {
@@ -97,7 +96,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (authWindow) {
         return new Promise<void>((resolve, reject) => {
           const handleMessage = async (event: MessageEvent) => {
-            if (event.origin === window.location.origin && event.data?.type === 'GOOGLE_AUTH') {
+            // Strictly check that the origin matches our app URL exactly
+            const appUrl = process.env.NEXT_PUBLIC_APP_URL;
+            if (!appUrl) {
+              console.error('NEXT_PUBLIC_APP_URL environment variable is not set');
+              return;
+            }
+
+            // Only handle messages from our exact app origin, ignore all others including extensions
+            if (event.origin !== appUrl || !event.data?.type) {
+              return;
+            }
+
+            if (event.data.type === 'GOOGLE_AUTH') {
               try {
                 const { access_token, refresh_token, tokenExpiry } = event.data;
                 
@@ -201,8 +212,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const signOut = async () => {
-    setUser(null);
-    localStorage.removeItem('userData');
+    try {
+      // Call the sign out endpoint to remove the auth cookie
+      await fetch('/api/auth/signout', {
+        method: 'POST',
+      });
+      
+      // Clear local state
+      setUser(null);
+      localStorage.removeItem('userData');
+    } catch (error) {
+      console.error('Error signing out:', error);
+      // Still clear local state even if the API call fails
+      setUser(null);
+      localStorage.removeItem('userData');
+    }
   };
 
   return (

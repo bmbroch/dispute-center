@@ -1,6 +1,7 @@
 import { initializeApp, getApps, getApp, FirebaseApp } from "firebase/app";
-import { getAuth, Auth, onAuthStateChanged } from "firebase/auth";
+import { getAuth, Auth } from "firebase/auth";
 import { getFirestore, Firestore } from "firebase/firestore";
+import { getStorage, Storage } from "firebase/storage";
 
 // Firebase configuration
 const FIREBASE_CONFIG = {
@@ -15,11 +16,12 @@ const FIREBASE_CONFIG = {
 let app: FirebaseApp;
 let auth: Auth | null = null;
 let db: Firestore | null = null;
+let storage: Storage | null = null;
 let isInitialized = false;
 
 function initializeFirebase() {
   if (isInitialized) {
-    return { app, auth, db };
+    return { app, auth, db, storage };
   }
 
   try {
@@ -30,6 +32,7 @@ function initializeFirebase() {
       // Client-side initialization
       auth = getAuth(app);
       db = getFirestore(app);
+      storage = getStorage(app);
     } else {
       // Server-side initialization
       db = getFirestore(app);
@@ -42,7 +45,7 @@ function initializeFirebase() {
     throw error;
   }
 
-  return { app, auth, db };
+  return { app, auth, db, storage };
 }
 
 // Initialize on module load
@@ -61,6 +64,13 @@ export function getFirebaseDB() {
     throw new Error('Firebase not fully initialized');
   }
   return db;
+}
+
+export function getFirebaseStorage() {
+  if (!isInitialized) {
+    throw new Error('Firebase not fully initialized');
+  }
+  return storage;
 }
 
 export function isFirebaseInitialized() {

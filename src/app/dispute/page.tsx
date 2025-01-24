@@ -1,13 +1,29 @@
 'use client';
 
 import { useAuth } from '@/lib/hooks/useAuth';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import DisputesTable from '../components/DisputesTable';
-import GoogleSignInButton from '../components/GoogleSignInButton';
+import LoginSplashScreen from '../components/LoginSplashScreen';
+import { useRouter } from 'next/navigation';
 
 export default function DisputePage() {
   const { user, loading: authLoading } = useAuth();
   const [disputeCount, setDisputeCount] = useState(0);
+  const [showLoginSplash, setShowLoginSplash] = useState(false);
+  const router = useRouter();
+
+  useEffect(() => {
+    if (!user && !authLoading) {
+      setShowLoginSplash(true);
+    }
+  }, [user, authLoading]);
+
+  // Close login splash when user is authenticated
+  useEffect(() => {
+    if (user && showLoginSplash) {
+      setShowLoginSplash(false);
+    }
+  }, [user, showLoginSplash]);
 
   if (authLoading) {
     return (
@@ -18,33 +34,42 @@ export default function DisputePage() {
     );
   }
 
-  if (!user) {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50">
-        <h1 className="text-4xl font-bold mb-8">Stripe Dispute Center</h1>
-        <GoogleSignInButton />
-      </div>
-    );
-  }
+  const handleCloseLogin = () => {
+    setShowLoginSplash(false);
+    // Only redirect to home if user is not authenticated
+    if (!user) {
+      router.push('/');
+    }
+  };
 
   return (
-    <div className="min-h-screen bg-gray-50 p-8">
-      <div className="max-w-7xl mx-auto">
-        <div className="flex justify-between items-center mb-8">
-          <div>
-            <h1 className="text-3xl font-bold">Stripe Dispute Center</h1>
-            <p className="text-gray-600 mt-2">
-              {disputeCount === 0 
-                ? 'No disputes found' 
-                : `${disputeCount} dispute${disputeCount === 1 ? '' : 's'} found`}
-            </p>
+    <>
+      <div className="min-h-screen bg-gray-50 p-8">
+        <div className="max-w-7xl mx-auto">
+          <div className="flex justify-between items-center mb-8">
+            <div>
+              <h1 className="text-3xl font-bold">Dispute Resolution</h1>
+              <p className="text-gray-600 mt-2">
+                {disputeCount === 0 
+                  ? 'No disputes found' 
+                  : `${disputeCount} dispute${disputeCount === 1 ? '' : 's'} found`}
+              </p>
+            </div>
           </div>
+          
+          {user && (
+            <DisputesTable 
+              onDisputeCountChange={setDisputeCount}
+            />
+          )}
         </div>
-        
-        <DisputesTable 
-          onDisputeCountChange={setDisputeCount}
-        />
       </div>
-    </div>
+
+      <LoginSplashScreen
+        isOpen={showLoginSplash}
+        onClose={handleCloseLogin}
+        message="Sign in to manage your disputes and automate responses 🛡️"
+      />
+    </>
   );
 } 

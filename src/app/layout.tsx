@@ -11,8 +11,8 @@ const roboto = Roboto({
 })
 
 export const metadata: Metadata = {
-  title: 'Stripe Dispute Center',
-  description: 'Your platform for managing and resolving disputes efficiently.',
+  title: 'Subspond',
+  description: 'Your all-in-one subscription management and dispute resolution platform.',
 }
 
 export default function RootLayout({
@@ -24,7 +24,9 @@ export default function RootLayout({
     <html lang="en" className={roboto.variable}>
       <body className="font-sans">
         <Providers>
-          {children}
+          <div className="min-h-screen">
+            {children}
+          </div>
         </Providers>
       </body>
     </html>

@@ -44,32 +44,42 @@ export default function StripeKeyInput({ userEmail, onSuccess }: Props) {
   };
 
   return (
-    <div className="max-w-md mx-auto p-6 bg-white rounded-lg shadow-lg">
-      <h2 className="text-2xl font-bold mb-4">Enter Your Stripe API Key</h2>
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
+    <div className="w-[600px] mx-auto p-8 bg-white rounded-2xl shadow-xl">
+      <div className="flex items-start justify-between mb-6">
+        <h2 className="text-2xl font-bold text-gray-900">Enter Your Stripe API Key</h2>
+      </div>
+
+      <form onSubmit={handleSubmit} className="space-y-6">
+        <div className="space-y-2">
           <label htmlFor="stripeKey" className="block text-sm font-medium text-gray-700">
             Stripe Secret Key
           </label>
-          <input
-            id="stripeKey"
-            type="password"
-            value={stripeKey}
-            onChange={(e) => setStripeKey(e.target.value)}
-            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
-            placeholder="sk_live_..."
-            required
-          />
+          <div className="relative">
+            <input
+              id="stripeKey"
+              type="password"
+              value={stripeKey}
+              onChange={(e) => setStripeKey(e.target.value)}
+              className="block w-full px-4 py-3 rounded-lg border border-gray-300 shadow-sm focus:ring-2 focus:ring-[#635BFF] focus:border-transparent transition-colors"
+              placeholder="sk_live_..."
+              required
+            />
+          </div>
+          <p className="text-sm text-gray-500">
+            Your key will be encrypted and stored securely
+          </p>
         </div>
+
         {error && (
-          <div className="bg-red-50 border border-red-200 rounded p-3">
+          <div className="bg-red-50 border border-red-200 rounded-lg p-4">
             <p className="text-red-600 text-sm">{error}</p>
           </div>
         )}
+
         <button
           type="submit"
           disabled={isLoading}
-          className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50"
+          className="w-full flex justify-center py-3 px-4 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-[#635BFF] hover:bg-[#635BFF]/90 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#635BFF] disabled:opacity-50 transition-colors"
         >
           {isLoading ? 'Saving...' : 'Save API Key'}
         </button>

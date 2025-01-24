@@ -11,7 +11,9 @@ export function SubscriptionDashboard() {
       icon: AlertCircle,
       action: "Review",
       count: "2 active disputes",
-      gradient: "from-red-500 via-red-600 to-red-700",
+      gradient: "from-rose-500 via-rose-600 to-rose-700",
+      bgColor: "bg-rose-50",
+      iconColor: "bg-rose-500",
       className: "md:col-span-1",
       href: "/dispute"
     },
@@ -21,7 +23,9 @@ export function SubscriptionDashboard() {
       icon: FileQuestion,
       action: "Browse",
       count: "200+ articles",
-      gradient: "from-blue-500 via-blue-600 to-blue-700",
+      gradient: "from-indigo-500 via-indigo-600 to-indigo-700",
+      bgColor: "bg-indigo-50",
+      iconColor: "bg-indigo-500",
       className: "md:col-span-1"
     },
     {
@@ -30,7 +34,9 @@ export function SubscriptionDashboard() {
       icon: CreditCard,
       action: "Review",
       count: "15 active subscriptions",
-      gradient: "from-green-500 via-green-600 to-green-700",
+      gradient: "from-emerald-500 via-emerald-600 to-emerald-700",
+      bgColor: "bg-emerald-50",
+      iconColor: "bg-emerald-500",
       className: "md:col-span-2"
     }
   ]

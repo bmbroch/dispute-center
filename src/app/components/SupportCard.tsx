@@ -11,6 +11,8 @@ interface SupportCardProps {
   action: string
   count: string
   gradient: string
+  bgColor: string
+  iconColor: string
   className?: string
   href?: string
 }
@@ -22,22 +24,13 @@ export function SupportCard({
   action,
   count,
   gradient,
+  bgColor,
+  iconColor,
   className = "",
   href
 }: SupportCardProps) {
   const router = useRouter();
   
-  // Convert gradient classes to background color classes
-  const bgColor = gradient.includes('red') ? 'bg-red-50/30' 
-    : gradient.includes('blue') ? 'bg-blue-50/30'
-    : gradient.includes('green') ? 'bg-green-50/30'
-    : 'bg-purple-50/30';
-
-  const iconBg = gradient.includes('red') ? 'bg-red-500' 
-    : gradient.includes('blue') ? 'bg-blue-500'
-    : gradient.includes('green') ? 'bg-green-500'
-    : 'bg-purple-500';
-
   const handleAction = (e: React.MouseEvent) => {
     e.preventDefault();
     if (href) {
@@ -51,7 +44,7 @@ export function SupportCard({
         <div className="flex items-start justify-between">
           <div className="flex-1">
             {/* App icon */}
-            <div className={`mb-6 inline-flex ${iconBg} rounded-2xl p-3`}>
+            <div className={`mb-6 inline-flex ${iconColor} rounded-2xl p-3`}>
               <Icon className="h-8 w-8 text-white" strokeWidth={2} />
             </div>
             
@@ -66,7 +59,7 @@ export function SupportCard({
           <div className="ml-4">
             <button 
               onClick={handleAction}
-              className="rounded-full bg-white shadow-sm px-5 py-2 text-sm text-gray-600 hover:bg-gray-50 transition-colors"
+              className={`rounded-lg px-5 py-2 text-sm font-medium hover:opacity-90 transition-colors ${iconColor} text-white`}
             >
               {action}
             </button>
@@ -76,7 +69,7 @@ export function SupportCard({
     </>
   );
 
-  const cardClasses = `group relative overflow-hidden rounded-2xl border border-gray-100 ${bgColor} transition-all hover:shadow-md ${className}`;
+  const cardClasses = `group relative overflow-hidden rounded-2xl border border-gray-100 ${bgColor} transition-all hover:shadow-lg hover:scale-[1.02] ${className}`;
 
   if (href) {
     return (
