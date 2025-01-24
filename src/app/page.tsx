@@ -130,7 +130,7 @@ export default function Home() {
                           <div className="space-y-2 text-sm text-gray-600">
                             <p>We need your API key 🔑 to securely connect Subspond to your subscription platform.</p>
                             <p>This allows us to fetch subscription details 🛍️ and automate responses to customer inquiries ✉️, saving you time and effort.</p>
-                            <p>Don't worry—your data is safe with us 🔒, and we only use it to make your support process smooth and hassle-free! 😊</p>
+                            <p>Don&apos;t worry—your data is safe with us 🔒, and we only use it to make your support process smooth and hassle-free! 😊</p>
                           </div>
                           <Tooltip.Arrow className="fill-white" />
                         </Tooltip.Content>
