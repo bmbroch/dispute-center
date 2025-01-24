@@ -142,7 +142,7 @@ export default function Home() {
                   <span className="text-sm text-[#635BFF] font-medium">•••• 4242</span>
                 )}
               </div>
-              <p className="text-sm text-gray-500 mb-2">Add your Stripe API key to manage subscriptions and disputes</p>
+              <p className="text-gray-600 mb-2">Add your Stripe API key to manage subscriptions and disputes</p>
               {user && !hasStripeKey && (
                 <button 
                   onClick={() => setShowStripeKeyInput(true)}
@@ -241,10 +241,11 @@ export default function Home() {
           >
             <div className="bg-white rounded-2xl overflow-hidden border border-gray-100 hover:border-coral/50 transition-all duration-300 shadow-sm hover:shadow-xl">
               <div className="relative h-64 overflow-hidden">
-                <img
-                  src="https://firebasestorage.googleapis.com/v0/b/stripe-ageny.firebasestorage.app/o/dispute_image.webp?alt=media&token=1c91f542-c927-4733-aafa-f12b24795e99"
+                <Image
+                  src="/dispute_image.webp"
                   alt="3D illustration of dispute resolution system with floating messages and scales of justice"
-                  className="object-cover w-full h-full transform group-hover:scale-105 transition-transform duration-300"
+                  className="object-cover transform group-hover:scale-105 transition-transform duration-300"
+                  fill
                 />
                 <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent" />
                 <h3 className="absolute bottom-4 left-6 text-2xl font-semibold text-white">Dispute Resolution</h3>
@@ -315,10 +316,11 @@ export default function Home() {
           >
             <div className="bg-white rounded-2xl overflow-hidden border border-gray-100 hover:border-teal/50 transition-all duration-300 shadow-sm hover:shadow-xl">
               <div className="relative h-64 overflow-hidden">
-                <img
-                  src="https://images.unsplash.com/photo-1614064641938-3bbee52942c7?q=80&w=2670&auto=format&fit=crop"
+                <Image
+                  src="/faq-support.webp"
                   alt="Abstract visualization of knowledge base and FAQ system"
-                  className="object-cover w-full h-full transform group-hover:scale-105 transition-transform duration-300"
+                  className="object-cover transform group-hover:scale-105 transition-transform duration-300"
+                  fill
                 />
                 <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent" />
                 <h3 className="absolute bottom-4 left-6 text-2xl font-semibold text-white">FAQ & Support</h3>
@@ -347,10 +349,11 @@ export default function Home() {
           >
             <div className="bg-white rounded-2xl overflow-hidden border border-gray-100 hover:border-navy/50 transition-all duration-300 shadow-sm hover:shadow-xl">
               <div className="relative h-64 overflow-hidden">
-                <img
-                  src="https://images.unsplash.com/photo-1551288049-bebda4e38f71?q=80&w=2670&auto=format&fit=crop"
+                <Image
+                  src="/subscription-management.webp"
                   alt="Abstract visualization of subscription management system"
-                  className="object-cover w-full h-full transform group-hover:scale-105 transition-transform duration-300"
+                  className="object-cover transform group-hover:scale-105 transition-transform duration-300"
+                  fill
                 />
                 <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent" />
                 <h3 className="absolute bottom-4 left-6 text-2xl font-semibold text-white">Subscription Management</h3>
