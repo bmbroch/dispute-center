@@ -28,7 +28,7 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: 'No Stripe API key found for this user' }, { status: 404 });
     }
 
-    const stripeKey = querySnapshot.docs[0].data().apiKey;
+    const stripeKey = querySnapshot.docs[0].data().stripeKey;
     if (!stripeKey) {
       return NextResponse.json({ error: 'Invalid Stripe API key' }, { status: 400 });
     }

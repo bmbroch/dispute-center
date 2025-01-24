@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useEffect, useState } from "react";
+import React, { createContext, useEffect, useState, useCallback, useRef } from "react";
 
 interface GoogleUser {
   email: string;
@@ -30,39 +30,109 @@ const AuthContext = createContext<AuthContextType>({
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<GoogleUser | null>(null);
   const [loading, setLoading] = useState(true);
+  const refreshTimerRef = useRef<NodeJS.Timeout>();
+  const mountedRef = useRef(true);
 
-  const checkTokenExpiration = (tokenExpiry?: number) => {
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+      if (refreshTimerRef.current) {
+        clearTimeout(refreshTimerRef.current);
+      }
+    };
+  }, []);
+
+  const checkTokenExpiration = useCallback((tokenExpiry?: number) => {
     if (!tokenExpiry) return true;
     // Check if token is expired or will expire in the next 5 minutes
     return Date.now() >= (tokenExpiry - 5 * 60 * 1000);
-  };
+  }, []);
 
-  // Load persisted data on mount
-  useEffect(() => {
+  const signOut = useCallback(async () => {
     try {
-      const storedUserData = localStorage.getItem('userData');
+      // Call the sign out endpoint to remove the auth cookie
+      await fetch('/api/auth/signout', {
+        method: 'POST',
+      });
       
-      if (storedUserData) {
-        const userData = JSON.parse(storedUserData) as GoogleUser;
-        
-        // Check if token is expired
-        if (!checkTokenExpiration(userData.tokenExpiry)) {
-          setUser(userData);
-        } else {
-          // Token is expired, just clear storage
-          localStorage.removeItem('userData');
-        }
-      }
+      // Clear local state
+      setUser(null);
+      localStorage.removeItem('userData');
     } catch (error) {
-      console.error('Error loading persisted data:', error);
-      // Clear potentially corrupted data
+      console.error('Error signing out:', error);
+      // Still clear local state even if the API call fails
+      setUser(null);
       localStorage.removeItem('userData');
     } finally {
-      setLoading(false);
+      if (refreshTimerRef.current) {
+        clearTimeout(refreshTimerRef.current);
+      }
     }
   }, []);
 
-  const signInWithGoogle = async () => {
+  const refreshToken = useCallback(async () => {
+    if (!user?.refreshToken) {
+      throw new Error('No refresh token available');
+    }
+
+    try {
+      const response = await fetch('/api/auth/refresh', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ refreshToken: user.refreshToken }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to refresh token');
+      }
+
+      const { access_token, tokenExpiry } = await response.json();
+      
+      const updatedUser = {
+        ...user,
+        accessToken: access_token,
+        tokenExpiry,
+      };
+
+      // Update localStorage first
+      localStorage.setItem('userData', JSON.stringify(updatedUser));
+      // Then update state in a single batch
+      if (mountedRef.current) {
+        setUser(updatedUser);
+      }
+      return updatedUser;
+    } catch (error) {
+      console.error('Error refreshing token:', error);
+      // If refresh fails, sign out user
+      await signOut();
+      throw error;
+    }
+  }, [user, signOut]);
+
+  const scheduleTokenRefresh = useCallback((tokenExpiry: number) => {
+    if (refreshTimerRef.current) {
+      clearTimeout(refreshTimerRef.current);
+    }
+
+    const timeUntilExpiry = tokenExpiry - Date.now();
+    const refreshTime = Math.max(0, timeUntilExpiry - (5 * 60 * 1000));
+
+    if (refreshTime <= 0) {
+      refreshToken().catch(console.error);
+      return;
+    }
+
+    refreshTimerRef.current = setTimeout(() => {
+      if (mountedRef.current) {
+        refreshToken().catch(console.error);
+      }
+    }, refreshTime);
+  }, [refreshToken]);
+
+  const signInWithGoogle = useCallback(async () => {
     try {
       // Create the OAuth URL with all necessary scopes
       const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
@@ -137,7 +207,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                   };
                   
                   localStorage.setItem('userData', JSON.stringify(userData));
-                  setUser(userData);
+                  if (mountedRef.current) {
+                    setUser(userData);
+                  }
+                  scheduleTokenRefresh(userData.tokenExpiry || 0);
                   resolve();
                 } else {
                   reject(new Error('No access token received'));
@@ -173,61 +246,47 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       console.error("Error signing in with Google:", error);
       throw error;
     }
-  };
+  }, []);
 
-  const refreshToken = async () => {
-    if (!user?.refreshToken) {
-      throw new Error('No refresh token available');
-    }
+  // Load persisted data on mount
+  useEffect(() => {
+    const loadPersistedData = async () => {
+      try {
+        const storedUserData = localStorage.getItem('userData');
+        if (!storedUserData || !mountedRef.current) return;
 
-    try {
-      const response = await fetch('/api/auth/refresh', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ refreshToken: user.refreshToken }),
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to refresh token');
+        const userData = JSON.parse(storedUserData) as GoogleUser;
+        
+        if (checkTokenExpiration(userData.tokenExpiry)) {
+          try {
+            const refreshedUser = await refreshToken();
+            if (mountedRef.current && refreshedUser) {
+              setUser(refreshedUser);
+              scheduleTokenRefresh(refreshedUser.tokenExpiry || 0);
+            }
+          } catch (error) {
+            console.error('Error refreshing expired token:', error);
+            localStorage.removeItem('userData');
+            if (mountedRef.current) {
+              setUser(null);
+            }
+          }
+        } else {
+          setUser(userData);
+          scheduleTokenRefresh(userData.tokenExpiry || 0);
+        }
+      } catch (error) {
+        console.error('Error loading persisted data:', error);
+        localStorage.removeItem('userData');
+      } finally {
+        if (mountedRef.current) {
+          setLoading(false);
+        }
       }
+    };
 
-      const { access_token, tokenExpiry } = await response.json();
-      
-      const updatedUser = {
-        ...user,
-        accessToken: access_token,
-        tokenExpiry,
-      };
-
-      localStorage.setItem('userData', JSON.stringify(updatedUser));
-      setUser(updatedUser);
-    } catch (error) {
-      console.error('Error refreshing token:', error);
-      // If refresh fails, sign out user
-      await signOut();
-      throw error;
-    }
-  };
-
-  const signOut = async () => {
-    try {
-      // Call the sign out endpoint to remove the auth cookie
-      await fetch('/api/auth/signout', {
-        method: 'POST',
-      });
-      
-      // Clear local state
-      setUser(null);
-      localStorage.removeItem('userData');
-    } catch (error) {
-      console.error('Error signing out:', error);
-      // Still clear local state even if the API call fails
-      setUser(null);
-      localStorage.removeItem('userData');
-    }
-  };
+    loadPersistedData();
+  }, []); // Empty dependency array since we only want this to run once on mount
 
   return (
     <AuthContext.Provider value={{ 

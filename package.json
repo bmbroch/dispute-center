@@ -41,6 +41,7 @@
     "react-quill": "^2.0.0",
     "remark-gfm": "^4.0.0",
     "replicate": "^0.32.0",
+    "sonner": "^1.7.2",
     "stripe": "^17.5.0"
   },
   "devDependencies": {

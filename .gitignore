@@ -27,6 +27,7 @@ yarn-error.log*
 
 # local env files
 .env*.local
+.env
 
 # vercel
 .vercel
@@ -43,5 +44,3 @@ next-env.d.ts
 .replit
 replit_zip_error_log.txt
 .config/
-
-.env

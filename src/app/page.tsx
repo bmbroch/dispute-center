@@ -66,12 +66,22 @@ function PageContent() {
           <div className="flex items-start gap-3 group">
             <div className="mt-1 flex-shrink-0">
               {user ? (
-                <div className="w-5 h-5 rounded-full bg-blue-500 flex items-center justify-center">
-                  <Mail className="w-3 h-3 text-white" />
+                <div className="w-8 h-8 rounded-full bg-white border border-gray-200 flex items-center justify-center p-1.5">
+                  <svg viewBox="0 0 24 24" className="w-full h-full">
+                    <path
+                      fill="#EA4335"
+                      d="M24 5.457v13.909c0 .904-.732 1.636-1.636 1.636h-3.819V11.73L12 16.64l-6.545-4.91v9.273H1.636A1.636 1.636 0 0 1 0 19.366V5.457c0-2.023 2.309-3.178 3.927-1.964L5.455 4.64 12 9.548l6.545-4.91 1.528-1.145C21.69 2.28 24 3.434 24 5.457z"
+                    />
+                  </svg>
                 </div>
               ) : (
-                <div className="w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center group-hover:bg-blue-500/10 transition-colors">
-                  <Mail className="w-3 h-3 text-gray-400 group-hover:text-blue-500 transition-colors" />
+                <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center p-1.5">
+                  <svg viewBox="0 0 24 24" className="w-full h-full">
+                    <path
+                      fill="#9CA3AF"
+                      d="M24 5.457v13.909c0 .904-.732 1.636-1.636 1.636h-3.819V11.73L12 16.64l-6.545-4.91v9.273H1.636A1.636 1.636 0 0 1 0 19.366V5.457c0-2.023 2.309-3.178 3.927-1.964L5.455 4.64 12 9.548l6.545-4.91 1.528-1.145C21.69 2.28 24 3.434 24 5.457z"
+                    />
+                  </svg>
                 </div>
               )}
             </div>
@@ -97,14 +107,14 @@ function PageContent() {
           <div className="flex items-start gap-3 group">
             <div className="mt-1 flex-shrink-0">
               {hasStripeKey ? (
-                <div className="w-5 h-5 rounded-full bg-[#635BFF] flex items-center justify-center">
-                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="w-3 h-3">
+                <div className="w-8 h-8 rounded-full bg-[#635BFF] flex items-center justify-center p-1.5">
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="w-full h-full">
                     <path d="M13.976 9.15c-2.172-.806-3.396-1.38-3.396-2.418 0-.836.918-1.415 2.322-1.415 2.691 0 5.473 1.025 7.2 1.834V2.17C18.151 1.206 15.315.6 12.674.6 7.82.6 4.588 3.13 4.588 7.262c0 4.068 3.73 5.643 6.933 6.754 2.855.935 3.83 1.576 3.83 2.594 0 1.002-.987 1.673-2.611 1.673-2.172 0-5.514-1.025-7.844-2.049v5.124c2.467 1.09 5.449 1.642 7.844 1.642 5.017 0 8.249-2.497 8.249-6.673 0-4.132-3.462-5.55-7.013-6.754z" fill="#ffffff"/>
                   </svg>
                 </div>
               ) : (
-                <div className="w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center group-hover:bg-[#635BFF]/10 transition-colors">
-                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="w-3 h-3">
+                <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center p-1.5">
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="w-full h-full">
                     <path d="M13.976 9.15c-2.172-.806-3.396-1.38-3.396-2.418 0-.836.918-1.415 2.322-1.415 2.691 0 5.473 1.025 7.2 1.834V2.17C18.151 1.206 15.315.6 12.674.6 7.82.6 4.588 3.13 4.588 7.262c0 4.068 3.73 5.643 6.933 6.754 2.855.935 3.83 1.576 3.83 2.594 0 1.002-.987 1.673-2.611 1.673-2.172 0-5.514-1.025-7.844-2.049v5.124c2.467 1.09 5.449 1.642 7.844 1.642 5.017 0 8.249-2.497 8.249-6.673 0-4.132-3.462-5.55-7.013-6.754z" fill="#9CA3AF"/>
                   </svg>
                 </div>
@@ -141,13 +151,26 @@ function PageContent() {
                   <span className="text-sm text-[#635BFF] font-medium">•••• 4242</span>
                 )}
               </div>
-              <p className="text-gray-600 mb-2">Add your Stripe API key to manage subscriptions and disputes</p>
+              <p className="text-gray-600 mb-2">
+                {hasStripeKey 
+                  ? 'Your Stripe account is connected and ready to use'
+                  : 'Add your Stripe API key to manage subscriptions and disputes'
+                }
+              </p>
               {user && !hasStripeKey && (
                 <button 
                   onClick={() => setShowStripeKeyInput(true)}
                   className="text-sm text-[#635BFF] hover:text-[#635BFF]/80 font-medium flex items-center gap-1"
                 >
                   Add API Key <span aria-hidden="true">→</span>
+                </button>
+              )}
+              {user && hasStripeKey && (
+                <button 
+                  onClick={() => setShowStripeKeyInput(true)}
+                  className="text-sm text-[#635BFF] hover:text-[#635BFF]/80 font-medium flex items-center gap-1"
+                >
+                  Edit API Key <span aria-hidden="true">→</span>
                 </button>
               )}
               {!user && (
@@ -383,18 +406,10 @@ function PageContent() {
 
       {showStripeKeyInput && user && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="relative">
-            <button
-              onClick={() => setShowStripeKeyInput(false)}
-              className="absolute -top-12 right-0 text-white hover:text-gray-200"
-            >
-              Close
-            </button>
-            <StripeKeyInput 
-              userEmail={user.email!} 
-              onSuccess={handleStripeKeySuccess}
-            />
-          </div>
+          <StripeKeyInput 
+            onClose={() => setShowStripeKeyInput(false)}
+            onSuccess={handleStripeKeySuccess}
+          />
         </div>
       )}
     </div>

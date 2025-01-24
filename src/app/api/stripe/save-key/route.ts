@@ -33,14 +33,14 @@ export async function POST(request: Request) {
       // Update existing key
       const doc = querySnapshot.docs[0];
       await updateDoc(doc.ref, { 
-        apiKey,
+        stripeKey: apiKey,
         updatedAt: new Date().toISOString()
       });
     } else {
       // Create new key
       await addDoc(stripeKeysRef, {
         userEmail,
-        apiKey,
+        stripeKey: apiKey,
         createdAt: new Date().toISOString()
       });
     }

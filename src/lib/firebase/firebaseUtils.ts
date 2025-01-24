@@ -67,7 +67,7 @@ export const getStripeKey = async (userEmail: string): Promise<string | null> =>
       return null;
     }
 
-    return querySnapshot.docs[0].data().apiKey;
+    return querySnapshot.docs[0].data().stripeKey;
   } catch (error) {
     console.error('Error fetching Stripe key:', error);
     return null;

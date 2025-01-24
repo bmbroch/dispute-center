@@ -101,6 +101,19 @@ export default function EmailCorrespondence({ customerEmail, disputeId }: EmailC
   // Get customer-specific emails or return empty array if none exist
   const messages = EMAIL_TEMPLATES[customerEmail] || [];
 
+  const getTimeDifference = (date1: string, date2: string) => {
+    const d1 = new Date(date1);
+    const d2 = new Date(date2);
+    const diffTime = Math.abs(d2.getTime() - d1.getTime());
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    const diffHours = Math.ceil(diffTime / (1000 * 60 * 60));
+    
+    if (diffHours < 24) {
+      return `${diffHours} hour${diffHours === 1 ? '' : 's'}`;
+    }
+    return `${diffDays} day${diffDays === 1 ? '' : 's'}`;
+  };
+
   const formatEmailContent = (content: string) => {
     // Split the content into paragraphs
     const paragraphs = content.split(/\n\n+/);
@@ -158,33 +171,34 @@ export default function EmailCorrespondence({ customerEmail, disputeId }: EmailC
       <h3 className="text-lg font-medium">Email Correspondence for {customerEmail}</h3>
       <div className="space-y-6">
         {messages.map((message, index) => (
-          <div key={index} className="bg-white rounded-lg shadow-sm p-6">
-            <div className="flex items-center justify-between text-sm text-gray-600 mb-4">
-              <div className="flex flex-col">
-                <div className="flex items-center gap-2">
-                  <span className="font-medium text-gray-900">{message.from}</span>
-                  <span className="text-gray-500">&lt;{message.email}&gt;</span>
-                </div>
-                {message.to && (
-                  <div className="text-gray-500">
-                    to {message.to}
+          <React.Fragment key={index}>
+            <div className="bg-white rounded-lg shadow-sm p-6">
+              <div className="flex items-center justify-between text-sm text-gray-600 mb-4">
+                <div className="flex flex-col">
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium text-gray-900">{message.from}</span>
+                    <span className="text-gray-500">&lt;{message.email}&gt;</span>
                   </div>
-                )}
+                  {message.to && (
+                    <div className="text-gray-500">
+                      to {message.to}
+                    </div>
+                  )}
+                </div>
+                <div className="text-gray-500">{message.date}</div>
               </div>
-              <div className="text-gray-500">{message.date}</div>
+              
+              {formatEmailContent(message.body)}
             </div>
-            
-            {formatEmailContent(message.body)}
-          </div>
+            {index < messages.length - 1 && (
+              <div className="flex justify-center py-4">
+                <div className="text-base bg-gray-100 rounded-full px-6 py-2 text-gray-600 shadow-sm border border-gray-200">
+                  {getTimeDifference(message.date, messages[index + 1].date)} ⏰ between messages
+                </div>
+              </div>
+            )}
+          </React.Fragment>
         ))}
-        
-        {messages.length > 1 && (
-          <div className="flex justify-center py-2">
-            <div className="text-sm text-gray-500">
-              3 days between messages
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );
