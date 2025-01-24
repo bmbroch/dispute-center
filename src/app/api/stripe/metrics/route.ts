@@ -1,63 +1,52 @@
 import { NextResponse } from 'next/server';
-import { getFirebaseDB } from '@/lib/firebase/firebase';
-import { collection, query, where, getDocs } from 'firebase/firestore';
 import Stripe from 'stripe';
+import { getStripeKey } from '@/lib/firebase/firebaseUtils';
 
 export async function GET(request: Request) {
   try {
-    // Get user email from the request headers or query params
+    // Get the user's email from the query parameters
     const { searchParams } = new URL(request.url);
-    const userEmail = searchParams.get('email');
+    const userEmail = searchParams.get('userEmail');
 
     if (!userEmail) {
-      return NextResponse.json(
-        { error: 'User email is required' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'User email is required' }, { status: 400 });
     }
 
-    // Get Stripe key from Firestore
-    const db = getFirebaseDB();
-    if (!db) {
-      throw new Error('Database not initialized');
+    // Get the user's Stripe API key from Firebase
+    const stripeKey = await getStripeKey(userEmail);
+
+    if (!stripeKey) {
+      return NextResponse.json({
+        activeDisputes: null,
+        responseDrafts: null,
+        hasStripeKey: false,
+      });
     }
 
-    const stripeKeysRef = collection(db, 'stripeKeys');
-    const q = query(stripeKeysRef, where('userEmail', '==', userEmail));
-    const querySnapshot = await getDocs(q);
-
-    if (querySnapshot.empty) {
-      return NextResponse.json(
-        { error: 'No Stripe key found for this user' },
-        { status: 404 }
-      );
-    }
-
-    const stripeKey = querySnapshot.docs[0].data().apiKey;
-    
     // Initialize Stripe with the user's API key
     const stripe = new Stripe(stripeKey, {
-      apiVersion: '2023-10-16'
+      apiVersion: '2024-12-18.acacia'
     });
 
     // Fetch disputes that need response
     const disputes = await stripe.disputes.list({
       limit: 100,
-      status: 'needs_response'
+      status: 'needs_response',
     });
 
-    // For now, we'll set response drafts to 0 since we haven't implemented that feature yet
-    const responseDrafts = 0;
+    // Fetch disputes that have response drafts
+    const disputesWithDrafts = await stripe.disputes.list({
+      limit: 100,
+      status: 'warning_needs_response',
+    });
 
     return NextResponse.json({
       activeDisputes: disputes.data.length,
-      responseDrafts
+      responseDrafts: disputesWithDrafts.data.length,
+      hasStripeKey: true,
     });
   } catch (error) {
     console.error('Error fetching Stripe metrics:', error);
-    return NextResponse.json(
-      { error: 'Failed to fetch Stripe metrics' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 } 
