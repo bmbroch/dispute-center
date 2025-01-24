@@ -19,7 +19,7 @@ export default function Home() {
   const [showStripeKeyInput, setShowStripeKeyInput] = useState(false);
   const searchParams = useSearchParams();
   const router = useRouter();
-  const { user, logoutUser } = useAuth();
+  const { user, signOut } = useAuth();
   const { activeDisputes, responseDrafts, isLoading, hasStripeKey } = useStripeMetrics();
   
   useEffect(() => {
@@ -50,7 +50,7 @@ export default function Home() {
   };
 
   const handleLogout = async () => {
-    await logoutUser();
+    await signOut();
     router.push('/');
   };
 
