@@ -28,21 +28,29 @@ export async function GET(request: Request) {
       apiVersion: '2024-12-18.acacia'
     });
 
-    // Fetch disputes that need response
+    // Fetch all disputes and filter by status
     const disputes = await stripe.disputes.list({
+      created: {
+        // Get disputes from the last 30 days
+        gte: Math.floor((Date.now() - 30 * 24 * 60 * 60 * 1000) / 1000),
+      },
       limit: 100,
-      status: 'needs_response',
     });
 
-    // Fetch disputes that have response drafts
-    const disputesWithDrafts = await stripe.disputes.list({
-      limit: 100,
-      status: 'warning_needs_response',
-    });
+    // Filter disputes by status
+    const activeDisputes = disputes.data.filter(dispute => 
+      dispute.status === 'needs_response' || 
+      dispute.status === 'warning_needs_response'
+    );
+
+    // Count disputes with response drafts (those in warning_needs_response status)
+    const disputesWithDrafts = activeDisputes.filter(dispute => 
+      dispute.status === 'warning_needs_response'
+    );
 
     return NextResponse.json({
-      activeDisputes: disputes.data.length,
-      responseDrafts: disputesWithDrafts.data.length,
+      activeDisputes: activeDisputes.length,
+      responseDrafts: disputesWithDrafts.length,
       hasStripeKey: true,
     });
   } catch (error) {
