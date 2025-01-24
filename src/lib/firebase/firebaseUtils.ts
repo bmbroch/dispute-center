@@ -13,6 +13,8 @@ import {
   updateDoc,
   deleteDoc,
   Firestore,
+  query,
+  where,
 } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL, Storage } from "firebase/storage";
 
@@ -47,6 +49,27 @@ export const signInWithGoogle = async () => {
   } catch (error) {
     console.error("Error signing in with Google", error);
     throw error;
+  }
+};
+
+// Stripe functions
+export const getStripeKey = async (userEmail: string): Promise<string | null> => {
+  const firebase = ensureInitialized();
+  if (!firebase) throw new Error('Firebase not initialized');
+
+  try {
+    const stripeKeysRef = collection(firebase.db, 'stripeKeys');
+    const q = query(stripeKeysRef, where('userEmail', '==', userEmail));
+    const querySnapshot = await getDocs(q);
+
+    if (querySnapshot.empty) {
+      return null;
+    }
+
+    return querySnapshot.docs[0].data().apiKey;
+  } catch (error) {
+    console.error('Error fetching Stripe key:', error);
+    return null;
   }
 };
 
