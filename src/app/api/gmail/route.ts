@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getOAuth2Client } from '@/lib/google/auth';
 import { google } from 'googleapis';
-import { GaxiosPromise, Schema$Thread } from 'googleapis-common';
+import { gmail_v1 } from 'googleapis';
 
 export async function GET(request: NextRequest) {
   const authHeader = request.headers.get('Authorization');
@@ -69,7 +69,7 @@ export async function GET(request: NextRequest) {
     );
 
     // Filter out any failed thread fetches and ensure type safety
-    const validThreads = threads.filter((thread): thread is Schema$Thread => thread !== null);
+    const validThreads = threads.filter((thread): thread is gmail_v1.Schema$Thread => thread !== null);
 
     // Process and format the email threads
     const formattedThreads = validThreads.map(thread => {
@@ -101,7 +101,7 @@ export async function GET(request: NextRequest) {
           let body = '';
           let contentType = '';
 
-          const getBodyPart = (part: any): { body: string, contentType: string } | null => {
+          const getBodyPart = (part: gmail_v1.Schema$MessagePart): { body: string, contentType: string } | null => {
             if (part.body?.data) {
               return {
                 body: decodeBody(part.body.data),
