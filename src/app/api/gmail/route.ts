@@ -2,6 +2,29 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getOAuth2Client } from '@/lib/google/auth';
 import { google, gmail_v1 } from 'googleapis';
 
+// Type guard for Gmail API errors
+interface GmailError {
+  response?: {
+    status: number;
+    data?: {
+      error: {
+        message?: string;
+        code?: string;
+      };
+    };
+  };
+  message?: string;
+}
+
+function isGmailError(error: unknown): error is GmailError {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'response' in error &&
+    typeof (error as GmailError).response === 'object'
+  );
+}
+
 export async function GET(request: NextRequest) {
   const authHeader = request.headers.get('Authorization');
   const disputeEmail = request.headers.get('X-Dispute-Email');
@@ -174,27 +197,18 @@ export async function GET(request: NextRequest) {
       threads: formattedThreads,
       count: formattedThreads.length 
     });
-  } catch (error) {
+  } catch (error: unknown) {
     console.error('Error fetching email threads:', error);
     
-    // Type guard for error with response property
-    interface GmailError {
-      response?: {
-        status: number;
-        data?: {
-          error: {
-            message?: string;
-            code?: string;
-          };
-        };
-      };
-      message?: string;
+    if (!isGmailError(error)) {
+      return NextResponse.json({ 
+        error: 'Failed to fetch email threads',
+        details: 'An unexpected error occurred'
+      }, { status: 500 });
     }
-
-    const gmailError = error as GmailError;
     
     // Check if error is due to invalid credentials
-    if (gmailError.response?.status === 401) {
+    if (error.response?.status === 401) {
       return NextResponse.json({ 
         error: 'Authentication failed',
         details: 'Your session has expired. Please sign in again.'
@@ -202,7 +216,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Check for rate limiting
-    if (gmailError.response?.status === 429) {
+    if (error.response?.status === 429) {
       return NextResponse.json({
         error: 'Rate limit exceeded',
         details: 'Too many requests. Please try again in a few minutes.'
@@ -210,19 +224,19 @@ export async function GET(request: NextRequest) {
     }
 
     // Check for Gmail API specific errors
-    if (gmailError.response?.data?.error) {
-      const apiError = gmailError.response.data.error;
+    if (error.response?.data?.error) {
+      const apiError = error.response.data.error;
       return NextResponse.json({
         error: 'Gmail API error',
         details: apiError.message || 'An error occurred while fetching emails',
         code: apiError.code
-      }, { status: gmailError.response.status || 500 });
+      }, { status: error.response.status || 500 });
     }
 
     // Network or other errors
     return NextResponse.json({ 
       error: 'Failed to fetch email threads',
-      details: gmailError.message || 'An unexpected error occurred while fetching emails'
+      details: error.message || 'An unexpected error occurred while fetching emails'
     }, { status: 500 });
   }
 } 
