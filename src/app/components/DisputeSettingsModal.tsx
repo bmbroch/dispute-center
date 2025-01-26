@@ -318,7 +318,7 @@ export default function DisputeSettingsModal({ isOpen, onClose }: DisputeSetting
                                 </div>
                                 <div className="mt-2 p-3 bg-blue-50 rounded-md">
                                   <p className="text-sm text-blue-700">
-                                    <span className="font-medium">💡 Tip:</span> Use <code className="bg-blue-100 px-1.5 py-0.5 rounded">{'{{firstName}}'}</code> to automatically include the customer's first name in your email.
+                                    <span className="font-medium">💡 Tip:</span> Use <code className="bg-blue-100 px-1.5 py-0.5 rounded">{`{{firstName}}`}</code> to automatically include the customer&apos;s first name in your email.
                                   </p>
                                 </div>
                               </div>

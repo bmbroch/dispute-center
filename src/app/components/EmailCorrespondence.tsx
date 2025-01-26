@@ -114,7 +114,7 @@ export default function EmailCorrespondence({
 
   useEffect(() => {
     fetchEmails();
-  }, [customerEmail, user?.accessToken]);
+  }, [fetchEmails]);
 
   const handleEmailSent = async () => {
     // Immediately fetch new emails

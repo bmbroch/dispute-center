@@ -20,8 +20,6 @@ const nextConfig = {
   reactStrictMode: true,
   // Disable x-powered-by header for security
   poweredByHeader: false,
-  // Enable static optimization where possible
-  swcMinify: true,
   // Configure redirects
   async redirects() {
     return [

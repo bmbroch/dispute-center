@@ -111,7 +111,7 @@ export default function DisputeTable({ onDisputeCountChange }: DisputeTableProps
 
   useEffect(() => {
     refreshDisputes();
-  }, [user?.email]);
+  }, [refreshDisputes]);
 
   if (isLoading) {
     return (
