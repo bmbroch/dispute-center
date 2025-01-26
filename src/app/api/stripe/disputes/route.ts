@@ -55,8 +55,10 @@ export async function GET(request: Request) {
           customerEmail = charge.receipt_email;
         } else if (charge?.billing_details?.email) {
           customerEmail = charge.billing_details.email;
-        } else if (paymentIntent?.billing_details?.email) {
-          customerEmail = paymentIntent.billing_details.email;
+        } else if (paymentIntent?.customer) {
+          // Try to get email from customer object if available
+          const customer = paymentIntent.customer as Stripe.Customer;
+          customerEmail = customer.email || '';
         }
 
         // Get first name from email
