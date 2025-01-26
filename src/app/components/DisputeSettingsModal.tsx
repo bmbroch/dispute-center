@@ -51,12 +51,6 @@ export default function DisputeSettingsModal({ isOpen, onClose }: DisputeSetting
   const [selectedTemplate, setSelectedTemplate] = useState<EmailTemplate | null>(null);
   const [editedTemplate, setEditedTemplate] = useState<EmailTemplate | null>(null);
 
-  useEffect(() => {
-    if (isOpen) {
-      fetchTemplates();
-    }
-  }, [isOpen, user?.email]);
-
   const fetchTemplates = useCallback(async () => {
     try {
       setIsLoading(true);
@@ -73,6 +67,12 @@ export default function DisputeSettingsModal({ isOpen, onClose }: DisputeSetting
       setIsLoading(false);
     }
   }, []);
+
+  useEffect(() => {
+    if (isOpen) {
+      fetchTemplates();
+    }
+  }, [isOpen, fetchTemplates]);
 
   const handleSave = async () => {
     if (!user?.email) {
