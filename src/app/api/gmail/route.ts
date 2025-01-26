@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getOAuth2Client } from '@/lib/google/auth';
 import { google } from 'googleapis';
+import { GaxiosPromise, Schema$Thread } from 'googleapis-common';
 
 export async function GET(request: NextRequest) {
   const authHeader = request.headers.get('Authorization');
@@ -45,6 +46,11 @@ export async function GET(request: NextRequest) {
     // Fetch full thread data for each thread
     const threads = await Promise.all(
       threadsResponse.data.threads.map(async (thread) => {
+        if (!thread.id) {
+          console.error('Thread missing ID:', thread);
+          return null;
+        }
+
         try {
           const threadData = await gmail.users.threads.get({
             userId: 'me',
@@ -62,13 +68,17 @@ export async function GET(request: NextRequest) {
       })
     );
 
-    // Filter out any failed thread fetches
-    const validThreads = threads.filter(thread => thread !== null);
+    // Filter out any failed thread fetches and ensure type safety
+    const validThreads = threads.filter((thread): thread is Schema$Thread => thread !== null);
 
     // Process and format the email threads
     const formattedThreads = validThreads.map(thread => {
+      if (!thread.messages) return null;
+
       const messages = thread.messages
         .map(message => {
+          if (!message.payload?.headers) return null;
+
           // Function to decode base64 content
           const decodeBody = (data: string) => {
             try {
@@ -80,8 +90,10 @@ export async function GET(request: NextRequest) {
           };
 
           // Get headers
-          const headers = message.payload.headers.reduce((acc: any, header: any) => {
-            acc[header.name.toLowerCase()] = header.value;
+          const headers = message.payload.headers.reduce<Record<string, string>>((acc, header) => {
+            if (header.name) {
+              acc[header.name.toLowerCase()] = header.value || '';
+            }
             return acc;
           }, {});
 
@@ -90,10 +102,10 @@ export async function GET(request: NextRequest) {
           let contentType = '';
 
           const getBodyPart = (part: any): { body: string, contentType: string } | null => {
-            if (part.body.data) {
+            if (part.body?.data) {
               return {
                 body: decodeBody(part.body.data),
-                contentType: part.mimeType
+                contentType: part.mimeType || 'text/plain'
               };
             }
             
@@ -113,15 +125,15 @@ export async function GET(request: NextRequest) {
           }
 
           return {
-            id: message.id,
-            threadId: thread.id,
-            historyId: message.historyId,
-            internalDate: message.internalDate,
-            snippet: message.snippet,
+            id: message.id || '',
+            threadId: thread.id || '',
+            historyId: message.historyId || '',
+            internalDate: message.internalDate || '',
+            snippet: message.snippet || '',
             subject: headers.subject || 'No Subject',
             from: headers.from || '',
             to: headers.to || '',
-            date: headers.date || new Date(parseInt(message.internalDate)).toISOString(),
+            date: headers.date || (message.internalDate ? new Date(parseInt(message.internalDate)).toISOString() : new Date().toISOString()),
             body,
             contentType,
             references: headers['references'] || '',
@@ -129,6 +141,7 @@ export async function GET(request: NextRequest) {
             messageId: headers['message-id'] || ''
           };
         })
+        .filter((message): message is NonNullable<typeof message> => message !== null)
         // Filter messages to only include those actually involving the dispute email
         .filter(message => {
           const fromEmail = message.from.toLowerCase();
@@ -141,16 +154,15 @@ export async function GET(request: NextRequest) {
       if (messages.length === 0) return null;
 
       // Sort messages within thread by date
-      messages.sort((a: any, b: any) => parseInt(a.internalDate) - parseInt(b.internalDate));
+      messages.sort((a, b) => parseInt(a.internalDate) - parseInt(b.internalDate));
 
       return {
-        id: thread.id,
-        historyId: thread.historyId,
+        id: thread.id || '',
+        historyId: thread.historyId || '',
         messages
       };
     })
-    // Remove threads with no matching messages
-    .filter(thread => thread !== null);
+    .filter((thread): thread is NonNullable<typeof thread> => thread !== null);
 
     // Sort threads by the date of their most recent message
     formattedThreads.sort((a, b) => {
