@@ -3,49 +3,54 @@ const nextConfig = {
   images: {
     remotePatterns: [
       {
-        protocol: "https",
-        hostname: "placehold.co",
-        port: "",
-        pathname: "/**",
+        protocol: 'https',
+        hostname: 'lh3.googleusercontent.com',  // For Google profile images
+        port: '',
+        pathname: '/a/**',
       },
       {
-        protocol: "https",
-        hostname: "replicate.com",
-      },
-      {
-        protocol: "https",
-        hostname: "replicate.delivery",
-      },
-      {
-        protocol: "https",
-        hostname: "firebasestorage.googleapis.com",
-      },
-      {
-        protocol: "https",
-        hostname: "lh3.googleusercontent.com",
-      },
-      {
-        protocol: "https",
-        hostname: "*.googleusercontent.com",
-      },
-      {
-        protocol: "https",
-        hostname: "hebbkx1anhila5yf.public.blob.vercel-storage.com",
-      },
-      {
-        protocol: "https",
-        hostname: "images.unsplash.com",
+        protocol: 'https',
+        hostname: '**.stripe.com',  // For Stripe-related images
+        port: '',
+        pathname: '/**',
       }
     ],
-    domains: ["lh3.googleusercontent.com"],
-    dangerouslyAllowSVG: true,
-    contentSecurityPolicy: "default-src 'self'; script-src 'none'; sandbox;",
   },
-  async rewrites() {
+  // Strict mode for better development experience
+  reactStrictMode: true,
+  // Disable x-powered-by header for security
+  poweredByHeader: false,
+  // Enable static optimization where possible
+  swcMinify: true,
+  // Configure redirects
+  async redirects() {
     return [
       {
-        source: "/api/:path*",
-        destination: "https://api.openai.com/:path*",
+        source: '/disputes',
+        destination: '/dispute',
+        permanent: true,
+      },
+    ];
+  },
+  // Configure headers for security
+  async headers() {
+    return [
+      {
+        source: '/:path*',
+        headers: [
+          {
+            key: 'X-Frame-Options',
+            value: 'DENY',
+          },
+          {
+            key: 'X-Content-Type-Options',
+            value: 'nosniff',
+          },
+          {
+            key: 'Referrer-Policy',
+            value: 'origin-when-cross-origin',
+          },
+        ],
       },
     ];
   },

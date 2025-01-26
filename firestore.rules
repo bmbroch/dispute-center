@@ -2,7 +2,8 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     match /stripeKeys/{document} {
-      allow read, write: if request.auth != null && request.auth.token.email == resource.data.userEmail;
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.token.email == request.resource.data.userEmail;
     }
     match /{document=**} {
       allow read, write: if request.auth != null;

@@ -2,60 +2,120 @@ import { NextResponse } from 'next/server';
 import Stripe from 'stripe';
 import { getFirebaseDB } from '@/lib/firebase/firebase';
 import { collection, query, where, getDocs } from 'firebase/firestore';
+import { debugStripeKey, getStripeKey } from '@/lib/firebase/firebaseUtils';
 
 // Remove edge runtime as it's not compatible with Firestore
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: Request) {
   try {
-    // Get user email from the request header
-    const userEmail = request.headers.get('X-User-Email');
+    // Get user email from query parameter
+    const { searchParams } = new URL(request.url);
+    const userEmail = searchParams.get('userEmail');
+    
     if (!userEmail) {
-      return NextResponse.json({ error: 'No user email provided' }, { status: 401 });
+      return NextResponse.json({ 
+        success: false,
+        error: 'User email is required' 
+      }, { status: 400 });
     }
 
-    const db = getFirebaseDB();
-    if (!db) {
-      return NextResponse.json({ error: 'Database not initialized' }, { status: 500 });
-    }
-
-    // Get Stripe API key from Firebase
-    const stripeKeysRef = collection(db, 'stripeKeys');
-    const q = query(stripeKeysRef, where('userEmail', '==', userEmail));
-    const querySnapshot = await getDocs(q);
-
-    if (querySnapshot.empty) {
-      return NextResponse.json({ error: 'No Stripe API key found for this user' }, { status: 404 });
-    }
-
-    const stripeKey = querySnapshot.docs[0].data().stripeKey;
+    // Get Stripe key from Firebase
+    const stripeKey = await getStripeKey(userEmail);
     if (!stripeKey) {
-      return NextResponse.json({ error: 'Invalid Stripe API key' }, { status: 400 });
+      return NextResponse.json({ 
+        success: false,
+        error: 'No Stripe key found. Please add your Stripe API key in settings.'
+      }, { status: 404 });
     }
 
-    // Initialize Stripe with the user's API key
-    const stripe = new Stripe(stripeKey, {
-      apiVersion: '2024-12-18.acacia'
+    // Initialize Stripe
+    const stripe = new Stripe(stripeKey, { apiVersion: '2023-10-16' });
+
+    // Fetch disputes
+    const disputes = await stripe.disputes.list({
+      limit: 100,
+      expand: [
+        'data.charge',
+        'data.payment_intent',
+        'data.evidence_details'
+      ]
     });
 
-    // Fetch all disputes
-    const params: Stripe.DisputeListParams = {
-      expand: ['data.charge', 'data.charge.customer']
+    // Transform disputes data
+    const activeDisputes = disputes.data
+      .filter(dispute => dispute.status === 'needs_response' || dispute.status === 'warning_needs_response')
+      .map(dispute => {
+        const charge = dispute.charge as Stripe.Charge;
+        const paymentIntent = dispute.payment_intent as Stripe.PaymentIntent;
+        
+        // Get customer email from charge or payment intent
+        let customerEmail = '';
+        if (charge?.receipt_email) {
+          customerEmail = charge.receipt_email;
+        } else if (charge?.billing_details?.email) {
+          customerEmail = charge.billing_details.email;
+        } else if (paymentIntent?.billing_details?.email) {
+          customerEmail = paymentIntent.billing_details.email;
+        }
+
+        // Get first name from email
+        const firstName = customerEmail 
+          ? customerEmail.split('@')[0].split(/[^a-zA-Z]/)[0]
+          : '';
+
+        // Format due date
+        const dueBy = dispute.evidence_details?.due_by 
+          ? new Date(dispute.evidence_details.due_by * 1000).toLocaleDateString('en-US', {
+              month: 'short',
+              day: 'numeric',
+              year: 'numeric'
+            })
+          : 'N/A';
+
+        return {
+          id: dispute.id,
+          amount: dispute.amount,
+          currency: dispute.currency,
+          status: dispute.status,
+          reason: dispute.reason,
+          created: dispute.created,
+          customerEmail,
+          firstName: firstName.charAt(0).toUpperCase() + firstName.slice(1).toLowerCase(),
+          dueDate: dueBy
+        };
+      });
+
+    // Add test dispute for bmbroch@gmail.com
+    const testDispute = {
+      id: 'test-dispute',
+      amount: 2500, // $25.00
+      currency: 'usd',
+      status: 'needs_response',
+      reason: 'test_dispute',
+      created: Date.now() / 1000,
+      customerEmail: 'bmbroch@gmail.com',
+      firstName: 'Ben',
+      dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric'
+      })
     };
 
-    const disputes = await stripe.disputes.list(params);
+    // Add test dispute to beginning of array
+    const allDisputes = [testDispute, ...activeDisputes];
 
-    // Filter disputes by status
-    const allDisputes = disputes.data.filter(dispute => 
-      dispute.status === 'needs_response' || dispute.status === 'warning_needs_response'
-    );
+    return NextResponse.json({ 
+      success: true,
+      data: allDisputes 
+    });
 
-    return NextResponse.json(allDisputes);
   } catch (error) {
-    console.error('Error fetching disputes:', error);
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Failed to fetch disputes' },
-      { status: 500 }
-    );
+    console.error('Error in disputes route:', error);
+    return NextResponse.json({ 
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to fetch disputes'
+    }, { status: 500 });
   }
 } 

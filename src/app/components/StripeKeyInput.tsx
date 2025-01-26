@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '@/lib/hooks/useAuth';
 import { useStripeMetrics } from '@/lib/hooks/useStripeMetrics';
 import { getFirebaseDB } from '@/lib/firebase/firebase';
-import { collection, addDoc, query, where, getDocs, updateDoc, doc, deleteDoc } from 'firebase/firestore';
+import { collection, addDoc, query, where, getDocs, updateDoc, doc, deleteDoc, getDoc, setDoc } from 'firebase/firestore';
 import { toast } from 'sonner';
 
 interface StripeKeyInputProps {
@@ -23,40 +23,40 @@ export default function StripeKeyInput({ onClose, onSuccess }: StripeKeyInputPro
 
   // Check for existing key on mount
   useEffect(() => {
-    async function fetchExistingKey() {
+    const fetchStripeKey = async () => {
       if (!user?.email) return;
 
       try {
         const db = getFirebaseDB();
-        if (!db) throw new Error('Database not initialized');
+        if (!db) {
+          console.error('Failed to initialize Firebase');
+          return;
+        }
 
-        const stripeKeysRef = collection(db, 'stripeKeys');
-        const q = query(stripeKeysRef, where('userEmail', '==', user.email));
-        const querySnapshot = await getDocs(q);
-        
-        if (!querySnapshot.empty) {
-          const doc = querySnapshot.docs[0];
-          const data = doc.data();
-          setExistingKeyId(doc.id);
+        const docRef = doc(db, 'stripeKeys', user.email);
+        const docSnap = await getDoc(docRef);
+
+        if (docSnap.exists()) {
+          setExistingKeyId(docSnap.id);
           // Only store the last 4 digits of the key
-          setLastFourDigits(data.stripeKey.slice(-4));
+          setLastFourDigits(docSnap.data().stripeKey.slice(-4));
           setApiKey('');
         }
-      } catch (err) {
-        console.error('Error fetching existing key:', err);
+      } catch (error) {
+        console.error('Error fetching Stripe key:', error);
+        toast.error('Failed to load Stripe key');
+      } finally {
+        setIsLoading(false);
       }
-    }
+    };
 
-    fetchExistingKey();
+    fetchStripeKey();
   }, [user?.email]);
 
   const checkKeyStatus = async () => {
     if (!user?.email) return;
     
-    const db = getFirebaseDB();
-    if (!db) return;
-
-    const stripeKeysRef = collection(db, 'stripeKeys');
+    const stripeKeysRef = collection(getFirebaseDB(), 'stripeKeys');
     const q = query(stripeKeysRef, where('userEmail', '==', user.email));
     const querySnapshot = await getDocs(q);
     
@@ -70,10 +70,7 @@ export default function StripeKeyInput({ onClose, onSuccess }: StripeKeyInputPro
       setIsLoading(true);
       setError(null);
       
-      const db = getFirebaseDB();
-      if (!db) throw new Error('Database not initialized');
-
-      const keyRef = doc(db, 'stripeKeys', existingKeyId);
+      const keyRef = doc(getFirebaseDB(), 'stripeKeys', existingKeyId);
       await deleteDoc(keyRef);
 
       toast.success('API key deleted successfully');
@@ -105,12 +102,9 @@ export default function StripeKeyInput({ onClose, onSuccess }: StripeKeyInputPro
         throw new Error('Invalid API key format. It should start with "sk_" or "rk_" and be at least 20 characters long.');
       }
 
-      const db = getFirebaseDB();
-      if (!db) throw new Error('Database not initialized');
-
       if (existingKeyId) {
         // Update existing key
-        const keyRef = doc(db, 'stripeKeys', existingKeyId);
+        const keyRef = doc(getFirebaseDB(), 'stripeKeys', existingKeyId);
         await updateDoc(keyRef, {
           stripeKey: apiKey,
           updatedAt: new Date().toISOString()
@@ -118,7 +112,7 @@ export default function StripeKeyInput({ onClose, onSuccess }: StripeKeyInputPro
         toast.success('API key updated successfully');
       } else {
         // Add new key
-        await addDoc(collection(db, 'stripeKeys'), {
+        await addDoc(collection(getFirebaseDB(), 'stripeKeys'), {
           userEmail: user.email,
           stripeKey: apiKey,
           createdAt: new Date().toISOString()
@@ -140,6 +134,17 @@ export default function StripeKeyInput({ onClose, onSuccess }: StripeKeyInputPro
       setIsLoading(false);
     }
   };
+
+  if (isLoading) {
+    return (
+      <div className="animate-pulse flex space-x-4 p-4">
+        <div className="flex-1 space-y-4 py-1">
+          <div className="h-4 bg-gray-200 rounded w-3/4"></div>
+          <div className="h-10 bg-gray-200 rounded"></div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">

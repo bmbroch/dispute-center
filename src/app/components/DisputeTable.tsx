@@ -1,276 +1,316 @@
-"use client";
+'use client';
 
-import { useState, Fragment } from 'react';
+
+import { useEffect, useState, Fragment } from 'react';
+import type Stripe from 'stripe';
+import EmailCorrespondence from './EmailCorrespondence';
 import { useAuth } from '@/lib/hooks/useAuth';
+import DisputeSettingsModal from './DisputeSettingsModal';
+import { toast } from 'react-hot-toast';
+import EmailComposer from './EmailComposer';
 
-interface Dispute {
-  userEmail: string;
-  amount: number;
-  reason: string;
-  dueDate: string;
-  status: 'Needs Response' | 'Response Required Soon';
-  emails?: Email[];
+interface DisputeTableProps {
+  onDisputeCountChange: (count: number) => void;
 }
 
-interface Email {
-  id: string;
-  subject: string;
-  body: string;
-  date: string;
-  from: string;
-  to: string;
+interface DisputeWithMeta extends Stripe.Dispute {
+  firstName?: string;
+  customerEmail?: string;
+  disputeCount?: number;
+  lastEmailTime?: string;
+  lastEmailFromCustomer?: boolean;
+  charge?: {
+    id: string;
+    amount: number;
+    created: number;
+    description: string;
+  };
+  payment_intent?: {
+    id: string;
+    amount: number;
+    description: string;
+  };
 }
 
-export default function DisputeTable() {
-  const [expandedRow, setExpandedRow] = useState<string | null>(null);
-  const [emails, setEmails] = useState<Record<string, Email[]>>({});
-  const [loading, setLoading] = useState<Record<string, boolean>>({});
+const getTimeSinceLastEmail = (date: string | undefined) => {
+  if (!date) return null;
+  
+  const now = new Date();
+  const emailDate = new Date(date);
+  const diffTime = Math.abs(now.getTime() - emailDate.getTime());
+  const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+  const diffHours = Math.floor(diffTime / (1000 * 60 * 60));
+  const diffWeeks = Math.floor(diffDays / 7);
+  const diffMonths = Math.floor(diffDays / 30);
+  
+  if (diffMonths > 0) {
+    return `${diffMonths}mo`;
+  }
+  if (diffWeeks > 0) {
+    return `${diffWeeks}w`;
+  }
+  if (diffDays > 0) {
+    return `${diffDays}d`;
+  }
+  if (diffHours > 0) {
+    return `${diffHours}h`;
+  }
+  return '<1h';
+};
+
+export default function DisputeTable({ onDisputeCountChange }: DisputeTableProps) {
   const { user } = useAuth();
+  const [disputes, setDisputes] = useState<DisputeWithMeta[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [error, setError] = useState('');
+  const [expandedDispute, setExpandedDispute] = useState<string | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
+  const [showComposer, setShowComposer] = useState(false);
+  const [selectedCustomerEmail, setSelectedCustomerEmail] = useState<string>('');
+  const [selectedDisputeId, setSelectedDisputeId] = useState<string>('');
 
-  const fetchEmails = async (userEmail: string) => {
-    if (loading[userEmail] || !user?.accessToken) return;
-    
-    setLoading(prev => ({ ...prev, [userEmail]: true }));
+  const refreshDisputes = async () => {
+    if (!user?.email) {
+      setError('User email not found');
+      return;
+    }
+
     try {
-      const response = await fetch('/api/gmail', {
-        headers: {
-          'Authorization': `Bearer ${user.accessToken}`,
-          'X-Dispute-Email': userEmail
-        }
-      });
-      const data = await response.json();
+      setIsRefreshing(true);
+      console.log('Fetching disputes for:', user.email);
       
-      // Sort emails by date before setting state
-      const sortedEmails = (data.messages || []).sort((a: Email, b: Email) => {
-        return new Date(a.date).getTime() - new Date(b.date).getTime();
-      });
+      const response = await fetch(`/api/stripe/disputes?userEmail=${encodeURIComponent(user.email)}`);
+      console.log('Response status:', response.status);
       
-      setEmails(prev => ({ ...prev, [userEmail]: sortedEmails }));
-    } catch (error) {
-      console.error('Error fetching emails:', error);
-    } finally {
-      setLoading(prev => ({ ...prev, [userEmail]: false }));
-    }
-  };
-
-  const toggleRow = (userEmail: string) => {
-    if (expandedRow === userEmail) {
-      setExpandedRow(null);
-    } else {
-      setExpandedRow(userEmail);
-      if (!emails[userEmail]) {
-        fetchEmails(userEmail);
+      if (!response.ok) {
+        const errorData = await response.json();
+        console.error('Error response:', errorData);
+        throw new Error(errorData.error || 'Failed to fetch disputes');
       }
+      
+      const data = await response.json();
+      console.log('Response data:', data);
+      
+      if (!data.success || !data.data) {
+        console.error('Invalid response format:', data);
+        throw new Error(data.error || 'Failed to fetch disputes');
+      }
+
+      setDisputes(data.data);
+      onDisputeCountChange(data.data.length);
+    } catch (err) {
+      console.error('Error fetching disputes:', err);
+      setError(err instanceof Error ? err.message : 'Failed to fetch disputes');
+      toast.error('Failed to fetch disputes');
+    } finally {
+      setIsRefreshing(false);
+      setIsLoading(false);
     }
   };
 
-  const cleanEmailBody = (body: string) => {
-    // First split by quoted content and only take the first part
-    const parts = body.split(/On .* wrote:|On .* at .* Ben Broch/);
-    const mainContent = parts[0];
-    
-    // Clean up the content while preserving original line breaks
-    let cleaned = mainContent
-      .replace(/^>.*$/gm, '') // Remove quoted lines starting with >
-      .replace(/`image: .*`/g, '') // Remove image placeholders
-      .replace(/-Interview sidekick/g, '') // Remove signature
-      .replace(/ben@interviewsidekick\.com/g, '') // Remove email addresses
-      .replace(/\r\n/g, '\n') // Normalize Windows line endings to Unix
-      .trim();
-    
-    // Preserve consecutive line breaks but limit to max 2
-    cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
-    
-    return cleaned;
-  };
+  useEffect(() => {
+    refreshDisputes();
+  }, [user?.email]);
 
-  const formatEmailBody = (body: string) => {
-    const formattedBody = cleanEmailBody(body);
-    
-    // Split into paragraphs (double line breaks)
-    const paragraphs = formattedBody.split(/\n\n+/);
-    
-    // Process each paragraph
-    const htmlContent = paragraphs
-      .map(paragraph => {
-        const lines = paragraph
-          .split('\n')
-          .filter(line => line.trim() !== '');
+  if (isLoading) {
+    return (
+      <div className="flex justify-center items-center min-h-[200px]">
+        <div className="animate-spin rounded-full h-8 w-8 border-2 border-blue-600 border-t-transparent"></div>
+      </div>
+    );
+  }
 
-        const processedLines = lines.map(line => {
-          // Process asterisks into HTML strong tags with explicit styling
-          const processed = line.replace(/\*([^*]+)\*/g, (match, p1) => {
-            return `<strong style="font-weight: 700 !important;">${p1}</strong>`;
-          });
-          return processed;
-        });
-
-        return `<p style="margin-bottom: 1.5em; line-height: 1.4;">${processedLines.join('<br>')}</p>`;
-      })
-      .join('');
-
-    return {
-      raw: body,
-      cleaned: formattedBody,
-      html: `<div class="email-content" style="font-family: sans-serif;">${htmlContent}</div>`
-    };
-  };
+  if (error) {
+    return (
+      <div className="text-center py-12">
+        <div className="text-red-600 mb-4">{error}</div>
+        <button
+          onClick={refreshDisputes}
+          className="text-blue-600 hover:text-blue-800"
+        >
+          Try Again
+        </button>
+      </div>
+    );
+  }
 
   return (
-    <div className="overflow-x-auto">
-      <table className="min-w-full bg-white rounded-lg">
-        <thead>
-          <tr className="text-left text-gray-600 text-sm">
-            <th className="py-3 px-4">USER EMAIL</th>
-            <th className="py-3 px-4">AMOUNT</th>
-            <th className="py-3 px-4">REASON</th>
-            <th className="py-3 px-4">DUE DATE</th>
-            <th className="py-3 px-4">STATUS</th>
-            <th className="py-3 px-4">ACTIONS</th>
-          </tr>
-        </thead>
-        <tbody>
-          {disputes.map((dispute) => (
-            <Fragment key={dispute.userEmail}>
-              <tr className="border-t">
-                <td className="py-3 px-4">{dispute.userEmail}</td>
-                <td className="py-3 px-4">${dispute.amount.toFixed(2)}</td>
-                <td className="py-3 px-4">{dispute.reason}</td>
-                <td className="py-3 px-4">{dispute.dueDate}</td>
-                <td className="py-3 px-4">
-                  <span className={`px-2 py-1 rounded text-sm ${
-                    dispute.status === 'Needs Response' 
-                      ? 'bg-red-100 text-red-800' 
-                      : 'bg-yellow-100 text-yellow-800'
-                  }`}>
-                    {dispute.status}
-                  </span>
-                </td>
-                <td className="py-3 px-4">
-                  <button
-                    onClick={() => toggleRow(dispute.userEmail)}
-                    className="text-blue-600 hover:text-blue-800"
-                  >
-                    {expandedRow === dispute.userEmail ? 'Hide Emails' : 'Show Emails'}
-                  </button>
-                </td>
-              </tr>
-              {expandedRow === dispute.userEmail && (
-                <tr>
-                  <td colSpan={6} className="bg-gray-50 p-4">
-                    {loading[dispute.userEmail] ? (
-                      <div className="text-center py-4">Loading emails...</div>
-                    ) : emails[dispute.userEmail]?.length ? (
-                      <div className="space-y-8">
-                        {emails[dispute.userEmail].map((email, index) => (
-                          <div key={email.id}>
-                            <div className="bg-white p-4 rounded shadow space-y-6">
-                              <div className="flex justify-between text-sm text-gray-600">
-                                <span>From: {email.from}</span>
-                                <span>{new Date(email.date).toLocaleDateString()}</span>
-                              </div>
-                              <div className="font-medium">{email.subject}</div>
-                              
-                              {/* Debug Sections */}
-                              <div className="space-y-4">
-                                {/* Raw Email */}
-                                <div className="border-l-4 border-red-500 pl-4">
-                                  <div className="text-xs text-red-600 font-mono mb-1">RAW EMAIL:</div>
-                                  <pre className="whitespace-pre-wrap text-sm bg-red-50 p-2 rounded">
-                                    {formatEmailBody(email.body).raw}
-                                  </pre>
-                                </div>
-                                
-                                {/* Cleaned Email */}
-                                <div className="border-l-4 border-yellow-500 pl-4">
-                                  <div className="text-xs text-yellow-600 font-mono mb-1">CLEANED EMAIL:</div>
-                                  <pre className="whitespace-pre-wrap text-sm bg-yellow-50 p-2 rounded">
-                                    {formatEmailBody(email.body).cleaned}
-                                  </pre>
-                                </div>
-                                
-                                {/* Final Formatted HTML */}
-                                <div className="border-l-4 border-green-500 pl-4">
-                                  <div className="text-xs text-green-600 font-mono mb-1">FORMATTED EMAIL:</div>
-                                  <div 
-                                    className="email-wrapper text-base leading-relaxed bg-green-50 p-2 rounded"
-                                    dangerouslySetInnerHTML={{ 
-                                      __html: formatEmailBody(email.body).html
-                                    }} 
-                                  />
-                                </div>
-                              </div>
-                            </div>
-
-                            {index < emails[dispute.userEmail].length - 1 && (
-                              <div className="relative py-8">
-                                <div className="absolute inset-0 flex items-center">
-                                  <div className="border-t border-gray-200 w-full"></div>
-                                </div>
-                                <div className="relative flex justify-center w-full">
-                                  {(() => {
-                                    const currentDate = new Date(email.date);
-                                    const nextDate = new Date(emails[dispute.userEmail][index + 1].date);
-                                    const diffTime = Math.abs(nextDate.getTime() - currentDate.getTime());
-                                    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-                                    
-                                    if (diffDays > 0) {
-                                      return (
-                                        <div className="absolute left-1/2 transform -translate-x-1/2">
-                                          <span className="px-4 py-2 bg-white text-sm text-gray-500 border border-gray-300 rounded-full shadow-sm flex items-center space-x-2">
-                                            <svg className="w-4 h-4 text-gray-400" fill="currentColor" viewBox="0 0 20 20">
-                                              <path d="M6 2a1 1 0 00-1 1v1H4a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V6a2 2 0 00-2-2h-1V3a1 1 0 10-2 0v1H7V3a1 1 0 00-1-1zm0 5a1 1 0 000 2h8a1 1 0 100-2H6z"/>
-                                            </svg>
-                                            <span>
-                                              {diffDays} {diffDays === 1 ? 'day' : 'days'} between messages
-                                            </span>
-                                          </span>
-                                        </div>
-                                      );
-                                    }
-                                    return null;
-                                  })()}
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                        ))}
+    <div className="space-y-4">
+      <div className="flex justify-between items-center">
+        <h2 className="text-lg font-semibold text-gray-900">
+          {disputes.length} disputes found
+        </h2>
+        <button
+          onClick={() => setShowSettings(true)}
+          className="text-gray-600 hover:text-gray-900"
+          title="Settings"
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+        </button>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="min-w-full divide-y divide-gray-200">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Customer Email
+              </th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                First Name
+              </th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Amount
+              </th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Reason
+              </th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Status
+              </th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Last Email
+              </th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Due Date
+              </th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Actions
+              </th>
+            </tr>
+          </thead>
+          <tbody className="bg-white divide-y divide-gray-200">
+            {disputes.map((dispute) => (
+              <Fragment key={dispute.id}>
+                <tr className="hover:bg-gray-50">
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                    {dispute.customerEmail || 'N/A'}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                    {dispute.firstName || 'N/A'}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                    {(dispute.amount / 100).toLocaleString('en-US', {
+                      style: 'currency',
+                      currency: dispute.currency.toUpperCase()
+                    })}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                    {dispute.reason.replace(/_/g, ' ')}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full
+                      ${dispute.status === 'needs_response' 
+                        ? 'bg-red-100 text-red-800' 
+                        : 'bg-yellow-100 text-yellow-800'}`}
+                    >
+                      {dispute.status === 'needs_response' ? 'needs response' : 'warning needs response'}
+                    </span>
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm">
+                    {dispute.lastEmailTime ? (
+                      <div className="flex items-center gap-2">
+                        <span className={`${
+                          dispute.lastEmailFromCustomer 
+                            ? 'text-blue-600' 
+                            : 'text-gray-500'
+                        }`}>
+                          {getTimeSinceLastEmail(dispute.lastEmailTime)}
+                        </span>
+                        <span className={`text-xs px-2 py-0.5 rounded ${
+                          dispute.lastEmailFromCustomer
+                            ? 'bg-blue-100 text-blue-800'
+                            : 'bg-gray-100 text-gray-600'
+                        }`}>
+                          {dispute.lastEmailFromCustomer ? '← From them' : '→ From you'}
+                        </span>
+                        {dispute.lastEmailFromCustomer && (
+                          <span className="text-xs text-red-500">• Needs reply</span>
+                        )}
                       </div>
                     ) : (
-                      <div className="text-center py-4">
-                        No emails found.
-                        <button 
-                          onClick={() => fetchEmails(dispute.userEmail)}
-                          className="ml-2 text-blue-600 hover:text-blue-800"
-                        >
-                          Refresh
-                        </button>
-                      </div>
+                      <span className="text-gray-400">-</span>
                     )}
                   </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    {dispute.dueDate || 'N/A'}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    <div className="flex items-center space-x-3">
+                      <button
+                        onClick={() => setExpandedDispute(expandedDispute === dispute.id ? null : dispute.id)}
+                        className="text-indigo-600 hover:text-indigo-900"
+                      >
+                        {expandedDispute === dispute.id ? 'Hide Emails' : 'Show Emails'}
+                      </button>
+                      <button
+                        onClick={() => {
+                          setSelectedCustomerEmail(dispute.customerEmail || '');
+                          setSelectedDisputeId(dispute.id);
+                          setShowComposer(true);
+                        }}
+                        className="text-blue-600 hover:text-blue-800"
+                        title="New Email"
+                      >
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                        </svg>
+                      </button>
+                      <button
+                        onClick={() => refreshDisputes()}
+                        disabled={isRefreshing}
+                        className={`text-gray-600 hover:text-gray-900 ${isRefreshing ? 'opacity-50 cursor-not-allowed' : ''}`}
+                        title="Refresh"
+                      >
+                        <svg 
+                          className={`w-5 h-5 ${isRefreshing ? 'animate-spin' : ''}`} 
+                          fill="none" 
+                          stroke="currentColor" 
+                          viewBox="0 0 24 24"
+                        >
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                        </svg>
+                      </button>
+                    </div>
+                  </td>
                 </tr>
-              )}
-            </Fragment>
-          ))}
-        </tbody>
-      </table>
+                {expandedDispute === dispute.id && (
+                  <tr>
+                    <td colSpan={8} className="px-6 py-4">
+                      <div className="bg-white rounded-lg">
+                        <EmailCorrespondence 
+                          customerEmail={dispute.customerEmail || ''} 
+                          disputeId={dispute.id}
+                          onEmailSent={refreshDisputes}
+                        />
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <DisputeSettingsModal
+        isOpen={showSettings}
+        onClose={() => setShowSettings(false)}
+      />
+
+      {showComposer && (
+        <EmailComposer
+          customerEmail={selectedCustomerEmail}
+          onClose={() => setShowComposer(false)}
+          onEmailSent={() => {
+            refreshDisputes();
+            setShowComposer(false);
+          }}
+        />
+      )}
     </div>
   );
-}
-
-const disputes: Dispute[] = [
-  {
-    userEmail: 'konatamkalyani22@gmail.com',
-    amount: 25.00,
-    reason: 'fraudulent',
-    dueDate: '1/25/2025',
-    status: 'Needs Response'
-  },
-  {
-    userEmail: 'aswiniaturi@gmail.com',
-    amount: 25.00,
-    reason: 'general',
-    dueDate: '1/27/2025',
-    status: 'Response Required Soon'
-  }
-]; 
+} 

@@ -1,126 +1,203 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getOAuth2Client } from '@/lib/google/auth';
+import { google } from 'googleapis';
 
 export async function GET(request: NextRequest) {
   const authHeader = request.headers.get('Authorization');
   const disputeEmail = request.headers.get('X-Dispute-Email');
   
   if (!authHeader || !disputeEmail) {
-    console.error('Missing auth header or dispute email');
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    return NextResponse.json({ 
+      error: 'Missing required headers',
+      details: !authHeader ? 'Authorization header is missing' : 'X-Dispute-Email header is missing'
+    }, { status: 401 });
   }
 
   const accessToken = authHeader.replace('Bearer ', '');
 
   try {
-    // Query Gmail API for emails related to this dispute
+    // Initialize OAuth2 client
+    const oauth2Client = getOAuth2Client();
+    oauth2Client.setCredentials({
+      access_token: accessToken,
+      scope: [
+        'https://www.googleapis.com/auth/gmail.readonly',
+        'https://www.googleapis.com/auth/gmail.modify',
+        'https://www.googleapis.com/auth/gmail.send'
+      ].join(' ')
+    });
+
+    // Query Gmail API for email threads related to this dispute
     const query = `from:${disputeEmail} OR to:${disputeEmail}`;
-    const response = await fetch(
-      `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${encodeURIComponent(query)}`,
-      {
-        headers: {
-          'Authorization': `Bearer ${accessToken}`
+    const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+
+    // Fetch threads
+    const threadsResponse = await gmail.users.threads.list({
+      userId: 'me',
+      q: query,
+      maxResults: 10
+    });
+
+    if (!threadsResponse.data.threads || !Array.isArray(threadsResponse.data.threads)) {
+      return NextResponse.json({ threads: [] });
+    }
+
+    // Fetch full thread data for each thread
+    const threads = await Promise.all(
+      threadsResponse.data.threads.map(async (thread) => {
+        try {
+          const threadData = await gmail.users.threads.get({
+            userId: 'me',
+            id: thread.id,
+            format: 'full'
+          });
+          return threadData.data;
+        } catch (error) {
+          console.error('Failed to fetch thread:', {
+            threadId: thread.id,
+            error
+          });
+          return null;
         }
-      }
-    );
-
-    if (!response.ok) {
-      console.error('Gmail API response not ok:', await response.text());
-      throw new Error('Failed to fetch emails');
-    }
-
-    const data = await response.json();
-    
-    if (!data.messages || !Array.isArray(data.messages)) {
-      console.log('No messages found in Gmail API response:', data);
-      return NextResponse.json({ messages: [] });
-    }
-
-    const emails = await Promise.all(
-      data.messages.slice(0, 10).map(async (message: { id: string }) => {
-        const emailResponse = await fetch(
-          `https://gmail.googleapis.com/gmail/v1/users/me/messages/${message.id}`,
-          {
-            headers: {
-              'Authorization': `Bearer ${accessToken}`
-            }
-          }
-        );
-        return emailResponse.json();
       })
     );
 
-    // Process and format the emails
-    const formattedEmails = await Promise.all(emails.map(async email => {
-      // Get the email body parts
-      const parts = email.payload.parts || [email.payload];
-      let body = '';
+    // Filter out any failed thread fetches
+    const validThreads = threads.filter(thread => thread !== null);
 
-      // Function to decode base64 content
-      const decodeBody = (data: string) => {
-        try {
-          return Buffer.from(data.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString();
-        } catch (error) {
-          console.error('Error decoding email body:', error);
-          return '';
-        }
-      };
+    // Process and format the email threads
+    const formattedThreads = validThreads.map(thread => {
+      const messages = thread.messages
+        .map(message => {
+          // Function to decode base64 content
+          const decodeBody = (data: string) => {
+            try {
+              return Buffer.from(data.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString();
+            } catch (error) {
+              console.error('Error decoding email body:', error);
+              return '';
+            }
+          };
 
-      // Recursively find text/plain or text/html parts
-      const findBody = (parts: any[]): string => {
-        for (const part of parts) {
-          if (part.mimeType === 'text/plain' || part.mimeType === 'text/html') {
-            return decodeBody(part.body.data || '');
+          // Get headers
+          const headers = message.payload.headers.reduce((acc: any, header: any) => {
+            acc[header.name.toLowerCase()] = header.value;
+            return acc;
+          }, {});
+
+          // Extract email body
+          let body = '';
+          let contentType = '';
+
+          const getBodyPart = (part: any): { body: string, contentType: string } | null => {
+            if (part.body.data) {
+              return {
+                body: decodeBody(part.body.data),
+                contentType: part.mimeType
+              };
+            }
+            
+            if (part.parts) {
+              for (const subPart of part.parts) {
+                const result = getBodyPart(subPart);
+                if (result) return result;
+              }
+            }
+            return null;
+          };
+
+          const bodyPart = getBodyPart(message.payload);
+          if (bodyPart) {
+            body = bodyPart.body;
+            contentType = bodyPart.contentType;
           }
-          if (part.parts) {
-            const foundBody = findBody(part.parts);
-            if (foundBody) return foundBody;
-          }
-        }
-        return '';
-      };
 
-      // Try to get the body from parts or from the payload directly
-      if (parts) {
-        body = findBody(parts);
-      } else if (email.payload.body.data) {
-        body = decodeBody(email.payload.body.data);
-      }
+          return {
+            id: message.id,
+            threadId: thread.id,
+            historyId: message.historyId,
+            internalDate: message.internalDate,
+            snippet: message.snippet,
+            subject: headers.subject || 'No Subject',
+            from: headers.from || '',
+            to: headers.to || '',
+            date: headers.date || new Date(parseInt(message.internalDate)).toISOString(),
+            body,
+            contentType,
+            references: headers['references'] || '',
+            inReplyTo: headers['in-reply-to'] || '',
+            messageId: headers['message-id'] || ''
+          };
+        })
+        // Filter messages to only include those actually involving the dispute email
+        .filter(message => {
+          const fromEmail = message.from.toLowerCase();
+          const toEmail = message.to.toLowerCase();
+          const disputeEmailLower = disputeEmail.toLowerCase();
+          return fromEmail.includes(disputeEmailLower) || toEmail.includes(disputeEmailLower);
+        });
 
-      // Ensure we get a proper date from the headers
-      const dateHeader = email.payload.headers.find((h: any) => h.name === 'Date')?.value;
-      const date = dateHeader 
-        ? new Date(dateHeader).toISOString() 
-        : new Date(parseInt(email.internalDate)).toISOString();
+      // Only include threads that have messages after filtering
+      if (messages.length === 0) return null;
+
+      // Sort messages within thread by date
+      messages.sort((a: any, b: any) => parseInt(a.internalDate) - parseInt(b.internalDate));
 
       return {
-        id: email.id,
-        subject: email.payload.headers.find((h: any) => h.name === 'Subject')?.value || 'No Subject',
-        from: email.payload.headers.find((h: any) => h.name === 'From')?.value || '',
-        to: email.payload.headers.find((h: any) => h.name === 'To')?.value || '',
-        date: date,
-        body: body || email.snippet || ''
+        id: thread.id,
+        historyId: thread.historyId,
+        messages
       };
-    }));
+    })
+    // Remove threads with no matching messages
+    .filter(thread => thread !== null);
 
-    // Sort emails by date before sending
-    const sortedEmails = formattedEmails.sort((a, b) => {
-      const dateA = new Date(a.date).getTime();
-      const dateB = new Date(b.date).getTime();
-      return dateA - dateB;
+    // Sort threads by the date of their most recent message
+    formattedThreads.sort((a, b) => {
+      const aDate = parseInt(a.messages[a.messages.length - 1].internalDate);
+      const bDate = parseInt(b.messages[b.messages.length - 1].internalDate);
+      return bDate - aDate;
     });
 
-    // Add logging before sending response
-    console.log(`Found ${sortedEmails.length} emails for ${disputeEmail}`);
-    
     return NextResponse.json({ 
-      messages: sortedEmails,
-      count: sortedEmails.length 
+      threads: formattedThreads,
+      count: formattedThreads.length 
     });
   } catch (error) {
-    console.error('Error fetching emails:', error);
+    console.error('Error fetching email threads:', error);
+    
+    // Check if error is due to invalid credentials
+    if (error.response?.status === 401) {
+      return NextResponse.json({ 
+        error: 'Authentication failed',
+        details: 'Your session has expired. Please sign in again.'
+      }, { status: 401 });
+    }
+
+    // Check for rate limiting
+    if (error.response?.status === 429) {
+      return NextResponse.json({
+        error: 'Rate limit exceeded',
+        details: 'Too many requests. Please try again in a few minutes.'
+      }, { status: 429 });
+    }
+
+    // Check for Gmail API specific errors
+    if (error.response?.data?.error) {
+      const gmailError = error.response.data.error;
+      return NextResponse.json({
+        error: 'Gmail API error',
+        details: gmailError.message || 'An error occurred while fetching emails',
+        code: gmailError.code
+      }, { status: error.response.status || 500 });
+    }
+
+    // Network or other errors
     return NextResponse.json({ 
-      error: 'Failed to fetch emails',
-      details: error instanceof Error ? error.message : 'Unknown error'
+      error: 'Failed to fetch email threads',
+      details: error instanceof Error 
+        ? error.message 
+        : 'An unexpected error occurred while fetching emails'
     }, { status: 500 });
   }
 } 

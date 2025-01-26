@@ -1,40 +1,37 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
+import { GOOGLE_OAUTH_CONFIG } from '@/lib/firebase/firebase';
 
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
   try {
-    const { refreshToken } = await request.json();
+    const { refresh_token } = await request.json();
 
-    if (!refreshToken) {
-      return NextResponse.json({ error: 'Refresh token is required' }, { status: 400 });
+    if (!refresh_token) {
+      return NextResponse.json({ error: 'No refresh token provided' }, { status: 400 });
     }
 
-    const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+    const response = await fetch('https://oauth2.googleapis.com/token', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
       },
       body: new URLSearchParams({
-        client_id: process.env.GOOGLE_CLIENT_ID || '',
-        client_secret: process.env.GOOGLE_CLIENT_SECRET || '',
-        refresh_token: refreshToken,
+        client_id: GOOGLE_OAUTH_CONFIG.client_id,
+        client_secret: process.env.GOOGLE_CLIENT_SECRET as string,
+        refresh_token,
         grant_type: 'refresh_token',
       }),
     });
 
-    if (!tokenResponse.ok) {
-      const error = await tokenResponse.text();
+    if (!response.ok) {
+      const error = await response.text();
       console.error('Token refresh failed:', error);
-      return NextResponse.json({ error: 'Failed to refresh token' }, { status: 401 });
+      return NextResponse.json({ error: 'Failed to refresh tokens' }, { status: response.status });
     }
 
-    const data = await tokenResponse.json();
-    
-    return NextResponse.json({
-      access_token: data.access_token,
-      tokenExpiry: Date.now() + (data.expires_in * 1000),
-    });
+    const tokens = await response.json();
+    return NextResponse.json(tokens);
   } catch (error) {
-    console.error('Error refreshing token:', error);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+    console.error('Token refresh error:', error);
+    return NextResponse.json({ error: 'Token refresh failed' }, { status: 500 });
   }
 } 

@@ -1,42 +1,62 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
+import { GOOGLE_OAUTH_CONFIG } from '@/lib/firebase/firebase';
 
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
   try {
     const { code } = await request.json();
+    console.log('Received auth code:', code ? 'Present' : 'Missing');
 
     if (!code) {
-      return NextResponse.json({ error: 'Authorization code is required' }, { status: 400 });
+      return NextResponse.json({ error: 'No authorization code provided' }, { status: 400 });
     }
 
-    const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+    // Use the same redirect URI that was used to get the code
+    const redirectUri = `${request.nextUrl.origin}/auth/callback`;
+    console.log('Using redirect URI:', redirectUri);
+
+    const tokenRequestBody = {
+      code,
+      client_id: GOOGLE_OAUTH_CONFIG.client_id,
+      client_secret: process.env.GOOGLE_CLIENT_SECRET,
+      redirect_uri: redirectUri,
+      grant_type: 'authorization_code',
+    };
+
+    console.log('Token request config:', {
+      hasClientId: !!tokenRequestBody.client_id,
+      hasClientSecret: !!tokenRequestBody.client_secret,
+      redirectUri: tokenRequestBody.redirect_uri,
+    });
+
+    const response = await fetch('https://oauth2.googleapis.com/token', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
       },
-      body: new URLSearchParams({
-        code,
-        client_id: process.env.GOOGLE_CLIENT_ID || '',
-        client_secret: process.env.GOOGLE_CLIENT_SECRET || '',
-        redirect_uri: `${process.env.NEXT_PUBLIC_APP_URL}/auth/callback`,
-        grant_type: 'authorization_code',
-      }),
+      body: new URLSearchParams(tokenRequestBody),
     });
 
-    if (!tokenResponse.ok) {
-      const error = await tokenResponse.text();
-      console.error('Token exchange failed:', error);
-      return NextResponse.json({ error: 'Failed to exchange code for tokens' }, { status: 401 });
+    const responseText = await response.text();
+    console.log('Google OAuth response:', {
+      status: response.status,
+      statusText: response.statusText,
+      headers: Object.fromEntries(response.headers.entries()),
+      body: responseText,
+    });
+
+    if (!response.ok) {
+      console.error('Token exchange failed:', responseText);
+      return NextResponse.json({ 
+        error: 'Failed to exchange code for tokens',
+        details: responseText
+      }, { status: response.status });
     }
 
-    const data = await tokenResponse.json();
+    const tokens = JSON.parse(responseText);
     
     // Create the response with the tokens
-    const response = NextResponse.json({
-      access_token: data.access_token,
-      refresh_token: data.refresh_token,
-      tokenExpiry: Date.now() + (data.expires_in * 1000),
-    });
+    const responseToSend = NextResponse.json(tokens);
 
     // Set the auth cookie
     const cookieStore = await cookies();
@@ -49,9 +69,12 @@ export async function POST(request: Request) {
       maxAge: 60 * 60 * 24 * 30,
     });
 
-    return response;
+    return responseToSend;
   } catch (error) {
-    console.error('Error exchanging code for tokens:', error);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+    console.error('Token exchange error:', error);
+    return NextResponse.json({ 
+      error: 'Token exchange failed',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    }, { status: 500 });
   }
 } 

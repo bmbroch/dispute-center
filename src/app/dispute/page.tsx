@@ -2,12 +2,14 @@
 
 import { useAuth } from '@/lib/hooks/useAuth';
 import { useState, useEffect } from 'react';
-import DisputesTable from '../components/DisputesTable';
+import DisputeTable from '../components/DisputeTable';
 import LoginSplashScreen from '../components/LoginSplashScreen';
 import { useRouter } from 'next/navigation';
+import { Sidebar } from '../components/Sidebar';
+import { LogOut } from 'lucide-react';
 
 export default function DisputePage() {
-  const { user, loading: authLoading } = useAuth();
+  const { user, loading: authLoading, signOut } = useAuth();
   const [disputeCount, setDisputeCount] = useState(0);
   const [showLoginSplash, setShowLoginSplash] = useState(false);
   const router = useRouter();
@@ -42,34 +44,30 @@ export default function DisputePage() {
     }
   };
 
+  const handleLogout = async () => {
+    await signOut();
+    router.push('/');
+  };
+
   return (
-    <>
-      <div className="min-h-screen bg-gray-50 p-8">
-        <div className="max-w-7xl mx-auto">
-          <div className="flex justify-between items-center mb-8">
-            <div>
-              <h1 className="text-3xl font-bold">Dispute Resolution</h1>
-              <p className="text-gray-600 mt-2">
-                {disputeCount === 0 
-                  ? 'No disputes found' 
-                  : `${disputeCount} dispute${disputeCount === 1 ? '' : 's'} found`}
-              </p>
-            </div>
-          </div>
-          
-          {user && (
-            <DisputesTable 
-              onDisputeCountChange={setDisputeCount}
-            />
-          )}
-        </div>
+    <div className="min-h-screen bg-gray-50">
+      {/* Sidebar */}
+      <Sidebar />
+
+      {/* Main Content */}
+      <div className="pl-64">
+        <main className="max-w-7xl mx-auto px-4 py-8">
+          {user ? (
+            <DisputeTable onDisputeCountChange={setDisputeCount} />
+          ) : null}
+        </main>
       </div>
 
       <LoginSplashScreen
         isOpen={showLoginSplash}
         onClose={handleCloseLogin}
-        message="Sign in to manage your disputes and automate responses 🛡️"
+        message="Sign in to manage your disputes"
       />
-    </>
+    </div>
   );
 } 

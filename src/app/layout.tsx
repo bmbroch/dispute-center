@@ -1,19 +1,15 @@
-import type { Metadata } from 'next'
+'use client';
+
 import './globals.css'
 import { Providers } from './providers'
 import { Roboto } from 'next/font/google'
+import { Toaster } from 'react-hot-toast'
 
 const roboto = Roboto({
-  weight: ['400', '500'],
+  weight: ['300', '400', '500', '700'],
   subsets: ['latin'],
-  display: 'swap',
   variable: '--font-roboto',
 })
-
-export const metadata: Metadata = {
-  title: 'Subspond',
-  description: 'Your all-in-one subscription management and dispute resolution platform.',
-}
 
 export default function RootLayout({
   children,
@@ -28,6 +24,7 @@ export default function RootLayout({
             {children}
           </div>
         </Providers>
+        <Toaster position="top-right" />
       </body>
     </html>
   )
