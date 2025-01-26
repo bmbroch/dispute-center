@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getOAuth2Client } from '@/lib/google/auth';
-import { google } from 'googleapis';
-import { gmail_v1 } from 'googleapis';
+import { google, gmail_v1 } from 'googleapis';
 
 export async function GET(request: NextRequest) {
   const authHeader = request.headers.get('Authorization');
