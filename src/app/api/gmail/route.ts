@@ -1,29 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getOAuth2Client } from '@/lib/google/auth';
 import { google, gmail_v1 } from 'googleapis';
-
-// Type guard for Gmail API errors
-interface GmailError {
-  response?: {
-    status: number;
-    data?: {
-      error: {
-        message?: string;
-        code?: string;
-      };
-    };
-  };
-  message?: string;
-}
-
-function isGmailError(error: unknown): error is GmailError {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    'response' in error &&
-    typeof (error as GmailError).response === 'object'
-  );
-}
+import { isGmailError } from '@/lib/types/gmail';
 
 export async function GET(request: NextRequest) {
   const authHeader = request.headers.get('Authorization');
@@ -203,7 +181,7 @@ export async function GET(request: NextRequest) {
     if (!isGmailError(error)) {
       return NextResponse.json({ 
         error: 'Failed to fetch email threads',
-        details: 'An unexpected error occurred'
+        details: error instanceof Error ? error.message : 'An unexpected error occurred'
       }, { status: 500 });
     }
     

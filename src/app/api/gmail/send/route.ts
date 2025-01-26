@@ -1,29 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getOAuth2Client } from '@/lib/google/auth';
 import { google } from 'googleapis';
-
-// Type guard for Gmail API errors
-interface GmailError {
-  response?: {
-    status: number;
-    data?: {
-      error: {
-        message?: string;
-        code?: string;
-      };
-    };
-  };
-  message?: string;
-}
-
-function isGmailError(error: unknown): error is GmailError {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    'response' in error &&
-    typeof (error as GmailError).response === 'object'
-  );
-}
+import { isGmailError } from '@/lib/types/gmail';
 
 export async function POST(request: NextRequest) {
   try {
