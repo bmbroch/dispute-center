@@ -1,6 +1,6 @@
 'use client';
 
-import { Fragment, useEffect, useState } from 'react';
+import { Fragment, useEffect, useState, useCallback } from 'react';
 import { Dialog, Transition } from '@headlessui/react';
 import { useAuth } from '@/lib/hooks/useAuth';
 import { toast } from 'react-hot-toast';
@@ -57,46 +57,22 @@ export default function DisputeSettingsModal({ isOpen, onClose }: DisputeSetting
     }
   }, [isOpen, user?.email]);
 
-  const fetchTemplates = async () => {
-    if (!user?.email) {
-      setTemplates(DEFAULT_TEMPLATES);
-      setSelectedTemplate(DEFAULT_TEMPLATES[0]);
-      setEditedTemplate(DEFAULT_TEMPLATES[0]);
-      setIsLoading(false);
-      return;
-    }
-
+  const fetchTemplates = useCallback(async () => {
     try {
       setIsLoading(true);
-      const response = await fetch('/api/settings/email-templates', {
-        headers: {
-          'X-User-Email': user.email,
-        }
-      });
-      
-      const data = await response.json();
-      
-      // If we get valid templates, use them
-      if (Array.isArray(data) && data.length > 0) {
-        setTemplates(data);
-        setSelectedTemplate(data[0]);
-        setEditedTemplate(data[0]);
-      } else {
-        // Otherwise use defaults
-        setTemplates(DEFAULT_TEMPLATES);
-        setSelectedTemplate(DEFAULT_TEMPLATES[0]);
-        setEditedTemplate(DEFAULT_TEMPLATES[0]);
+      const response = await fetch('/api/settings/email-templates');
+      if (!response.ok) {
+        throw new Error('Failed to fetch templates');
       }
+      const data = await response.json();
+      setTemplates(data.templates || []);
     } catch (error) {
-      console.error('Failed to fetch templates:', error);
-      toast.error('Failed to load templates, using defaults');
-      setTemplates(DEFAULT_TEMPLATES);
-      setSelectedTemplate(DEFAULT_TEMPLATES[0]);
-      setEditedTemplate(DEFAULT_TEMPLATES[0]);
+      console.error('Error fetching templates:', error);
+      toast.error('Failed to load email templates');
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
 
   const handleSave = async () => {
     if (!user?.email) {

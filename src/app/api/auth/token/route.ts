@@ -11,6 +11,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'No authorization code provided' }, { status: 400 });
     }
 
+    const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+    if (!clientSecret) {
+      console.error('Missing GOOGLE_CLIENT_SECRET environment variable');
+      return NextResponse.json({ error: 'Server configuration error' }, { status: 500 });
+    }
+
     // Use the same redirect URI that was used to get the code
     const redirectUri = `${request.nextUrl.origin}/auth/callback`;
     console.log('Using redirect URI:', redirectUri);
@@ -18,10 +24,10 @@ export async function POST(request: NextRequest) {
     const tokenRequestBody = {
       code,
       client_id: GOOGLE_OAUTH_CONFIG.client_id,
-      client_secret: process.env.GOOGLE_CLIENT_SECRET,
+      client_secret: clientSecret,
       redirect_uri: redirectUri,
       grant_type: 'authorization_code',
-    };
+    } as const; // Use const assertion to ensure all properties are strings
 
     console.log('Token request config:', {
       hasClientId: !!tokenRequestBody.client_id,

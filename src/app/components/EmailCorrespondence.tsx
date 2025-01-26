@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import EmailComposer from './EmailComposer';
 import { useAuth } from '@/lib/hooks/useAuth';
 
@@ -52,7 +52,7 @@ export default function EmailCorrespondence({
   const [replyToMessage, setReplyToMessage] = useState<EmailMessage | null>(null);
   const [error, setError] = useState<{ message: string; details?: string } | null>(null);
 
-  const fetchEmails = async () => {
+  const fetchEmails = useCallback(async () => {
     if (!user?.accessToken || !customerEmail) {
       setError({
         message: 'Authentication Required',
@@ -110,7 +110,7 @@ export default function EmailCorrespondence({
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [user?.accessToken, customerEmail, refreshAccessToken]);
 
   useEffect(() => {
     fetchEmails();

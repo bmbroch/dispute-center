@@ -1,7 +1,7 @@
 'use client';
 
 
-import { useEffect, useState, Fragment } from 'react';
+import { useEffect, useState, Fragment, useCallback } from 'react';
 import type Stripe from 'stripe';
 import EmailCorrespondence from './EmailCorrespondence';
 import { useAuth } from '@/lib/hooks/useAuth';
@@ -70,7 +70,7 @@ export default function DisputeTable({ onDisputeCountChange }: DisputeTableProps
   const [selectedCustomerEmail, setSelectedCustomerEmail] = useState<string>('');
   const [selectedDisputeId, setSelectedDisputeId] = useState<string>('');
 
-  const refreshDisputes = async () => {
+  const refreshDisputes = useCallback(async () => {
     if (!user?.email) {
       setError('User email not found');
       return;
@@ -107,7 +107,7 @@ export default function DisputeTable({ onDisputeCountChange }: DisputeTableProps
       setIsRefreshing(false);
       setIsLoading(false);
     }
-  };
+  }, [user?.email, onDisputeCountChange]);
 
   useEffect(() => {
     refreshDisputes();
