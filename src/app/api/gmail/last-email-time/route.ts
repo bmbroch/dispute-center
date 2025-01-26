@@ -26,8 +26,7 @@ export async function GET(req: NextRequest) {
     const response = await gmail.users.messages.list({
       userId: 'me',
       q: `to:${email} OR from:${email}`,
-      maxResults: 1,
-      orderBy: 'date',
+      maxResults: 1
     });
 
     if (!response.data.messages || response.data.messages.length === 0) {
@@ -38,7 +37,7 @@ export async function GET(req: NextRequest) {
       userId: 'me',
       id: response.data.messages[0].id!,
       format: 'metadata',
-      metadataHeaders: ['From'],
+      metadataHeaders: ['From']
     });
 
     const fromHeader = message.data.payload?.headers?.find(h => h.name === 'From');
