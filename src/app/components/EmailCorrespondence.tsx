@@ -4,7 +4,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import EmailComposer from './EmailComposer';
 import { useAuth } from '@/lib/hooks/useAuth';
 
-interface EmailMessage {
+export interface EmailMessage {
   id: string;
   threadId: string;
   historyId: string;
@@ -21,7 +21,7 @@ interface EmailMessage {
   messageId: string;
 }
 
-interface EmailThread {
+export interface EmailThread {
   id: string;
   historyId: string;
   messages: EmailMessage[];

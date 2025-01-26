@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { EmailMessage } from './EmailCorrespondence';
+import { EmailMessage, EmailThread } from './EmailCorrespondence';
 import toast from 'react-hot-toast';
 import { Editor } from '@tinymce/tinymce-react';
 import { useAuth } from '@/lib/hooks/useAuth';
