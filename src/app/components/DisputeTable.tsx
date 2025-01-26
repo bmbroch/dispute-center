@@ -13,24 +13,33 @@ interface DisputeTableProps {
   onDisputeCountChange: (count: number) => void;
 }
 
-interface DisputeWithMeta extends Stripe.Dispute {
+// Define a custom charge type that matches our needs
+interface CustomCharge {
+  id: string;
+  amount: number;
+  created: number;
+  description: string;
+}
+
+// Define a custom payment intent type
+interface CustomPaymentIntent {
+  id: string;
+  amount: number;
+  description: string;
+}
+
+// Use type intersection instead of extends
+type DisputeWithMeta = Stripe.Dispute & {
   firstName?: string;
   customerEmail?: string;
   disputeCount?: number;
   lastEmailTime?: string;
   lastEmailFromCustomer?: boolean;
-  charge?: {
-    id: string;
-    amount: number;
-    created: number;
-    description: string;
-  };
-  payment_intent?: {
-    id: string;
-    amount: number;
-    description: string;
-  };
-}
+  dueDate?: string;
+  // Override the charge and payment_intent properties
+  charge?: CustomCharge;
+  payment_intent?: CustomPaymentIntent;
+};
 
 const getTimeSinceLastEmail = (date: string | undefined) => {
   if (!date) return null;
@@ -306,9 +315,10 @@ export default function DisputeTable({ onDisputeCountChange }: DisputeTableProps
           customerEmail={selectedCustomerEmail}
           onClose={() => setShowComposer(false)}
           onEmailSent={() => {
-            refreshDisputes();
             setShowComposer(false);
+            refreshDisputes();
           }}
+          threads={[]}
         />
       )}
     </div>
