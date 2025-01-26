@@ -2,6 +2,29 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getOAuth2Client } from '@/lib/google/auth';
 import { google } from 'googleapis';
 
+// Type guard for Gmail API errors
+interface GmailError {
+  response?: {
+    status: number;
+    data?: {
+      error: {
+        message?: string;
+        code?: string;
+      };
+    };
+  };
+  message?: string;
+}
+
+function isGmailError(error: unknown): error is GmailError {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'response' in error &&
+    typeof (error as GmailError).response === 'object'
+  );
+}
+
 export async function POST(request: NextRequest) {
   try {
     const { to, subject, content, threadId, inReplyTo, references } = await request.json();
@@ -104,8 +127,15 @@ ${content}
       messageId: response.data.id,
       threadId: response.data.threadId
     });
-  } catch (error) {
+  } catch (error: unknown) {
     console.error('Error sending email:', error);
+    
+    if (!isGmailError(error)) {
+      return NextResponse.json({ 
+        error: 'Failed to send email',
+        details: error instanceof Error ? error.message : 'An unexpected error occurred'
+      }, { status: 500 });
+    }
     
     // Check if error is due to invalid credentials
     if (error.response?.status === 401) {
@@ -115,9 +145,28 @@ ${content}
       }, { status: 401 });
     }
 
+    // Check for rate limiting
+    if (error.response?.status === 429) {
+      return NextResponse.json({
+        error: 'Rate limit exceeded',
+        details: 'Too many requests. Please try again in a few minutes.'
+      }, { status: 429 });
+    }
+
+    // Check for Gmail API specific errors
+    if (error.response?.data?.error) {
+      const apiError = error.response.data.error;
+      return NextResponse.json({
+        error: 'Gmail API error',
+        details: apiError.message || 'An error occurred while sending email',
+        code: apiError.code
+      }, { status: error.response.status || 500 });
+    }
+
+    // Network or other errors
     return NextResponse.json({ 
       error: 'Failed to send email',
-      details: error instanceof Error ? error.message : 'Unknown error'
+      details: error.message || 'An unexpected error occurred while sending email'
     }, { status: 500 });
   }
 } 
