@@ -177,8 +177,24 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     console.error('Error fetching email threads:', error);
     
+    // Type guard for error with response property
+    interface GmailError {
+      response?: {
+        status: number;
+        data?: {
+          error: {
+            message?: string;
+            code?: string;
+          };
+        };
+      };
+      message?: string;
+    }
+
+    const gmailError = error as GmailError;
+    
     // Check if error is due to invalid credentials
-    if (error.response?.status === 401) {
+    if (gmailError.response?.status === 401) {
       return NextResponse.json({ 
         error: 'Authentication failed',
         details: 'Your session has expired. Please sign in again.'
@@ -186,7 +202,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Check for rate limiting
-    if (error.response?.status === 429) {
+    if (gmailError.response?.status === 429) {
       return NextResponse.json({
         error: 'Rate limit exceeded',
         details: 'Too many requests. Please try again in a few minutes.'
@@ -194,21 +210,19 @@ export async function GET(request: NextRequest) {
     }
 
     // Check for Gmail API specific errors
-    if (error.response?.data?.error) {
-      const gmailError = error.response.data.error;
+    if (gmailError.response?.data?.error) {
+      const apiError = gmailError.response.data.error;
       return NextResponse.json({
         error: 'Gmail API error',
-        details: gmailError.message || 'An error occurred while fetching emails',
-        code: gmailError.code
-      }, { status: error.response.status || 500 });
+        details: apiError.message || 'An error occurred while fetching emails',
+        code: apiError.code
+      }, { status: gmailError.response.status || 500 });
     }
 
     // Network or other errors
     return NextResponse.json({ 
       error: 'Failed to fetch email threads',
-      details: error instanceof Error 
-        ? error.message 
-        : 'An unexpected error occurred while fetching emails'
+      details: gmailError.message || 'An unexpected error occurred while fetching emails'
     }, { status: 500 });
   }
 } 
