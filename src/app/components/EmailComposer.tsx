@@ -319,7 +319,9 @@ ${threadHistory}`;
 
       if (data.success) {
         toast.success('Email sent successfully');
-        onEmailSent();
+        if (onEmailSent) {
+          onEmailSent();
+        }
         onClose();
       }
     } catch (error) {
