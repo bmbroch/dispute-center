@@ -12,11 +12,10 @@ import { FeatureCard } from './components/FeatureCard';
 import { Sidebar } from './components/Sidebar';
 
 // Separate component for search params functionality
-function SearchParamsHandler() {
+function SearchParamsHandler({ showLoginSplash, setShowLoginSplash }: { showLoginSplash: boolean; setShowLoginSplash: (show: boolean) => void }) {
   const searchParams = useSearchParams();
   const router = useRouter();
   const { user } = useAuth();
-  const [showLoginSplash, setShowLoginSplash] = useState(false);
 
   useEffect(() => {
     // Check if there's a redirect parameter and user is not authenticated
@@ -24,7 +23,7 @@ function SearchParamsHandler() {
     if (redirect && !user) {
       setShowLoginSplash(true);
     }
-  }, [searchParams, user]);
+  }, [searchParams, user, setShowLoginSplash]);
 
   // Handle successful login
   useEffect(() => {
@@ -35,12 +34,13 @@ function SearchParamsHandler() {
       }
       setShowLoginSplash(false);
     }
-  }, [user, showLoginSplash, searchParams, router]);
+  }, [user, showLoginSplash, searchParams, router, setShowLoginSplash]);
 
-  return showLoginSplash;
+  return null;
 }
 
 export default function Home() {
+  const [showLoginSplash, setShowLoginSplash] = useState(false);
   const [showStripeKeyInput, setShowStripeKeyInput] = useState(false);
   const router = useRouter();
   const { user, signOut, signIn } = useAuth();
@@ -48,13 +48,17 @@ export default function Home() {
   const [disputeCount, setDisputeCount] = useState(0);
 
   // Wrap the search params functionality in Suspense
-  const showLoginSplash = (
+  const searchParamsHandler = (
     <Suspense fallback={null}>
-      <SearchParamsHandler />
+      <SearchParamsHandler 
+        showLoginSplash={showLoginSplash}
+        setShowLoginSplash={setShowLoginSplash}
+      />
     </Suspense>
   );
 
   const handleCloseLogin = () => {
+    setShowLoginSplash(false);
     // Remove the redirect parameter from the URL without triggering a page reload
     const url = new URL(window.location.href);
     url.searchParams.delete('redirect');
@@ -163,6 +167,7 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-gray-50">
+      {searchParamsHandler}
       {/* Sidebar */}
       <Sidebar />
 
@@ -261,7 +266,7 @@ export default function Home() {
       </div>
 
       <LoginSplashScreen
-        isOpen={Boolean(showLoginSplash)}
+        isOpen={showLoginSplash}
         onClose={handleCloseLogin}
         message="Sign in to automate customer inquiries ❗ & get back to building 🛠️"
       />
