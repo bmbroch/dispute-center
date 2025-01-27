@@ -173,8 +173,22 @@ class GoogleAuthService {
       throw new Error('Failed to get user info');
     }
 
-    this.userInfo = await response.json();
-    return this.userInfo;
+    const data = await response.json();
+
+    // Validate user info response
+    if (!data.email || !data.name || !data.picture) {
+      console.error('Invalid user info response:', data);
+      throw new Error('Invalid user info response from Google');
+    }
+
+    const userInfo: GoogleUserInfo = {
+      email: data.email,
+      name: data.name,
+      picture: data.picture
+    };
+
+    this.userInfo = userInfo;
+    return userInfo;
   }
 
   async refreshTokens(): Promise<GoogleTokens> {
