@@ -11,15 +11,13 @@ import StripeKeyInput from './components/StripeKeyInput';
 import { FeatureCard } from './components/FeatureCard';
 import { Sidebar } from './components/Sidebar';
 
-export default function Home() {
-  const [showLoginSplash, setShowLoginSplash] = useState(false);
-  const [showStripeKeyInput, setShowStripeKeyInput] = useState(false);
+// Separate component for search params functionality
+function SearchParamsHandler() {
   const searchParams = useSearchParams();
   const router = useRouter();
-  const { user, signOut, signIn } = useAuth();
-  const { activeDisputes, responseDrafts, isLoading, hasStripeKey } = useStripeMetrics();
-  const [disputeCount, setDisputeCount] = useState(0);
-  
+  const { user } = useAuth();
+  const [showLoginSplash, setShowLoginSplash] = useState(false);
+
   useEffect(() => {
     // Check if there's a redirect parameter and user is not authenticated
     const redirect = searchParams.get('redirect');
@@ -39,8 +37,24 @@ export default function Home() {
     }
   }, [user, showLoginSplash, searchParams, router]);
 
+  return showLoginSplash;
+}
+
+export default function Home() {
+  const [showStripeKeyInput, setShowStripeKeyInput] = useState(false);
+  const router = useRouter();
+  const { user, signOut, signIn } = useAuth();
+  const { activeDisputes, responseDrafts, isLoading, hasStripeKey } = useStripeMetrics();
+  const [disputeCount, setDisputeCount] = useState(0);
+
+  // Wrap the search params functionality in Suspense
+  const showLoginSplash = (
+    <Suspense fallback={null}>
+      <SearchParamsHandler />
+    </Suspense>
+  );
+
   const handleCloseLogin = () => {
-    setShowLoginSplash(false);
     // Remove the redirect parameter from the URL without triggering a page reload
     const url = new URL(window.location.href);
     url.searchParams.delete('redirect');
@@ -247,7 +261,7 @@ export default function Home() {
       </div>
 
       <LoginSplashScreen
-        isOpen={showLoginSplash}
+        isOpen={Boolean(showLoginSplash)}
         onClose={handleCloseLogin}
         message="Sign in to automate customer inquiries ❗ & get back to building 🛠️"
       />
