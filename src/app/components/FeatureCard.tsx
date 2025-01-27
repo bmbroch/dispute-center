@@ -8,6 +8,7 @@ interface FeatureCardProps {
   stats?: string;
   href?: string;
   buttonText: string;
+  onClick?: () => void;
 }
 
 export function FeatureCard({
@@ -16,7 +17,8 @@ export function FeatureCard({
   icon: Icon,
   stats,
   href,
-  buttonText
+  buttonText,
+  onClick
 }: FeatureCardProps) {
   const CardContent = (
     <div className="bg-white rounded-lg p-6 border border-gray-200 hover:border-gray-300 transition-all hover:shadow-lg h-full flex flex-col">
@@ -37,7 +39,10 @@ export function FeatureCard({
       </div>
 
       {/* Button */}
-      <button className="w-full bg-white border border-gray-200 hover:border-gray-300 text-gray-900 px-4 py-2 rounded-lg transition-colors">
+      <button 
+        onClick={onClick}
+        className="w-full bg-white border border-gray-200 hover:border-gray-300 text-gray-900 px-4 py-2 rounded-lg transition-colors"
+      >
         {buttonText}
       </button>
     </div>
