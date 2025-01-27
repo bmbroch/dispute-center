@@ -137,14 +137,21 @@ class GoogleAuthService {
         throw new Error(data.details || data.error || 'Failed to get tokens');
       }
 
-      // Validate token response
-      if (!data.access_token) {
+      // Validate token response and ensure it matches GoogleTokens interface
+      if (!data.access_token || !data.id_token || !data.expires_in) {
         console.error('Invalid token response:', data);
         throw new Error('Invalid token response from server');
       }
 
-      this.tokens = data;
-      return this.tokens;
+      const tokens: GoogleTokens = {
+        access_token: data.access_token,
+        refresh_token: data.refresh_token,
+        id_token: data.id_token,
+        expires_in: data.expires_in
+      };
+
+      this.tokens = tokens;
+      return tokens;
     } catch (error) {
       console.error('Error in handleAuthCode:', error);
       throw error;
