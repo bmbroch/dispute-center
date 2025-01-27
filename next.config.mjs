@@ -4,13 +4,13 @@ const nextConfig = {
     remotePatterns: [
       {
         protocol: 'https',
-        hostname: 'lh3.googleusercontent.com',  // For Google profile images
+        hostname: 'lh3.googleusercontent.com',
         port: '',
-        pathname: '/a/**',
+        pathname: '/**',
       },
       {
         protocol: 'https',
-        hostname: '**.stripe.com',  // For Stripe-related images
+        hostname: '**.stripe.com',
         port: '',
         pathname: '/**',
       }
