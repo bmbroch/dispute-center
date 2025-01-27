@@ -54,9 +54,15 @@ export default function StripeKeyInput({ onClose, onSuccess }: StripeKeyInputPro
   }, [user?.email]);
 
   const checkKeyStatus = async () => {
-    if (!user?.email) return;
+    if (!user?.email) return false;
     
-    const stripeKeysRef = collection(getFirebaseDB(), 'stripeKeys');
+    const db = getFirebaseDB();
+    if (!db) {
+      console.error('Failed to initialize Firebase');
+      return false;
+    }
+    
+    const stripeKeysRef = collection(db, 'stripeKeys');
     const q = query(stripeKeysRef, where('userEmail', '==', user.email));
     const querySnapshot = await getDocs(q);
     
@@ -70,7 +76,12 @@ export default function StripeKeyInput({ onClose, onSuccess }: StripeKeyInputPro
       setIsLoading(true);
       setError(null);
       
-      const keyRef = doc(getFirebaseDB(), 'stripeKeys', existingKeyId);
+      const db = getFirebaseDB();
+      if (!db) {
+        throw new Error('Failed to initialize Firebase');
+      }
+      
+      const keyRef = doc(db, 'stripeKeys', existingKeyId);
       await deleteDoc(keyRef);
 
       toast.success('API key deleted successfully');
@@ -97,6 +108,11 @@ export default function StripeKeyInput({ onClose, onSuccess }: StripeKeyInputPro
     setError(null);
 
     try {
+      const db = getFirebaseDB();
+      if (!db) {
+        throw new Error('Failed to initialize Firebase');
+      }
+
       // Validate the API key format
       if ((!apiKey.startsWith('sk_') && !apiKey.startsWith('rk_')) || apiKey.length < 20) {
         throw new Error('Invalid API key format. It should start with "sk_" or "rk_" and be at least 20 characters long.');
@@ -104,7 +120,7 @@ export default function StripeKeyInput({ onClose, onSuccess }: StripeKeyInputPro
 
       if (existingKeyId) {
         // Update existing key
-        const keyRef = doc(getFirebaseDB(), 'stripeKeys', existingKeyId);
+        const keyRef = doc(db, 'stripeKeys', existingKeyId);
         await updateDoc(keyRef, {
           stripeKey: apiKey,
           updatedAt: new Date().toISOString()
@@ -112,7 +128,7 @@ export default function StripeKeyInput({ onClose, onSuccess }: StripeKeyInputPro
         toast.success('API key updated successfully');
       } else {
         // Add new key
-        await addDoc(collection(getFirebaseDB(), 'stripeKeys'), {
+        await addDoc(collection(db, 'stripeKeys'), {
           userEmail: user.email,
           stripeKey: apiKey,
           createdAt: new Date().toISOString()
