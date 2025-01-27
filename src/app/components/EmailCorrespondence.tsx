@@ -105,7 +105,9 @@ export default function EmailCorrespondence({
       console.error('Error fetching emails:', err);
       setError({
         message: err instanceof Error ? err.message : 'Failed to fetch emails',
-        details: err.details || 'Please try again or contact support if the issue persists'
+        details: typeof err === 'object' && err !== null && 'details' in err 
+          ? String((err as { details: unknown }).details)
+          : 'Please try again or contact support if the issue persists'
       });
     } finally {
       setIsLoading(false);
