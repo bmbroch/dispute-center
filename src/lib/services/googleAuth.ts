@@ -212,13 +212,24 @@ class GoogleAuthService {
       throw new Error(errorData.error || 'Failed to refresh tokens');
     }
 
-    const newTokens = await response.json();
-    this.tokens = {
-      ...this.tokens,
-      ...newTokens,
+    const data = await response.json();
+
+    // Validate token response
+    if (!data.access_token || !data.id_token || !data.expires_in) {
+      console.error('Invalid token refresh response:', data);
+      throw new Error('Invalid token refresh response from server');
+    }
+
+    // Create new tokens object with proper typing
+    const newTokens: GoogleTokens = {
+      access_token: data.access_token,
+      id_token: data.id_token,
+      expires_in: data.expires_in,
+      refresh_token: this.tokens.refresh_token // Keep the existing refresh token
     };
 
-    return this.tokens;
+    this.tokens = newTokens;
+    return newTokens;
   }
 
   getTokens(): GoogleTokens | null {
