@@ -6,9 +6,17 @@ import { AuthContext } from '@/lib/contexts/AuthContext';
 export default function GoogleSignInButton() {
   const { signIn } = useContext(AuthContext);
 
+  const handleSignIn = async () => {
+    try {
+      await signIn();
+    } catch (error) {
+      console.error('Failed to sign in:', error);
+    }
+  };
+
   return (
     <button
-      onClick={signIn}
+      onClick={handleSignIn}
       className="flex items-center text-white bg-[#4285F4] hover:bg-[#4285F4]/90 transition-colors rounded-[4px] shadow-md overflow-hidden h-[40px]"
     >
       <div className="bg-white h-full w-[40px] flex items-center justify-center">
