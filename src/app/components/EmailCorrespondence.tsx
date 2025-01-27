@@ -30,7 +30,7 @@ export interface EmailThread {
 interface EmailCorrespondenceProps {
   customerEmail: string;
   disputeId: string;
-  onEmailSent: () => void;
+  onEmailSent?: () => void;
 }
 
 // Add a helper function to decode HTML entities
@@ -121,8 +121,10 @@ export default function EmailCorrespondence({
   const handleEmailSent = async () => {
     // Immediately fetch new emails
     await fetchEmails();
-    // Notify parent component
-    onEmailSent();
+    // Notify parent component if callback exists
+    if (onEmailSent) {
+      onEmailSent();
+    }
   };
 
   const toggleThreadExpansion = (threadId: string) => {
