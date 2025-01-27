@@ -5,7 +5,7 @@ import { useState, useEffect } from 'react';
 import { collection, query, where, getDocs } from 'firebase/firestore';
 import { getFirebaseDB } from '@/lib/firebase/firebase';
 import Image from 'next/image';
-import SignInWithGoogle from './SignInWithGoogle';
+import GoogleSignInButton from './GoogleSignInButton';
 import { useRouter } from 'next/navigation';
 
 export default function Header() {
@@ -126,7 +126,7 @@ export default function Header() {
                 </div>
               </>
             ) : (
-              <SignInWithGoogle />
+              <GoogleSignInButton />
             )}
           </div>
         </div>
