@@ -12,6 +12,10 @@ export default function EmailExample() {
       <EmailCorrespondence 
         customerEmail={customerEmail}
         disputeId={disputeId}
+        onEmailSent={() => {
+          // Optional callback
+          console.log('Email sent successfully');
+        }}
       />
     </div>
   );
