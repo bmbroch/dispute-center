@@ -1,9 +1,6 @@
 import { ExecSyncOptionsWithStringEncoding } from 'child_process';
 const { execSync } = require('child_process');
-import * as dotenv from 'dotenv';
-
-// Load environment variables from .env file
-dotenv.config();
+require('dotenv').config();
 
 // Add required environment variables here
 const REQUIRED_ENV_VARS = [
