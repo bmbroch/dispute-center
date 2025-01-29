@@ -11,7 +11,7 @@ import { useStripeMetrics } from '@/lib/hooks/useStripeMetrics';
 
 export default function Header() {
   const { user, signOut } = useAuth();
-  const { isConnected } = useStripeMetrics();
+  const { hasStripeKey } = useStripeMetrics();
   const router = useRouter();
 
   const handleStripeLogoClick = () => {
@@ -38,7 +38,7 @@ export default function Header() {
                   <button 
                     onClick={handleStripeLogoClick}
                     className="relative group"
-                    title={isConnected ? "Stripe API key loaded" : "Stripe API still needs to be uploaded"}
+                    title={hasStripeKey ? "Stripe API key loaded" : "Stripe API still needs to be uploaded"}
                   >
                     <Image
                       src="/stripe-logo.svg"
@@ -48,7 +48,7 @@ export default function Header() {
                       className="opacity-90"
                     />
                     <div className="absolute -bottom-1 -right-1">
-                      {isConnected ? (
+                      {hasStripeKey ? (
                         <svg className="w-4 h-4 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <circle cx="12" cy="12" r="10" className="fill-white" />
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" className="stroke-green-500" />
@@ -63,7 +63,7 @@ export default function Header() {
                     
                     {/* Tooltip */}
                     <div className="absolute left-1/2 -translate-x-1/2 -bottom-8 hidden group-hover:block bg-gray-800 text-white text-xs rounded py-1 px-2 whitespace-nowrap">
-                      {isConnected ? "Stripe API key loaded" : "Stripe API still needs to be uploaded"}
+                      {hasStripeKey ? "Stripe API key loaded" : "Stripe API still needs to be uploaded"}
                     </div>
                   </button>
                 </div>
