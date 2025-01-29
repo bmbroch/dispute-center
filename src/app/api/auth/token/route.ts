@@ -18,7 +18,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Get the redirect URI from the request origin
-    const redirectUri = `${request.nextUrl.origin}/auth/callback`;
+    const redirectUri = `${request.nextUrl.origin}/api/auth/callback/google`;
     
     // Validate that the redirect URI is allowed
     const allowedRedirectUris = getAllowedRedirectUris();

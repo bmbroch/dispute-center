@@ -75,7 +75,7 @@ export const storage = typeof window !== 'undefined' ? getStorage(firebaseApp) :
 export const GOOGLE_OAUTH_CONFIG = {
   client_id: process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID as string,
   redirect_uri: typeof window !== 'undefined' 
-    ? `${window.location.origin}/auth/callback`
+    ? `${window.location.origin}/api/auth/callback/google`
     : process.env.NEXT_PUBLIC_GOOGLE_REDIRECT_URI as string,
   scope: [
     'https://www.googleapis.com/auth/gmail.readonly',
@@ -93,5 +93,5 @@ export const GOOGLE_OAUTH_CONFIG = {
 // Helper function to get all allowed redirect URIs
 export const getAllowedRedirectUris = () => {
   const ports = [3000, 3001, 3002, 3003];
-  return ports.map(port => `http://localhost:${port}/auth/callback`);
+  return ports.map(port => `http://localhost:${port}/api/auth/callback/google`);
 };
