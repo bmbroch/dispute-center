@@ -510,7 +510,7 @@ ${threadHistory ? `<br>${threadHistory}` : ''}
                               reader.onload = function(e) {
                                 editor.insertContent(`<img src="${e.target?.result}" style="max-width:40%; height:auto; display:block; margin:8px 0;" />`);
                               };
-                              reader.readAsDataURL(blob);
+                              if (blob) { reader.readAsDataURL(blob); }
                               e.preventDefault();
                             }
                           }
