@@ -5,12 +5,16 @@ const { execSync } = require('child_process');
 const REQUIRED_ENV_VARS = [
   'NEXT_PUBLIC_FIREBASE_API_KEY',
   'NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN',
-  'NEXT_PUBLIC_FIREBASE_PROJECT_ID',
-  'OPENAI_API_KEY',
-  'ANTHROPIC_API_KEY',
-  'REPLICATE_API_TOKEN',
-  'DEEPGRAM_API_KEY'
+  'NEXT_PUBLIC_FIREBASE_PROJECT_ID'
 ] as const;
+
+// Optional environment variables (uncomment if needed)
+// const OPTIONAL_ENV_VARS = [
+//   'OPENAI_API_KEY',
+//   'ANTHROPIC_API_KEY',
+//   'REPLICATE_API_TOKEN',
+//   'DEEPGRAM_API_KEY'
+// ] as const;
 
 // Minimum Node.js version required
 const MIN_NODE_VERSION = '18.17.0';
