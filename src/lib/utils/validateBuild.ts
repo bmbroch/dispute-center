@@ -9,7 +9,7 @@ const REQUIRED_ENV_VARS = [
   'ANTHROPIC_API_KEY',
   'REPLICATE_API_TOKEN',
   'DEEPGRAM_API_KEY'
-];
+] as const;
 
 // Minimum Node.js version required
 const MIN_NODE_VERSION = '18.17.0';

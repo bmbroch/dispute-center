@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
-import { GOOGLE_OAUTH_CONFIG } from '@/lib/firebase/firebase';
+import { GOOGLE_OAUTH_CONFIG, getAllowedRedirectUris } from '@/lib/firebase/firebase';
 
 export async function POST(request: NextRequest) {
   try {
@@ -17,8 +17,16 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Server configuration error' }, { status: 500 });
     }
 
-    // Use the same redirect URI that was used to get the code
+    // Get the redirect URI from the request origin
     const redirectUri = `${request.nextUrl.origin}/auth/callback`;
+    
+    // Validate that the redirect URI is allowed
+    const allowedRedirectUris = getAllowedRedirectUris();
+    if (!allowedRedirectUris.includes(redirectUri)) {
+      console.error('Invalid redirect URI:', redirectUri);
+      return NextResponse.json({ error: 'Invalid redirect URI' }, { status: 400 });
+    }
+
     console.log('Using redirect URI:', redirectUri);
 
     const tokenRequestBody = {

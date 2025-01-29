@@ -125,7 +125,14 @@ export default function StripeKeyInput({ onClose, onSuccess }: StripeKeyInputPro
       const docRef = doc(db, 'stripeKeys', normalizedEmail);
       
       // Save or update the key
-      const docData = {
+      interface StripeKeyDoc {
+  userEmail: string;
+  stripeKey: string;
+  updatedAt: string;
+  createdAt?: string;
+}
+
+const docData: StripeKeyDoc = {
         userEmail: normalizedEmail,
         stripeKey: apiKey,
         updatedAt: new Date().toISOString(),

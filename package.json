@@ -2,9 +2,10 @@
   "name": "template-2",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "next dev -p 3002",
-    "prebuild": "ts-node scripts/prebuild.ts",
+    "prebuild": "node --loader ts-node/esm scripts/prebuild.ts",
     "build": "next build",
     "start": "next start -p 3002",
     "lint": "next lint",

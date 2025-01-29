@@ -1,4 +1,4 @@
-import { validateBuild } from '../src/lib/utils/validateBuild';
+import { validateBuild } from '../src/lib/utils/validateBuild.js';
 import { execSync } from 'child_process';
 
 async function prebuild() {
