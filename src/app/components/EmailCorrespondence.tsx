@@ -434,7 +434,7 @@ export default function EmailCorrespondence({
                           className="email-content prose max-w-none"
                           dangerouslySetInnerHTML={{ __html: processEmailContent(message) }}
                         />
-                        {message.attachments?.length > 0 && (
+                        {message.attachments && message.attachments.length > 0 && (
                           <div className="mt-4 space-y-2">
                             {message.attachments.map(attachment => (
                               !attachment.isInline && (
