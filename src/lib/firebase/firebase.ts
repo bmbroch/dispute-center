@@ -1,5 +1,4 @@
 import { initializeApp, getApps, getApp } from "firebase/app";
-import { getAuth } from "firebase/auth";
 import { getFirestore, Firestore } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
 
@@ -67,8 +66,7 @@ export function getFirebaseDB(): Firestore | null {
   return firestoreDb;
 }
 
-// Initialize auth and storage only if we have a Firebase app
-export const auth = typeof window !== 'undefined' ? getAuth(firebaseApp) : null;
+// Initialize storage only if we have a Firebase app
 export const storage = typeof window !== 'undefined' ? getStorage(firebaseApp) : null;
 
 // Google Cloud OAuth Configuration
