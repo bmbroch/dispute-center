@@ -335,7 +335,7 @@ ${threadHistory ? `<br>${threadHistory}` : ''}
             messageId: replyToMessage?.messageId,
             references: messageIds,
             inReplyTo: replyToMessage?.messageId,
-            originalContent: replyToMessage?.content,
+            originalContent: replyToMessage?.body,
             inlineImages // Add inline images to the request
           })
         });
