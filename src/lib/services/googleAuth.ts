@@ -73,7 +73,7 @@ class GoogleAuthService {
       const { url } = await response.json();
       
       // Open popup for Gmail account selection
-      const popup = window.open(url, 'Google Sign In', 'width=500,height=600');
+      const popup = window.open(url, 'Google Sign In', 'width=500,height=600,scrollbars=yes,resizable=yes');
       
       if (!popup) {
         throw new Error('Popup was blocked. Please allow popups and try again.');
@@ -81,6 +81,16 @@ class GoogleAuthService {
 
       return new Promise((resolve, reject) => {
         let authTimeout: NodeJS.Timeout;
+        let checkClosed: NodeJS.Timer;
+
+        const cleanup = () => {
+          clearInterval(checkClosed);
+          clearTimeout(authTimeout);
+          window.removeEventListener('message', handleMessage);
+          if (popup && !popup.closed) {
+            popup.close();
+          }
+        };
 
         const handleMessage = async (event: MessageEvent) => {
           // Verify origin
@@ -92,13 +102,13 @@ class GoogleAuthService {
             const { tokens, userInfo, error } = event.data;
             
             if (error) {
+              cleanup();
               reject(new Error(error));
               return;
             }
 
             if (tokens && userInfo) {
-              window.removeEventListener('message', handleMessage);
-              clearTimeout(authTimeout);
+              cleanup();
               
               // Store the tokens and user info
               this.tokens = tokens;
@@ -111,6 +121,7 @@ class GoogleAuthService {
               resolve({ tokens, userInfo });
             }
           } catch (error) {
+            cleanup();
             reject(error);
           }
         };
@@ -119,20 +130,23 @@ class GoogleAuthService {
         
         // Set timeout for auth flow
         authTimeout = setTimeout(() => {
-          window.removeEventListener('message', handleMessage);
-          popup.close();
+          cleanup();
           reject(new Error('Authentication timed out. Please try again.'));
-        }, 60000); // 1 minute timeout
+        }, 120000); // 2 minute timeout
 
         // Handle popup closure
-        const checkClosed = setInterval(() => {
+        checkClosed = setInterval(() => {
           if (!popup || popup.closed) {
-            clearInterval(checkClosed);
-            clearTimeout(authTimeout);
-            window.removeEventListener('message', handleMessage);
-            reject(new Error('Authentication cancelled'));
+            cleanup();
+            // Don't show error if we already have tokens (successful auth)
+            if (!this.tokens) {
+              reject(new Error('Sign in was cancelled. Please try again.'));
+            }
           }
         }, 1000);
+
+        // Handle window unload
+        window.addEventListener('unload', cleanup);
       });
     } catch (error) {
       console.error('Sign in error:', error);

@@ -84,21 +84,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       
       const { tokens, userInfo } = await googleAuthService.signInWithPopup();
       
-      setUser({
-        email: userInfo.email,
-        name: userInfo.name,
-        picture: userInfo.picture,
-        accessToken: tokens.access_token,
-        refreshToken: tokens.refresh_token || null,
-      });
-
-      toast.success('Successfully signed in!');
+      // Only update user if we got valid tokens and userInfo
+      if (tokens && userInfo) {
+        setUser({
+          email: userInfo.email,
+          name: userInfo.name,
+          picture: userInfo.picture,
+          accessToken: tokens.access_token,
+          refreshToken: tokens.refresh_token || null,
+        });
+        toast.success('Successfully signed in!');
+      }
       
     } catch (err) {
       console.error('Sign in error:', err);
       const errorMessage = err instanceof Error ? err.message : 'Failed to sign in';
+      
+      // Don't show error toast for cancellation
+      if (!errorMessage.includes('cancelled')) {
+        toast.error(errorMessage);
+      }
+      
       setError(errorMessage);
-      toast.error(errorMessage);
     } finally {
       setLoading(false);
     }
