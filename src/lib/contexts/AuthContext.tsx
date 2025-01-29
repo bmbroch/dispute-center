@@ -3,11 +3,9 @@
 import React, { createContext, useEffect, useState, useCallback } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { googleAuthService } from '../services/googleAuth';
-import { auth, googleProvider } from '../firebase/firebase';
-import { signInWithPopup, signOut, onAuthStateChanged, User } from 'firebase/auth';
 import { toast } from 'react-hot-toast';
 
-interface User {
+interface AuthUser {
   email: string | null;
   accessToken: string | null;
   refreshToken: string | null;
@@ -16,7 +14,7 @@ interface User {
 }
 
 interface AuthContextType {
-  user: User | null;
+  user: AuthUser | null;
   loading: boolean;
   error: string | null;
   signIn: () => Promise<void>;
@@ -36,7 +34,7 @@ export const AuthContext = createContext<AuthContextType>({
 const PUBLIC_PATHS = ['/', '/auth', '/login'];
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();

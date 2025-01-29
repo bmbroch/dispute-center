@@ -4,13 +4,13 @@ import { useAuth } from '@/lib/hooks/useAuth';
 import { useState } from 'react';
 
 export default function SignInButton() {
-  const { user, loading, error, signInWithGoogle } = useAuth();
+  const { user, loading, error, signIn } = useAuth();
   const [isSigningIn, setIsSigningIn] = useState(false);
 
   const handleSignIn = async () => {
     try {
       setIsSigningIn(true);
-      await signInWithGoogle();
+      await signIn();
     } catch (err) {
       // Error handling is now done in AuthContext
       console.error('Sign in error:', err);
