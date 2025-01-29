@@ -4,8 +4,6 @@ import { headers } from 'next/headers';
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const code = searchParams.get('code');
-  const headersList = headers();
-  const origin = headersList.get('origin') || process.env.NEXTAUTH_URL || '';
 
   if (!code) {
     return NextResponse.json({ error: 'No code provided' }, { status: 400 });
