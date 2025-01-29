@@ -13,6 +13,11 @@ interface GoogleUserInfo {
   picture: string;
 }
 
+const GOOGLE_AUTH_ORIGINS = {
+  development: 'http://localhost:3002',
+  production: 'https://dispute-center-leli.vercel.app'
+};
+
 class GoogleAuthService {
   private static instance: GoogleAuthService;
   private tokens: GoogleTokens | null = null;
@@ -27,91 +32,72 @@ class GoogleAuthService {
     return GoogleAuthService.instance;
   }
 
-  private getAuthUrl(): string {
-    const params = new URLSearchParams({
-      client_id: GOOGLE_OAUTH_CONFIG.client_id,
-      redirect_uri: GOOGLE_OAUTH_CONFIG.redirect_uri,
-      scope: GOOGLE_OAUTH_CONFIG.scope,
-      response_type: GOOGLE_OAUTH_CONFIG.response_type,
-      access_type: GOOGLE_OAUTH_CONFIG.access_type,
-      prompt: GOOGLE_OAUTH_CONFIG.prompt
-    });
-
-    return `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+  private getOrigin() {
+    return typeof window !== 'undefined' 
+      ? window.location.origin
+      : GOOGLE_AUTH_ORIGINS[process.env.NODE_ENV === 'production' ? 'production' : 'development'];
   }
 
   async signInWithPopup(): Promise<{ tokens: GoogleTokens; userInfo: GoogleUserInfo }> {
-    return new Promise((resolve, reject) => {
-      // Calculate center position for the popup
-      const width = 500;
-      const height = 600;
-      const left = window.screenX + (window.outerWidth - width) / 2;
-      const top = window.screenY + (window.outerHeight - height) / 2;
+    try {
+      const origin = this.getOrigin();
+      const response = await fetch('/api/auth/google', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Origin': origin
+        },
+        body: JSON.stringify({ redirectUri: `${origin}/auth/callback` })
+      });
 
-      // Open the popup
-      const popup = window.open(
-        this.getAuthUrl(),
-        'Google Sign In',
-        `width=${width},height=${height},left=${left},top=${top},toolbar=0,scrollbars=0,status=0,resizable=1,location=1,menuBar=0`
-      );
-
-      if (!popup) {
-        reject(new Error('Failed to open popup. Please allow popups for this site.'));
-        return;
+      if (!response.ok) {
+        throw new Error('Authentication failed');
       }
 
-      // Focus the popup
-      popup.focus();
+      const { url } = await response.json();
+      
+      // Open popup with proper origin
+      const popup = window.open(url, 'Google Sign In', 'width=500,height=600');
+      
+      if (!popup) {
+        throw new Error('Popup was blocked. Please allow popups and try again.');
+      }
 
-      // Handle messages from the popup
-      const handleMessage = async (event: MessageEvent) => {
-        // Verify origin
-        if (event.origin !== window.location.origin) return;
+      return new Promise((resolve, reject) => {
+        let authTimeout: NodeJS.Timeout;
 
-        if (event.data.type === 'auth-success') {
-          cleanup();
+        const handleMessage = async (event: MessageEvent) => {
+          // Verify origin
+          if (event.origin !== origin) {
+            return;
+          }
+
           try {
-            const tokens = await this.handleAuthCode(event.data.code);
-            const userInfo = await this.getUserInfo();
-            resolve({ tokens, userInfo });
+            const { tokens, userInfo } = event.data;
+            if (tokens && userInfo) {
+              window.removeEventListener('message', handleMessage);
+              clearTimeout(authTimeout);
+              popup.close();
+              resolve({ tokens, userInfo });
+            }
           } catch (error) {
             reject(error);
           }
-        } else if (event.data.type === 'auth-error') {
-          cleanup();
-          reject(new Error(event.data.error || 'Authentication failed'));
-        }
-      };
+        };
 
-      // Handle popup closure
-      const checkClosed = setInterval(() => {
-        if (!popup || popup.closed) {
-          cleanup();
-          reject(new Error('Sign in cancelled'));
-        }
-      }, 1000);
-
-      // Set a timeout for the entire operation
-      const timeout = setTimeout(() => {
-        cleanup();
-        reject(new Error('Sign in timed out'));
-      }, 5 * 60 * 1000); // 5 minutes timeout
-
-      // Cleanup function
-      const cleanup = () => {
-        clearInterval(checkClosed);
-        clearTimeout(timeout);
-        window.removeEventListener('message', handleMessage);
-        if (popup && !popup.closed) {
+        window.addEventListener('message', handleMessage);
+        
+        // Set timeout for auth flow
+        authTimeout = setTimeout(() => {
+          window.removeEventListener('message', handleMessage);
           popup.close();
-        }
-      };
-
-      window.addEventListener('message', handleMessage);
-
-      // Clean up on window unload
-      window.addEventListener('unload', cleanup);
-    });
+          reject(new Error('Authentication timed out. Please try again.'));
+        }, 60000); // 1 minute timeout
+      });
+    } catch (error) {
+      console.error('Sign in error:', error);
+      throw error;
+    }
   }
 
   async handleAuthCode(code: string): Promise<GoogleTokens> {
