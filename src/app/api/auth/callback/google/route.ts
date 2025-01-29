@@ -5,7 +5,7 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const code = searchParams.get('code');
   const headersList = headers();
-  const origin = headersList.get('origin') || process.env.NEXTAUTH_URL;
+  const origin = headersList.get('origin') || process.env.NEXTAUTH_URL || '';
 
   if (!code) {
     return NextResponse.json({ error: 'No code provided' }, { status: 400 });
@@ -56,18 +56,15 @@ export async function GET(request: Request) {
       </html>
     `;
 
-    const response = new NextResponse(html, {
+    return new NextResponse(html, {
       headers: {
         'Content-Type': 'text/html',
-        // Allow cross-origin communication
         'Cross-Origin-Opener-Policy': 'unsafe-none',
-        'Access-Control-Allow-Origin': origin || '*',
+        'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Methods': 'GET, OPTIONS',
         'Access-Control-Allow-Headers': 'Content-Type, Authorization'
       },
     });
-
-    return response;
   } catch (error) {
     console.error('Error in callback:', error);
     return NextResponse.json({ error: 'Failed to process callback' }, { status: 500 });
