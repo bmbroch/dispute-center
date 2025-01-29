@@ -103,12 +103,12 @@ export default function Home() {
             </div>
             <div className="flex-1">
               <div className="flex items-center justify-between">
-                <p className="text-gray-900 font-medium">Connect Gmail Account</p>
+                <div className="text-gray-900 font-medium">Connect Gmail Account</div>
                 {user && (
-                  <span className="text-sm text-blue-500 font-medium">{user.email}</span>
+                  <div className="text-sm text-blue-500 font-medium">{user.email}</div>
                 )}
               </div>
-              <p className="text-sm text-gray-500 mb-2">Enable email automation for dispute responses</p>
+              <div className="text-sm text-gray-500 mb-2">Enable email automation for dispute responses</div>
               {!user && (
                 <button 
                   onClick={handleSignIn}
@@ -124,25 +124,34 @@ export default function Home() {
           <div className="flex items-start gap-3">
             <div className="mt-1 flex-shrink-0">
               <div className={`w-8 h-8 rounded-full ${hasStripeKey ? 'bg-[#635BFF]' : 'bg-gray-200'} flex items-center justify-center p-1.5`}>
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="w-full h-full">
-                  <path d="M13.976 9.15c-2.172-.806-3.396-1.38-3.396-2.418 0-.836.918-1.415 2.322-1.415 2.691 0 5.473 1.025 7.2 1.834V2.17C18.151 1.206 15.315.6 12.674.6 7.82.6 4.588 3.13 4.588 7.262c0 4.068 3.73 5.643 6.933 6.754 2.855.935 3.83 1.576 3.83 2.594 0 1.002-.987 1.673-2.611 1.673-2.172 0-5.514-1.025-7.844-2.049v5.124c2.467 1.09 5.449 1.642 7.844 1.642 5.017 0 8.249-2.497 8.249-6.673 0-4.132-3.462-5.55-7.013-6.754z" fill={hasStripeKey ? '#ffffff' : '#9CA3AF'}/>
-                </svg>
+                {isLoading ? (
+                  <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" />
+                ) : (
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="w-full h-full">
+                    <path d="M13.976 9.15c-2.172-.806-3.396-1.38-3.396-2.418 0-.836.918-1.415 2.322-1.415 2.691 0 5.473 1.025 7.2 1.834V2.17C18.151 1.206 15.315.6 12.674.6 7.82.6 4.588 3.13 4.588 7.262c0 4.068 3.73 5.643 6.933 6.754 2.855.935 3.83 1.576 3.83 2.594 0 1.002-.987 1.673-2.611 1.673-2.172 0-5.514-1.025-7.844-2.049v5.124c2.467 1.09 5.449 1.642 7.844 1.642 5.017 0 8.249-2.497 8.249-6.673 0-4.132-3.462-5.55-7.013-6.754z" fill={hasStripeKey ? '#ffffff' : '#9CA3AF'}/>
+                  </svg>
+                )}
               </div>
             </div>
             <div className="flex-1">
               <div className="flex items-center justify-between">
-                <p className="text-gray-900 font-medium">Connect Stripe Account</p>
+                <div className="text-gray-900 font-medium">Connect Stripe Account</div>
                 {hasStripeKey && (
-                  <span className="text-sm text-[#635BFF] font-medium">•••• 4242</span>
+                  <div className="text-sm text-[#635BFF] font-medium">•••• 4242</div>
+                )}
+                {isLoading && (
+                  <div className="text-sm text-gray-500">Checking connection...</div>
                 )}
               </div>
-              <p className="text-gray-600 mb-2">
-                {hasStripeKey 
-                  ? 'Your Stripe account is connected and ready to use'
-                  : 'Add your Stripe API key to manage subscriptions and disputes'
+              <div className="text-gray-600 mb-2">
+                {isLoading 
+                  ? 'Verifying your Stripe connection...'
+                  : hasStripeKey 
+                    ? 'Your Stripe account is connected and ready to use'
+                    : 'Add your Stripe API key to manage subscriptions and disputes'
                 }
-              </p>
-              {user && !hasStripeKey && (
+              </div>
+              {user && !hasStripeKey && !isLoading && (
                 <button 
                   onClick={() => setShowStripeKeyInput(true)}
                   className="text-sm text-[#635BFF] hover:text-[#635BFF]/80 font-medium flex items-center gap-1"
@@ -182,7 +191,7 @@ export default function Home() {
                   animate={{ opacity: 1, y: 0 }} 
                 >
                   <h2 className="text-3xl font-bold mb-2 text-gray-800">Quick Setup</h2>
-                  <p className="text-gray-600">Connect your accounts to get started.</p>
+                  <div className="text-gray-600">Connect your accounts to get started.</div>
                 </motion.div>
               </div>
 
@@ -207,7 +216,32 @@ export default function Home() {
                 title="Dispute Resolution"
                 description="Handle customer disputes efficiently with AI-powered responses"
                 icon={MessageSquare}
-                stats={isLoading ? "Loading..." : `${activeDisputes || 0} active disputes • ${responseDrafts || 0} response drafts ready`}
+                stats={
+                  <div className="flex items-center gap-2">
+                    {isLoading ? (
+                      <>
+                        <div className="animate-spin rounded-full h-4 w-4 border-2 border-blue-600 border-t-transparent" />
+                        <div>Loading metrics...</div>
+                      </>
+                    ) : (
+                      <>
+                        <div>{activeDisputes || 0} active disputes</div>
+                        <div className="text-gray-400">•</div>
+                        {disputeCount > 0 ? (
+                          <div className="flex items-center gap-1 text-amber-600 font-medium">
+                            <div className="relative flex h-2 w-2">
+                              <div className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
+                              <div className="relative inline-flex rounded-full h-2 w-2 bg-amber-500" />
+                            </div>
+                            <div>{disputeCount} need attention</div>
+                          </div>
+                        ) : (
+                          <div className="text-gray-600">0 need attention</div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                }
                 href={user ? "/dispute" : undefined}
                 buttonText={user ? "Review Disputes" : "Get Started"}
                 onClick={!user ? handleSignIn : undefined}
@@ -223,7 +257,7 @@ export default function Home() {
                 title="Email Templates"
                 description="Create and manage professional email templates for every scenario"
                 icon={Video}
-                stats="15+ templates available"
+                stats={<div>15+ templates available</div>}
                 href={user ? "/templates" : undefined}
                 buttonText="Browse Templates"
                 onClick={!user ? handleSignIn : undefined}
@@ -239,7 +273,7 @@ export default function Home() {
                 title="Response Generator"
                 description="AI-powered response generation for common customer inquiries"
                 icon={FileText}
-                stats="Generate unlimited responses"
+                stats={<div>Generate unlimited responses</div>}
                 href={user ? "/responses" : undefined}
                 buttonText="Start Writing"
                 onClick={!user ? handleSignIn : undefined}
@@ -255,7 +289,7 @@ export default function Home() {
                 title="Knowledge Center"
                 description="AI-generated articles and resources for customer communication"
                 icon={Book}
-                stats="Access comprehensive knowledge base"
+                stats={<div>Access comprehensive knowledge base</div>}
                 href={user ? "/knowledge" : undefined}
                 buttonText="Explore Articles"
                 onClick={!user ? handleSignIn : undefined}

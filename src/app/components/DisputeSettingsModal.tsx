@@ -5,6 +5,7 @@ import { Dialog, Transition } from '@headlessui/react';
 import { useAuth } from '@/lib/hooks/useAuth';
 import { toast } from 'react-hot-toast';
 import { Editor } from '@tinymce/tinymce-react';
+import { TINYMCE_CONFIG } from '@/lib/config/tinymce';
 
 interface DisputeSettingsModalProps {
   isOpen: boolean;
@@ -46,29 +47,53 @@ const DEFAULT_TEMPLATES: EmailTemplate[] = [
 
 export default function DisputeSettingsModal({ isOpen, onClose, onUpdate }: DisputeSettingsModalProps) {
   const { user } = useAuth();
-  const [templates, setTemplates] = useState<EmailTemplate[]>(DEFAULT_TEMPLATES);
-  const [isLoading, setIsLoading] = useState(true);
+  const [templates, setTemplates] = useState<EmailTemplate[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [selectedTemplate, setSelectedTemplate] = useState<EmailTemplate | null>(null);
   const [editedTemplate, setEditedTemplate] = useState<EmailTemplate | null>(null);
 
   const fetchTemplates = useCallback(async () => {
+    if (!user?.email) return;
+
     try {
       setIsLoading(true);
       const response = await fetch('/api/settings/email-templates', {
         headers: {
-          'X-User-Email': user?.email || ''
+          'X-User-Email': user.email,
         }
       });
-      if (!response.ok) {
-        throw new Error('Failed to fetch templates');
-      }
       const data = await response.json();
-      setTemplates(data || DEFAULT_TEMPLATES);
+      
+      // Set templates, falling back to defaults if none found
+      const templatesData = (data && data.length > 0) ? data : DEFAULT_TEMPLATES;
+      setTemplates(templatesData);
+
+      // Get template index from URL and select the appropriate template
+      const urlParams = new URLSearchParams(window.location.search);
+      const templateIndex = urlParams.get('template');
+      
+      if (templateIndex !== null) {
+        const template = templatesData[parseInt(templateIndex)];
+        if (template) {
+          setSelectedTemplate(template);
+          setEditedTemplate(template);
+        } else {
+          // Fallback to first template if index is invalid
+          setSelectedTemplate(templatesData[0]);
+          setEditedTemplate(templatesData[0]);
+        }
+      } else {
+        // Default to first template if no index in URL
+        setSelectedTemplate(templatesData[0]);
+        setEditedTemplate(templatesData[0]);
+      }
     } catch (error) {
-      console.error('Error fetching templates:', error);
-      toast.error('Failed to load email templates');
+      console.error('Failed to fetch templates:', error);
       setTemplates(DEFAULT_TEMPLATES);
+      // Select first template as fallback
+      setSelectedTemplate(DEFAULT_TEMPLATES[0]);
+      setEditedTemplate(DEFAULT_TEMPLATES[0]);
     } finally {
       setIsLoading(false);
     }
@@ -257,18 +282,8 @@ export default function DisputeSettingsModal({ isOpen, onClose, onUpdate }: Disp
                                       });
                                     }}
                                     init={{
+                                      ...TINYMCE_CONFIG,
                                       height: 400,
-                                      menubar: false,
-                                      plugins: [
-                                        'advlist', 'autolink', 'lists', 'link', 'image', 'charmap', 'preview',
-                                        'anchor', 'searchreplace', 'visualblocks', 'code', 'fullscreen',
-                                        'insertdatetime', 'media', 'table', 'code', 'help', 'wordcount'
-                                      ],
-                                      toolbar: 'undo redo | blocks | ' +
-                                        'bold italic forecolor | alignleft aligncenter ' +
-                                        'alignright alignjustify | bullist numlist outdent indent | ' +
-                                        'removeformat | help',
-                                      content_style: 'body { font-family:Helvetica,Arial,sans-serif; font-size:14px }'
                                     }}
                                   />
                                 </div>

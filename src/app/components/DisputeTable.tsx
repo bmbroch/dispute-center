@@ -62,7 +62,9 @@ const getTimeAgo = (date: string) => {
 
 const DisputeTable: React.FC<DisputeTableProps> = ({ onDisputeCountChange }) => {
   const [disputes, setDisputes] = useState<DisputeWithMeta[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [lastFetchTime, setLastFetchTime] = useState<number>(0);
   const [selectedDispute, setSelectedDispute] = useState<DisputeWithMeta | null>(null);
   const [expandedDisputes, setExpandedDisputes] = useState<string[]>([]);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -70,25 +72,69 @@ const DisputeTable: React.FC<DisputeTableProps> = ({ onDisputeCountChange }) => 
   const { user } = useAuth();
   
   const fetchDisputes = useCallback(async () => {
-    if (!user?.email) return;
-    
+    if (!user) return;
+
     try {
+      setIsLoading(true);
       const response = await fetch(`/api/stripe/disputes?userEmail=${encodeURIComponent(user.email)}`);
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to fetch disputes');
-      }
+      if (!response.ok) throw new Error('Failed to fetch disputes');
       
-      const { data } = await response.json();
-      setDisputes(data);
-      onDisputeCountChange(data.length);
-    } catch (error) {
-      console.error('Error fetching disputes:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to fetch disputes');
+      const data = await response.json();
+      const disputesData = data.data || [];
+
+      // Fetch email history for each dispute
+      const disputesWithEmails = await Promise.all(
+        disputesData.map(async (dispute: DisputeWithMeta) => {
+          if (!dispute.customerEmail) return dispute;
+
+          try {
+            const emailResponse = await fetch('/api/gmail', {
+              headers: {
+                'Authorization': `Bearer ${user.accessToken}`,
+                'X-Dispute-Email': dispute.customerEmail
+              }
+            });
+
+            if (emailResponse.ok) {
+              const emailData = await emailResponse.json();
+              return {
+                ...dispute,
+                emailThreads: emailData.threads || []
+              };
+            }
+          } catch (err) {
+            // Only log non-chrome-extension errors
+            if (!err.toString().includes('chrome-extension://')) {
+              console.error(`Error fetching emails for ${dispute.customerEmail}:`, err);
+            }
+          }
+          return dispute;
+        })
+      );
+
+      setDisputes(disputesWithEmails);
+      
+      // Calculate number of disputes needing attention
+      const disputesNeedingAttention = disputesWithEmails.filter(dispute => {
+        const lastEmail = getLastEmailInfo(dispute);
+        // Return true if either:
+        // 1. No email threads exist (no contact)
+        // 2. Last email was from customer (needs response)
+        return !lastEmail || lastEmail.isFromCustomer;
+      }).length;
+      
+      onDisputeCountChange(disputesNeedingAttention);
+      setLastFetchTime(Date.now());
+    } catch (err) {
+      // Only set error state for non-chrome-extension errors
+      if (!err.toString().includes('chrome-extension://')) {
+        setError(err instanceof Error ? err.message : 'An error occurred');
+        console.error('Error fetching disputes:', err);
+      }
     } finally {
-      setLoading(false);
+      setIsLoading(false);
     }
-  }, [user?.email, onDisputeCountChange]);
+  }, [user, onDisputeCountChange]);
   
   useEffect(() => {
     fetchDisputes();
@@ -105,15 +151,62 @@ const DisputeTable: React.FC<DisputeTableProps> = ({ onDisputeCountChange }) => 
     });
   }, [disputes]);
   
-  if (loading) {
+  const getLastEmailInfo = (dispute: DisputeWithMeta) => {
+    if (!dispute.emailThreads || dispute.emailThreads.length === 0) {
+      return null;
+    }
+
+    // Get the most recent thread
+    const latestThread = dispute.emailThreads[0]; // Threads are already sorted by date
+    if (!latestThread.messages || latestThread.messages.length === 0) {
+      return null;
+    }
+
+    // Get the last message from the thread
+    const lastMessage = latestThread.messages[latestThread.messages.length - 1];
+    const isFromCustomer = lastMessage.from.toLowerCase().includes(dispute.customerEmail?.toLowerCase() || '');
+
+    return {
+      time: lastMessage.date,
+      subject: lastMessage.subject,
+      isFromCustomer,
+      from: lastMessage.from
+    };
+  };
+
+  const handleTemplateEmail = (dispute: DisputeWithMeta, templateIndex: number = 0) => {
+    setShowNewEmail(dispute.id);
+    // Pass the template index through URL state
+    const url = new URL(window.location.href);
+    url.searchParams.set('template', templateIndex.toString());
+    window.history.replaceState({}, '', url.toString());
+  };
+
+  if (isLoading) {
     return <div>Loading disputes...</div>;
   }
   
   return (
     <div className="container mx-auto px-4 py-8">
+      {error && !error.includes('chrome-extension') && (
+        <div className="mb-4 p-4 bg-amber-50 border border-amber-200 rounded-lg">
+          <div className="flex items-center">
+            <svg className="h-5 w-5 text-amber-400 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <span className="text-amber-800">{error}</span>
+          </div>
+        </div>
+      )}
       <div className="flex justify-end mb-4">
         <button
-          onClick={() => setIsSettingsOpen(true)}
+          onClick={() => {
+            setIsSettingsOpen(true);
+            // Set template index to 0 (First Response) when opening settings
+            const url = new URL(window.location.href);
+            url.searchParams.set('template', '0');
+            window.history.replaceState({}, '', url.toString());
+          }}
           className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-gray-600 hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500"
         >
           <svg className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -180,35 +273,63 @@ const DisputeTable: React.FC<DisputeTableProps> = ({ onDisputeCountChange }) => 
                     {dispute.dueDate ? new Date(dispute.dueDate).toLocaleDateString() : 'N/A'}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
-                    {dispute.lastEmailTime ? (
-                      <div>
-                        <div className="text-sm text-gray-900 flex items-center">
-                          {dispute.lastEmailFromCustomer ? (
-                            <svg className="h-4 w-4 text-orange-500 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    {(() => {
+                      const lastEmail = getLastEmailInfo(dispute);
+                      if (lastEmail) {
+                        return (
+                          <div className="flex items-center">
+                            {lastEmail.isFromCustomer ? (
+                              <div className="flex items-center bg-blue-50 border border-blue-200 rounded-full px-3 py-1">
+                                <svg className="h-5 w-5 text-blue-500 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                                </svg>
+                                <div>
+                                  <div className="text-sm font-medium text-blue-800">
+                                    {getTimeAgo(lastEmail.time)}
+                                  </div>
+                                  <div className="text-xs text-blue-600">
+                                    Awaiting Response
+                                  </div>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="flex items-center text-gray-500">
+                                <svg className="h-4 w-4 text-gray-400 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                                </svg>
+                                <div>
+                                  <div className="text-sm">
+                                    {getTimeAgo(lastEmail.time)}
+                                  </div>
+                                  <div className="text-xs">
+                                    From You
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      } else {
+                        return (
+                          <button
+                            onClick={() => handleTemplateEmail(dispute, 0)}
+                            className="flex items-center bg-blue-50 border border-blue-200 rounded-full px-3 py-1.5 hover:bg-blue-100 transition-colors group"
+                          >
+                            <svg className="h-5 w-5 text-blue-500 mr-2 group-hover:scale-110 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
                             </svg>
-                          ) : (
-                            <svg className="h-4 w-4 text-blue-500 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-                            </svg>
-                          )}
-                          {getTimeAgo(dispute.lastEmailTime)}
-                        </div>
-                        <div className="text-sm text-gray-500 truncate max-w-xs">
-                          {dispute.lastEmailSubject}
-                        </div>
-                        <div className="text-xs text-gray-500">
-                          {dispute.lastEmailFromCustomer ? 'From Customer' : 'From You'}
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="text-sm text-gray-500 flex items-center">
-                        <svg className="h-4 w-4 text-gray-400 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
-                        </svg>
-                        No emails yet
-                      </div>
-                    )}
+                            <div>
+                              <div className="text-sm font-medium text-blue-800">
+                                No Contact
+                              </div>
+                              <div className="text-xs text-blue-600">
+                                Send First Response
+                              </div>
+                            </div>
+                          </button>
+                        );
+                      }
+                    })()}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                     <div className="flex items-center space-x-4">
@@ -243,12 +364,23 @@ const DisputeTable: React.FC<DisputeTableProps> = ({ onDisputeCountChange }) => 
                       {showNewEmail === dispute.id ? (
                         <EmailComposer
                           customerEmail={dispute.customerEmail || ''}
-                          onClose={() => setShowNewEmail(null)}
+                          onClose={() => {
+                            setShowNewEmail(null);
+                            // Clear template param when closing
+                            const url = new URL(window.location.href);
+                            url.searchParams.delete('template');
+                            window.history.replaceState({}, '', url.toString());
+                          }}
                           onEmailSent={() => {
                             setShowNewEmail(null);
                             fetchDisputes();
+                            // Clear template param after sending
+                            const url = new URL(window.location.href);
+                            url.searchParams.delete('template');
+                            window.history.replaceState({}, '', url.toString());
                           }}
                           threads={dispute.emailThreads || []}
+                          initialTemplate={new URLSearchParams(window.location.search).get('template')}
                         />
                       ) : (
                         <EmailCorrespondence

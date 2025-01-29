@@ -58,10 +58,10 @@ interface EmailTemplate {
 interface EmailComposerProps {
   customerEmail: string;
   onClose: () => void;
-  onEmailSent?: () => void;
-  replyToMessage?: EmailMessage | null;
-  threads: EmailThread[];
-  initialTemplate?: EmailTemplate;
+  onEmailSent: () => void;
+  replyToMessage?: EmailMessage;
+  threads?: EmailThread[];
+  initialTemplate?: string | null;
 }
 
 export default function EmailComposer({ 
@@ -108,7 +108,8 @@ export default function EmailComposer({
 
         // Initialize with initialTemplate if provided, otherwise use first template
         if (!hasInitializedRef.current && !replyToMessage && customerEmail) {
-          const templateToUse = initialTemplate || templatesData[0];
+          const templateIndex = initialTemplate ? parseInt(initialTemplate) : 0;
+          const templateToUse = templatesData[templateIndex] || templatesData[0];
           setSelectedTemplate(templateToUse);
           setSubject(templateToUse.subject);
           
@@ -118,7 +119,6 @@ export default function EmailComposer({
           const processedBody = templateToUse.body.replace(/\{\{firstName\}\}/g, formattedFirstName);
           setContent(processedBody);
           
-          // Also update the editor content if it exists
           if (editorRef.current) {
             editorRef.current.setContent(processedBody);
           }
@@ -128,11 +128,12 @@ export default function EmailComposer({
       } catch (error) {
         console.error('Failed to fetch templates:', error);
         // Fall back to default templates or initialTemplate
-        const templatesData = initialTemplate ? [initialTemplate, ...DEFAULT_TEMPLATES] : DEFAULT_TEMPLATES;
+        const templatesData = DEFAULT_TEMPLATES;
         setTemplates(templatesData);
         
         if (!hasInitializedRef.current && !replyToMessage && customerEmail) {
-          const templateToUse = initialTemplate || templatesData[0];
+          const templateIndex = initialTemplate ? parseInt(initialTemplate) : 0;
+          const templateToUse = templatesData[templateIndex] || templatesData[0];
           setSelectedTemplate(templateToUse);
           setSubject(templateToUse.subject);
           

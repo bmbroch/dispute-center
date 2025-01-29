@@ -1,3 +1,5 @@
+'use client';
+
 import { LucideIcon } from 'lucide-react';
 import Link from 'next/link';
 
@@ -5,7 +7,7 @@ interface FeatureCardProps {
   title: string;
   description: string;
   icon: LucideIcon;
-  stats?: string;
+  stats?: React.ReactNode;
   href?: string;
   buttonText: string;
   onClick?: () => void;
@@ -32,9 +34,9 @@ export function FeatureCard({
       {/* Content */}
       <div className="flex-1">
         <h3 className="text-lg font-semibold text-gray-900 mb-2">{title}</h3>
-        <p className="text-gray-600 mb-4">{description}</p>
+        <div className="text-gray-600 mb-4">{description}</div>
         {stats && (
-          <p className="text-sm text-gray-500 mb-4">{stats}</p>
+          <div className="text-sm text-gray-500 mb-4">{stats}</div>
         )}
       </div>
 
