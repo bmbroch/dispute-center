@@ -1,5 +1,5 @@
-import { validateBuild } from '../src/lib/utils/validateBuild';
-import { execSync } from 'child_process';
+const { validateBuild } = require('../src/lib/utils/validateBuild');
+const { execSync } = require('child_process');
 
 async function prebuild() {
   try {

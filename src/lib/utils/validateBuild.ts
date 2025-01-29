@@ -1,4 +1,4 @@
-import { execSync } from 'child_process';
+const { execSync } = require('child_process');
 
 // Add required environment variables here
 const REQUIRED_ENV_VARS = [
@@ -65,7 +65,7 @@ function cleanBuildDir() {
   }
 }
 
-export async function validateBuild() {
+async function validateBuild() {
   console.log('🔍 Running pre-build validation...');
   
   try {
@@ -90,4 +90,6 @@ export async function validateBuild() {
     }
     process.exit(1);
   }
-} 
+}
+
+module.exports = { validateBuild }; 
