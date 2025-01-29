@@ -1,4 +1,4 @@
-const { validateBuild } = require('../src/lib/utils/validateBuild');
+import { validateBuild } from '../src/lib/utils/validateBuild';
 
 async function prebuild() {
   try {

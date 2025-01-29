@@ -1,3 +1,4 @@
+import { ExecSyncOptionsWithStringEncoding } from 'child_process';
 const { execSync } = require('child_process');
 
 // Add required environment variables here
@@ -87,7 +88,11 @@ function cleanBuildDir(): ValidationError[] {
 function runTypeCheck(): ValidationError[] {
   const errors: ValidationError[] = [];
   try {
-    execSync('tsc --noEmit', { stdio: 'pipe' });
+    const options: ExecSyncOptionsWithStringEncoding = {
+      stdio: 'pipe',
+      encoding: 'utf-8'
+    };
+    execSync('tsc --noEmit', options);
   } catch (error) {
     if (error instanceof Error && 'stdout' in error) {
       errors.push({
@@ -107,7 +112,11 @@ function runTypeCheck(): ValidationError[] {
 function runLintCheck(): ValidationError[] {
   const errors: ValidationError[] = [];
   try {
-    execSync('next lint', { stdio: 'pipe' });
+    const options: ExecSyncOptionsWithStringEncoding = {
+      stdio: 'pipe',
+      encoding: 'utf-8'
+    };
+    execSync('next lint', options);
   } catch (error) {
     if (error instanceof Error && 'stdout' in error) {
       errors.push({
@@ -124,7 +133,7 @@ function runLintCheck(): ValidationError[] {
   return errors;
 }
 
-async function validateBuild() {
+export async function validateBuild(): Promise<void> {
   console.log('🔍 Running complete build validation...\n');
   const allErrors: ValidationError[] = [];
   
@@ -172,6 +181,4 @@ async function validateBuild() {
   }
 
   console.log('✅ All build validation checks passed!\n');
-}
-
-module.exports = { validateBuild }; 
+} 
