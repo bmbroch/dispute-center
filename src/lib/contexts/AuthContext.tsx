@@ -3,6 +3,9 @@
 import React, { createContext, useEffect, useState, useCallback } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { googleAuthService } from '../services/googleAuth';
+import { auth, googleProvider } from '../firebase/firebase';
+import { signInWithPopup, signOut, onAuthStateChanged, User } from 'firebase/auth';
+import { toast } from 'react-hot-toast';
 
 interface User {
   email: string | null;
@@ -15,6 +18,7 @@ interface User {
 interface AuthContextType {
   user: User | null;
   loading: boolean;
+  error: string | null;
   signIn: () => Promise<void>;
   signOut: () => Promise<void>;
   refreshAccessToken: () => Promise<string | null>;
@@ -23,6 +27,7 @@ interface AuthContextType {
 export const AuthContext = createContext<AuthContextType>({
   user: null,
   loading: true,
+  error: null,
   signIn: async () => {},
   signOut: async () => {},
   refreshAccessToken: async () => null,
@@ -33,6 +38,7 @@ const PUBLIC_PATHS = ['/', '/auth', '/login'];
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const router = useRouter();
   const pathname = usePathname();
 
@@ -91,6 +97,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signIn = async () => {
     try {
+      setLoading(true);
+      setError(null);
       const { tokens, userInfo } = await googleAuthService.signInWithPopup();
       
       // Save auth state
@@ -104,32 +112,51 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         refreshToken: tokens.refresh_token || null,
       });
 
-      // Navigation will be handled by the effect
-    } catch (error) {
-      console.error('Error signing in:', error);
-      // Don't throw error for user cancellation
-      if ((error as Error).message === 'Sign in cancelled') {
-        return;
+      toast.success('Successfully signed in!');
+    } catch (err) {
+      console.error('Sign in error:', err);
+      let errorMessage = 'Failed to sign in with Google';
+      
+      // Handle specific error cases
+      if (err instanceof Error) {
+        if (err.message.includes('popup')) {
+          errorMessage = 'Popup was blocked. Please allow popups and try again.';
+        } else if (err.message.includes('cross-origin')) {
+          errorMessage = 'Authentication failed due to a security restriction. Please try again.';
+        } else if (err.message.includes('cancelled')) {
+          errorMessage = 'Sign in was cancelled. Please try again.';
+        } else if (err.message.includes('network')) {
+          errorMessage = 'Network error. Please check your connection and try again.';
+        }
       }
-      // For other errors, show them to the user
-      throw error;
+      
+      setError(errorMessage);
+      toast.error(errorMessage);
+    } finally {
+      setLoading(false);
     }
   };
 
   const handleSignOut = async () => {
     try {
-      googleAuthService.clearTokens();
+      setLoading(true);
+      await googleAuthService.clearTokens();
       localStorage.removeItem('auth_tokens');
       setUser(null);
-      // Navigation will be handled by the effect
-    } catch (error) {
-      console.error('Error signing out:', error);
-      throw error;
+      toast.success('Successfully signed out');
+    } catch (err) {
+      console.error('Sign out error:', err);
+      const errorMessage = err instanceof Error ? err.message : 'Failed to sign out';
+      setError(errorMessage);
+      toast.error(errorMessage);
+    } finally {
+      setLoading(false);
     }
   };
 
   const refreshAccessToken = async (): Promise<string | null> => {
     try {
+      setLoading(true);
       const tokens = await googleAuthService.refreshTokens();
       if (user) {
         const newUser = {
@@ -140,16 +167,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         localStorage.setItem('auth_tokens', JSON.stringify(tokens));
       }
       return tokens.access_token;
-    } catch (error) {
-      console.error('Error refreshing token:', error);
+    } catch (err) {
+      console.error('Error refreshing token:', err);
+      const errorMessage = err instanceof Error ? err.message : 'Failed to refresh token';
+      setError(errorMessage);
+      toast.error(errorMessage);
       return null;
+    } finally {
+      setLoading(false);
     }
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, signIn, signOut: handleSignOut, refreshAccessToken }}>
+    <AuthContext.Provider value={{ user, loading, error, signIn, signOut: handleSignOut, refreshAccessToken }}>
       {children}
     </AuthContext.Provider>
   );
 }
+
+export const useAuth = () => {
+  const context = React.useContext(AuthContext);
+  if (context === undefined) {
+    throw new Error('useAuth must be used within an AuthProvider');
+  }
+  return context;
+};
 
