@@ -200,7 +200,7 @@ export default function EmailComposer({
     if (!immediateParent) return '';
 
     // Clean the content while preserving important HTML formatting
-    const cleanContent = immediateParent.content
+    const cleanContent = immediateParent.body
       // Remove any existing quotes to prevent nesting
       .replace(/<div[^>]*class="gmail_quote"[^>]*>[\s\S]*?<\/div>/gi, '')
       .replace(/<div[^>]*>On [^<]*wrote:<\/div>/gi, '')
