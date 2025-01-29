@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "next dev -p 3002",
-    "prebuild": "node --loader ts-node/esm scripts/prebuild.ts",
+    "prebuild": "ts-node --project tsconfig.build.json scripts/prebuild.ts",
     "build": "next build",
     "start": "next start -p 3002",
     "lint": "next lint",

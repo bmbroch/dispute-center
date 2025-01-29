@@ -1,4 +1,4 @@
-import { validateBuild } from '../src/lib/utils/validateBuild.js';
+import { validateBuild } from '../src/lib/utils/validateBuild';
 import { execSync } from 'child_process';
 
 async function prebuild() {
@@ -19,6 +19,9 @@ async function prebuild() {
     console.log('\n✅ All pre-build checks passed! Proceeding with build...\n');
   } catch (error) {
     console.error('\n❌ Pre-build checks failed');
+    if (error instanceof Error) {
+      console.error(error.message);
+    }
     process.exit(1);
   }
 }

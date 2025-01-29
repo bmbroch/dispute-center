@@ -15,29 +15,43 @@ const REQUIRED_ENV_VARS = [
 const MIN_NODE_VERSION = '18.17.0';
 
 function checkNodeVersion() {
-  const currentVersion = process.version;
-  const current = currentVersion.slice(1); // Remove the 'v' prefix
-  
-  const currentParts = current.split('.').map(Number);
-  const minParts = MIN_NODE_VERSION.split('.').map(Number);
-  
-  for (let i = 0; i < 3; i++) {
-    if (currentParts[i] > minParts[i]) break;
-    if (currentParts[i] < minParts[i]) {
-      throw new Error(`Node.js version ${MIN_NODE_VERSION} or higher is required. Current version: ${currentVersion}`);
+  try {
+    const currentVersion = process.version;
+    const current = currentVersion.slice(1); // Remove the 'v' prefix
+    
+    const currentParts = current.split('.').map(Number);
+    const minParts = MIN_NODE_VERSION.split('.').map(Number);
+    
+    for (let i = 0; i < 3; i++) {
+      if (currentParts[i] > minParts[i]) break;
+      if (currentParts[i] < minParts[i]) {
+        throw new Error(`Node.js version ${MIN_NODE_VERSION} or higher is required. Current version: ${currentVersion}`);
+      }
     }
+  } catch (error) {
+    if (error instanceof Error) {
+      throw new Error(`Node.js version check failed: ${error.message}`);
+    }
+    throw error;
   }
 }
 
 function checkEnvVars() {
-  const missingVars = REQUIRED_ENV_VARS.filter(
-    (envVar) => !process.env[envVar]
-  );
-
-  if (missingVars.length > 0) {
-    throw new Error(
-      `Missing required environment variables:\n${missingVars.join('\n')}`
+  try {
+    const missingVars = REQUIRED_ENV_VARS.filter(
+      (envVar) => !process.env[envVar]
     );
+
+    if (missingVars.length > 0) {
+      throw new Error(
+        `Missing required environment variables:\n${missingVars.join('\n')}`
+      );
+    }
+  } catch (error) {
+    if (error instanceof Error) {
+      throw new Error(`Environment variables check failed: ${error.message}`);
+    }
+    throw error;
   }
 }
 
@@ -47,7 +61,7 @@ function cleanBuildDir() {
     execSync('rm -rf .next');
     console.log('✓ Cleaned build directory');
   } catch (error) {
-    console.warn('Warning: Could not clean build directory', error);
+    console.warn('Warning: Could not clean build directory', error instanceof Error ? error.message : error);
   }
 }
 
@@ -69,7 +83,11 @@ export async function validateBuild() {
     console.log('✅ Pre-build validation passed!');
   } catch (error) {
     console.error('\n❌ Pre-build validation failed:');
-    console.error(error.message);
+    if (error instanceof Error) {
+      console.error(error.message);
+    } else {
+      console.error('An unknown error occurred during validation');
+    }
     process.exit(1);
   }
 } 
