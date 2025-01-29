@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import EmailComposer from './EmailComposer';
 import { useAuth } from '@/lib/hooks/useAuth';
 
@@ -19,6 +19,17 @@ export interface EmailMessage {
   references: string;
   inReplyTo: string;
   messageId: string;
+  attachments?: Array<{
+    id: string;
+    mimeType: string;
+    filename: string;
+    contentId: string;
+    size: number;
+    data?: string;
+    isInline?: boolean;
+    partId?: string;
+    contentLocation?: string;
+  }>;
 }
 
 export interface EmailThread {
@@ -31,6 +42,8 @@ interface EmailCorrespondenceProps {
   customerEmail: string;
   disputeId: string;
   onEmailSent?: () => void;
+  initialThreads?: EmailThread[];
+  showEmailHistory?: boolean;
 }
 
 // Add a helper function to decode HTML entities
@@ -43,26 +56,94 @@ const decodeHtmlEntities = (text: string) => {
 export default function EmailCorrespondence({ 
   customerEmail, 
   disputeId,
-  onEmailSent
+  onEmailSent,
+  initialThreads = [],
+  showEmailHistory = false
 }: EmailCorrespondenceProps) {
-  const { user, refreshAccessToken } = useAuth();
-  const [threads, setThreads] = useState<EmailThread[]>([]);
-  const [expandedThreads, setExpandedThreads] = useState<string[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [replyToMessage, setReplyToMessage] = useState<EmailMessage | null>(null);
+  const { user } = useAuth();
+  const [threads, setThreads] = useState<EmailThread[]>(initialThreads);
+  const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<{ message: string; details?: string } | null>(null);
+  const [replyToMessage, setReplyToMessage] = useState<EmailMessage | null>(null);
+  const [expandedThreads, setExpandedThreads] = useState<string[]>([]);
+  const [processedContent, setProcessedContent] = useState<Record<string, string>>({});
 
-  const fetchEmails = useCallback(async () => {
-    if (!user?.accessToken || !customerEmail) {
-      setError({
-        message: 'Authentication Required',
-        details: !user?.accessToken 
-          ? 'Please sign in to view emails'
-          : 'Customer email is required'
-      });
-      setIsLoading(false);
-      return;
+  // Memoize threads to prevent unnecessary re-renders
+  const sortedThreads = useMemo(() => {
+    return [...threads].sort((a, b) => {
+      const aDate = new Date(a.messages[a.messages.length - 1].date);
+      const bDate = new Date(b.messages[b.messages.length - 1].date);
+      return bDate.getTime() - aDate.getTime();
+    });
+  }, [threads]);
+
+  // Enhanced content processing to handle images
+  const processEmailContent = useCallback((message: EmailMessage) => {
+    if (processedContent[message.id]) {
+      return processedContent[message.id];
     }
+
+    const isHtml = message.contentType.includes('html');
+    let content = message.body || message.snippet || '';
+
+    if (!content.trim()) {
+      return '<div class="text-gray-500 italic">No content available</div>';
+    }
+
+    // Process inline images if they exist
+    if (message.attachments?.length) {
+      message.attachments.forEach(attachment => {
+        if (attachment.isInline && attachment.data) {
+          // Replace content ID references with actual image data
+          const cidRef = `cid:${attachment.contentId}`;
+          const imgData = `data:${attachment.mimeType};base64,${attachment.data}`;
+          content = content.replace(cidRef, imgData);
+        }
+      });
+    }
+
+    // Simple and fast HTML sanitization while preserving image tags
+    if (isHtml) {
+      content = content
+        .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+        .replace(/on\w+="[^"]*"/g, '')
+        .replace(/javascript:/gi, '')
+        // Preserve image dimensions but add max-width
+        .replace(/<img([^>]*)>/gi, (match, attributes) => {
+          // Add loading="lazy" and class for styling
+          return `<img ${attributes} loading="lazy" class="email-image">`;
+        });
+    } else {
+      content = content
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;')
+        .replace(/\n/g, '<br>');
+    }
+
+    // Cache the processed content
+    setProcessedContent(prev => ({
+      ...prev,
+      [message.id]: content
+    }));
+
+    return content;
+  }, [processedContent]);
+
+  // Handle thread expansion
+  const toggleThread = useCallback((threadId: string) => {
+    setExpandedThreads(prev => 
+      prev.includes(threadId) 
+        ? prev.filter(id => id !== threadId)
+        : [...prev, threadId]
+    );
+  }, []);
+
+  // Memoize the email fetch function
+  const fetchEmails = useCallback(async () => {
+    if (!user?.accessToken || !customerEmail) return;
 
     try {
       setIsLoading(true);
@@ -75,48 +156,68 @@ export default function EmailCorrespondence({
         }
       });
 
-      if (response.status === 401) {
-        // Token expired, try to refresh
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          throw new Error('Failed to refresh access token');
-        }
-        // Retry with new token
-        const retryResponse = await fetch('/api/gmail', {
-          headers: {
-            'Authorization': `Bearer ${user.accessToken}`,
-            'X-Dispute-Email': customerEmail
-          }
-        });
-        if (!retryResponse.ok) {
-          const errorData = await retryResponse.json();
-          throw new Error(errorData.details || 'Failed to fetch emails after token refresh');
-        }
-        const data = await retryResponse.json();
-        setThreads(data.threads || []);
-      } else if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.details || 'Failed to fetch emails');
-      } else {
-        const data = await response.json();
-        setThreads(data.threads || []);
+      if (!response.ok) {
+        throw new Error('Failed to fetch email threads');
       }
+
+      const data = await response.json();
+      setThreads(data.threads || []);
     } catch (err) {
       console.error('Error fetching emails:', err);
       setError({
-        message: err instanceof Error ? err.message : 'Failed to fetch emails',
-        details: typeof err === 'object' && err !== null && 'details' in err 
-          ? String((err as { details: unknown }).details)
-          : 'Please try again or contact support if the issue persists'
+        message: 'Failed to load email threads',
+        details: err instanceof Error ? err.message : undefined
       });
     } finally {
       setIsLoading(false);
     }
-  }, [user?.accessToken, customerEmail, refreshAccessToken]);
+  }, [user?.accessToken, customerEmail]);
 
+  // Only fetch if we don't have initial threads
   useEffect(() => {
-    fetchEmails();
-  }, [fetchEmails]);
+    if (initialThreads.length === 0) {
+      fetchEmails();
+    }
+  }, [fetchEmails, initialThreads.length]);
+
+  const handleSendEmail = async (content: string, subject?: string) => {
+    if (!user?.accessToken || !customerEmail) return;
+
+    try {
+      setIsLoading(true);
+      setError(null);
+
+      const response = await fetch('/api/gmail/send', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${user.accessToken}`
+        },
+        body: JSON.stringify({
+          to: customerEmail,
+          subject: subject || `Re: Dispute ${disputeId}`,
+          content
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to send email');
+      }
+
+      // Refresh emails after sending
+      await fetchEmails();
+      setReplyToMessage(null);
+      onEmailSent?.();
+    } catch (err) {
+      console.error('Error sending email:', err);
+      setError({
+        message: 'Failed to send email',
+        details: err instanceof Error ? err.message : undefined
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   const handleEmailSent = async () => {
     // Immediately fetch new emails
@@ -125,14 +226,6 @@ export default function EmailCorrespondence({
     if (onEmailSent) {
       onEmailSent();
     }
-  };
-
-  const toggleThreadExpansion = (threadId: string) => {
-    setExpandedThreads(prev => 
-      prev.includes(threadId)
-        ? prev.filter(id => id !== threadId)
-        : [...prev, threadId]
-    );
   };
 
   const getTimeDifference = (date1: string, date2: string) => {
@@ -175,69 +268,12 @@ export default function EmailCorrespondence({
     return 'Just now';
   };
 
-  const formatEmailContent = (message: EmailMessage) => {
-    const isHtml = message.contentType.includes('html');
-    let content = message.body;
-
-    if (isHtml) {
-      const tempDiv = document.createElement('div');
-      tempDiv.innerHTML = content;
-      
-      // Remove script tags for security
-      const scripts = tempDiv.getElementsByTagName('script');
-      for (let i = scripts.length - 1; i >= 0; i--) {
-        scripts[i].remove();
-      }
-
-      // Remove quoted content
-      const quotes = tempDiv.getElementsByTagName('blockquote');
-      for (let i = quotes.length - 1; i >= 0; i--) {
-        quotes[i].remove();
-      }
-
-      // Remove "On [date], [person] wrote:" lines
-      const paragraphs = tempDiv.getElementsByTagName('p');
-      for (let i = paragraphs.length - 1; i >= 0; i--) {
-        const text = paragraphs[i].textContent || '';
-        if (text.match(/On .+ wrote:/)) {
-          paragraphs[i].remove();
-        }
-      }
-
-      // Get only the first part of the email (before any quoted content)
-      content = tempDiv.innerHTML.split(/On .+ wrote:/)[0];
-    } else {
-      // For plain text, split on common quote patterns and take first part
-      content = content
-        .split(/On .+ wrote:/)[0] // Split on "On ... wrote:"
-        .split(/\n>/)[0] // Split on quoted text (lines starting with >)
-        .split(/\n{2,}From:/)[0] // Split on "From:" headers
-        .trim();
-
-      content = content
-        .replace(/\n/g, '<br>')
-        .replace(
-          /(https?:\/\/[^\s]+)/g,
-          '<a href="$1" target="_blank" rel="noopener noreferrer" class="text-blue-600 hover:underline">$1</a>'
-        );
-    }
-
-    return (
-      <div className="space-y-2">
-        <div 
-          className="email-content text-gray-800 text-[14px] leading-relaxed"
-          dangerouslySetInnerHTML={{ __html: content }}
-        />
-      </div>
-    );
-  };
-
   const handleReply = (message: EmailMessage) => {
     setReplyToMessage(message);
   };
 
   const isLastMessageFromCurrentUser = (messages: EmailMessage[]) => {
-    if (messages.length === 0 || !user?.email) return false;
+    if (!messages.length || !user?.email) return false;
     const lastMessage = messages[messages.length - 1];
     return lastMessage.from.toLowerCase().includes(user.email.toLowerCase());
   };
@@ -292,6 +328,27 @@ export default function EmailCorrespondence({
 
   return (
     <div className="space-y-4">
+      <style jsx global>{`
+        .email-content {
+          overflow-wrap: break-word;
+          word-wrap: break-word;
+        }
+        .email-content img.email-image {
+          max-width: 100%;
+          height: auto;
+          margin: 8px 0;
+          display: block;
+          border-radius: 4px;
+          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+        .email-content a {
+          color: #2563eb;
+          text-decoration: underline;
+        }
+        .email-content p {
+          margin-bottom: 1em;
+        }
+      `}</style>
       <ErrorDisplay />
       {replyToMessage && (
         <EmailComposer
@@ -303,94 +360,100 @@ export default function EmailCorrespondence({
         />
       )}
       <div className="space-y-6">
-        {threads.map((thread) => {
-          const reversedMessages = [...thread.messages].reverse();
-          const showFollowUpButton = isLastMessageFromCurrentUser(thread.messages);
+        {showEmailHistory && sortedThreads.map((thread) => {
           const latestMessage = thread.messages[thread.messages.length - 1];
+          const isExpanded = expandedThreads.includes(thread.id);
+          const showFollowUpButton = isLastMessageFromCurrentUser(thread.messages);
 
           return (
             <div key={thread.id} className="bg-white rounded-lg shadow">
-              {/* Subject and Actions Header */}
-              <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
+              {/* Thread Header */}
+              <div 
+                className="flex items-center justify-between px-4 py-3 border-b border-gray-200 cursor-pointer hover:bg-gray-50"
+                onClick={() => toggleThread(thread.id)}
+              >
                 <div>
                   <h2 className="text-lg font-medium text-gray-900">
                     {decodeHtmlEntities(latestMessage.subject)}
                   </h2>
                   <div className="mt-1 text-sm text-gray-500">
-                    {thread.messages.length} message{thread.messages.length !== 1 ? 's' : ''} in conversation
+                    {thread.messages.length} message{thread.messages.length !== 1 ? 's' : ''} • Last update {getTimeSinceLastEmail(latestMessage.date)}
                   </div>
+                </div>
+                <div className="text-gray-400">
+                  {isExpanded ? '▼' : '▶'}
                 </div>
               </div>
 
-              {/* Follow Up Button (if applicable) */}
-              {showFollowUpButton && (
+              {/* Follow Up Button */}
+              {showFollowUpButton && isExpanded && (
                 <div className="p-4 bg-gray-50 border-b border-gray-100">
-                  <div className="flex flex-col items-center gap-2">
-                    <div className="text-sm text-gray-500">
-                      Last email sent {getTimeSinceLastEmail(latestMessage.date)} • No response yet
-                    </div>
-                    <button
-                      onClick={() => {
-                        setReplyToMessage(latestMessage);
-                      }}
-                      className="w-full flex items-center justify-center gap-2 px-4 py-2 text-sm font-medium text-white bg-orange-500 hover:bg-orange-600 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-orange-500 transition-colors"
-                    >
-                      Send Follow Up ✉️
-                    </button>
-                  </div>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setReplyToMessage(latestMessage);
+                    }}
+                    className="w-full flex items-center justify-center gap-2 px-4 py-2 text-sm font-medium text-white bg-orange-500 hover:bg-orange-600 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-orange-500 transition-colors"
+                  >
+                    Send Follow Up ✉️
+                  </button>
                 </div>
               )}
 
               {/* Email Messages */}
-              <div className="divide-y divide-gray-100">
-                {reversedMessages.map((message, index, array) => {
-                  const isFromCustomer = message.from.toLowerCase().includes(customerEmail.toLowerCase());
-                  const previousMessage = array[index - 1];
-                  
-                  return (
-                    <React.Fragment key={message.id}>
-                      {previousMessage && (
-                        <div className="flex items-center justify-center py-3 px-4">
-                          <div className="h-px bg-gray-200 flex-grow"></div>
-                          <div className="mx-4 text-sm font-medium text-gray-500 bg-white px-3 py-1 rounded-full border border-gray-200 shadow-sm">
-                            {getTimeDifference(message.date, previousMessage.date)}
-                          </div>
-                          <div className="h-px bg-gray-200 flex-grow"></div>
-                        </div>
-                      )}
-                      
+              {isExpanded && (
+                <div className="divide-y divide-gray-100">
+                  {[...thread.messages].reverse().map((message, index) => {
+                    const isFromCustomer = message.from.toLowerCase().includes(customerEmail.toLowerCase());
+                    
+                    return (
                       <div 
-                        className={`p-4 ${
-                          isFromCustomer ? 'bg-blue-50' : 'bg-white'
-                        }`}
+                        key={message.id}
+                        className={`p-4 ${isFromCustomer ? 'bg-blue-50' : 'bg-white'}`}
                       >
                         <div className="flex justify-between items-start mb-3">
                           <div>
                             <div className="flex items-center gap-2">
-                              <span className="font-medium">{decodeHtmlEntities(message.from)}</span>
+                              <span className="font-medium">{message.from}</span>
                               <span className="text-sm text-gray-500">
                                 {new Date(message.date).toLocaleString()}
                               </span>
                             </div>
-                            <div className="text-sm text-gray-500">
-                              to {decodeHtmlEntities(message.to)}
-                            </div>
                           </div>
                           <button
-                            onClick={() => handleReply(message)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleReply(message);
+                            }}
                             className="text-gray-500 hover:text-gray-700"
                           >
-                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
-                            </svg>
+                            Reply
                           </button>
                         </div>
-                        {formatEmailContent(message)}
+                        <div 
+                          className="email-content prose max-w-none"
+                          dangerouslySetInnerHTML={{ __html: processEmailContent(message) }}
+                        />
+                        {message.attachments?.length > 0 && (
+                          <div className="mt-4 space-y-2">
+                            {message.attachments.map(attachment => (
+                              !attachment.isInline && (
+                                <div key={attachment.id} className="flex items-center space-x-2 text-sm">
+                                  <svg className="h-4 w-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+                                  </svg>
+                                  <span className="text-gray-600">{attachment.filename}</span>
+                                  <span className="text-gray-400">({Math.round(attachment.size / 1024)}KB)</span>
+                                </div>
+                              )
+                            ))}
+                          </div>
+                        )}
                       </div>
-                    </React.Fragment>
-                  );
-                })}
-              </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           );
         })}

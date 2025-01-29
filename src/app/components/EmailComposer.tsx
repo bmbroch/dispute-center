@@ -61,6 +61,7 @@ interface EmailComposerProps {
   onEmailSent?: () => void;
   replyToMessage?: EmailMessage | null;
   threads: EmailThread[];
+  initialTemplate?: EmailTemplate;
 }
 
 export default function EmailComposer({ 
@@ -68,7 +69,8 @@ export default function EmailComposer({
   onClose, 
   onEmailSent, 
   replyToMessage,
-  threads
+  threads,
+  initialTemplate
 }: EmailComposerProps) {
   const { user, refreshAccessToken } = useAuth();
   const [selectedTemplate, setSelectedTemplate] = useState<EmailTemplate | null>(null);
@@ -76,30 +78,15 @@ export default function EmailComposer({
   const [content, setContent] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [to, setTo] = useState(customerEmail || '');
-  const [templates, setTemplates] = useState<EmailTemplate[]>(DEFAULT_TEMPLATES);
-  const [isLoading, setIsLoading] = useState(false);
-  const [showPreviousEmails, setShowPreviousEmails] = useState(false);
+  const [templates, setTemplates] = useState<EmailTemplate[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const editorRef = useRef<any>(null);
+  const hasInitializedRef = useRef(false);
 
   useEffect(() => {
     // Update 'to' field when customerEmail changes, ensuring it's never undefined
     setTo(customerEmail || '');
   }, [customerEmail]);
-
-  // Initialize with first template if not a reply
-  useEffect(() => {
-    if (!replyToMessage && customerEmail) {
-      const firstTemplate = DEFAULT_TEMPLATES[0];
-      setSelectedTemplate(firstTemplate);
-      setSubject(firstTemplate.subject);
-      
-      const firstName = customerEmail.split('@')[0].split(/[^a-zA-Z]/)[0];
-      const formattedFirstName = firstName.charAt(0).toUpperCase() + firstName.slice(1).toLowerCase();
-      
-      const processedBody = firstTemplate.body.replace(/\{\{firstName\}\}/g, formattedFirstName);
-      setContent(processedBody);
-    }
-  }, [customerEmail, replyToMessage]);
 
   // Handle API templates
   useEffect(() => {
@@ -107,6 +94,7 @@ export default function EmailComposer({
       if (!user?.email) return;
 
       try {
+        setIsLoading(true);
         const response = await fetch('/api/settings/email-templates', {
           headers: {
             'X-User-Email': user.email,
@@ -114,16 +102,59 @@ export default function EmailComposer({
         });
         const data = await response.json();
         
-        if (data && data.length > 0) {
-          setTemplates(data);
+        // Set templates, falling back to defaults if none found
+        const templatesData = (data && data.length > 0) ? data : DEFAULT_TEMPLATES;
+        setTemplates(templatesData);
+
+        // Initialize with initialTemplate if provided, otherwise use first template
+        if (!hasInitializedRef.current && !replyToMessage && customerEmail) {
+          const templateToUse = initialTemplate || templatesData[0];
+          setSelectedTemplate(templateToUse);
+          setSubject(templateToUse.subject);
+          
+          const firstName = customerEmail.split('@')[0].split(/[^a-zA-Z]/)[0];
+          const formattedFirstName = firstName.charAt(0).toUpperCase() + firstName.slice(1).toLowerCase();
+          
+          const processedBody = templateToUse.body.replace(/\{\{firstName\}\}/g, formattedFirstName);
+          setContent(processedBody);
+          
+          // Also update the editor content if it exists
+          if (editorRef.current) {
+            editorRef.current.setContent(processedBody);
+          }
+          
+          hasInitializedRef.current = true;
         }
       } catch (error) {
         console.error('Failed to fetch templates:', error);
+        // Fall back to default templates or initialTemplate
+        const templatesData = initialTemplate ? [initialTemplate, ...DEFAULT_TEMPLATES] : DEFAULT_TEMPLATES;
+        setTemplates(templatesData);
+        
+        if (!hasInitializedRef.current && !replyToMessage && customerEmail) {
+          const templateToUse = initialTemplate || templatesData[0];
+          setSelectedTemplate(templateToUse);
+          setSubject(templateToUse.subject);
+          
+          const firstName = customerEmail.split('@')[0].split(/[^a-zA-Z]/)[0];
+          const formattedFirstName = firstName.charAt(0).toUpperCase() + firstName.slice(1).toLowerCase();
+          
+          const processedBody = templateToUse.body.replace(/\{\{firstName\}\}/g, formattedFirstName);
+          setContent(processedBody);
+          
+          if (editorRef.current) {
+            editorRef.current.setContent(processedBody);
+          }
+          
+          hasInitializedRef.current = true;
+        }
+      } finally {
+        setIsLoading(false);
       }
     }
 
     fetchTemplates();
-  }, [user?.email]);
+  }, [user?.email, customerEmail, replyToMessage, initialTemplate]);
 
   // Handle reply message
   useEffect(() => {
@@ -132,7 +163,9 @@ export default function EmailComposer({
         ? replyToMessage.subject 
         : `Re: ${replyToMessage.subject}`);
       
-      setContent(`<div class="min-h-[100px]"></div>`);
+      // Start with empty content for replies
+      setContent('');
+      hasInitializedRef.current = true;
     }
   }, [replyToMessage]);
 
@@ -149,85 +182,46 @@ export default function EmailComposer({
     });
   };
 
-  const getPreviousEmailsContent = () => {
-    if (!replyToMessage) return '';
-
-    // Get all messages from the thread
-    const threadMessages = replyToMessage.threadId ? threads?.find(t => t.id === replyToMessage.threadId)?.messages || [] : [];
-    
-    // Sort messages by date
-    const sortedMessages = [...threadMessages].sort((a, b) => 
-      new Date(a.date).getTime() - new Date(b.date).getTime()
-    );
-
-    // Build the quoted content from all previous messages
-    return sortedMessages.map(message => {
-      const quotedHeader = `<div class="text-gray-500 text-sm mb-2">On ${formatDate(message.date)}, ${message.from} wrote:</div>`;
-      
-      // Clean the message content
-      const cleanMessage = message.body
-        .replace(/<br\s*\/?>/gi, '\n')
-        .replace(/<\/p>/gi, '\n')
-        .replace(/<blockquote[^>]*>/gi, '')
-        .replace(/<\/blockquote>/gi, '')
-        .replace(/<[^>]*>/g, '')
-        .trim();
-
-      return `
-        <div class="border-t border-gray-200 mt-8 pt-4">
-          <div class="border-l-2 border-gray-300 pl-3 text-gray-600">
-            ${quotedHeader}
-            <div class="whitespace-pre-wrap">${cleanMessage}</div>
-          </div>
-        </div>
-      `;
-    }).join('\n');
-  };
-
   const formatThreadHistory = () => {
     if (!replyToMessage) return '';
-
-    // Get all messages from the thread
-    const threadMessages = replyToMessage.threadId ? threads?.find(t => t.id === replyToMessage.threadId)?.messages || [] : [];
     
-    // Sort messages by date (newest first)
+    // Get all messages from the thread in chronological order
+    const threadMessages = replyToMessage.threadId ? 
+      threads?.find(t => t.id === replyToMessage.threadId)?.messages || [] : 
+      [replyToMessage];
+    
+    // Sort messages by date (newest first for display)
     const sortedMessages = [...threadMessages].sort((a, b) => 
       new Date(b.date).getTime() - new Date(a.date).getTime()
     );
 
-    // Format each message with its content visible
-    return sortedMessages.map(message => {
-      // Format the date in Gmail style
-      const date = new Date(message.date);
-      const formattedDate = date.toLocaleString('en-US', {
-        month: 'short',
-        day: 'numeric',
-        year: 'numeric',
-        hour: 'numeric',
-        minute: '2-digit',
-        hour12: true
-      });
+    // Take only the immediate parent message for the quote
+    const immediateParent = sortedMessages[0];
+    if (!immediateParent) return '';
 
-      // Extract email from the "from" field
-      const emailMatch = message.from.match(/<(.+?)>/);
-      const email = emailMatch ? emailMatch[1] : message.from;
-      const name = message.from.split('<')[0].trim();
+    // Clean the content while preserving important HTML formatting
+    const cleanContent = immediateParent.content
+      // Remove any existing quotes to prevent nesting
+      .replace(/<div[^>]*class="gmail_quote"[^>]*>[\s\S]*?<\/div>/gi, '')
+      .replace(/<div[^>]*>On [^<]*wrote:<\/div>/gi, '')
+      // Preserve image tags but ensure they have proper styling
+      .replace(/<img([^>]*)>/gi, '<img$1 style="max-width:100%;height:auto;">')
+      // Clean up extra divs and normalize spacing
+      .replace(/<div[^>]*>/gi, '<div>')
+      .replace(/(<br\s*\/?>\s*){3,}/gi, '<br><br>') // Normalize multiple breaks
+      .replace(/\n{3,}/g, '\n\n') // Normalize multiple newlines
+      .trim();
 
-      // Clean and format the message content
-      let cleanMessage = message.body
-        .replace(/<br\s*\/?>/gi, '\n')
-        .replace(/<\/p>/gi, '\n')
-        .replace(/<blockquote[^>]*>/gi, '')
-        .replace(/<\/blockquote>/gi, '')
-        .replace(/<[^>]*>/g, '')
-        .trim();
+    if (!cleanContent) return '';
 
-      // Format in Gmail's style
-      return `<div class="gmail_message">
-  <div class="gmail_header">On ${formattedDate}, ${name} &lt;${email}&gt; wrote:</div>
-  <div class="gmail_content">${cleanMessage}</div>
+    const date = formatDate(immediateParent.date);
+    const from = immediateParent.from;
+
+    // Return formatted content with preserved HTML and images
+    return `<div class="gmail_quote" style="margin:0 0 0 .8ex;border-left:1px #ccc solid;padding-left:1ex">
+<div class="gmail_attr" style="color:#666;margin:0 0 .8ex 0;font-size:90%">On ${date}, ${from} wrote:</div>
+<div class="gmail_content" style="font-family:Arial,sans-serif;font-size:14px">${cleanContent}</div>
 </div>`;
-    }).join('\n\n');
   };
 
   const handleTemplateSelect = (template: EmailTemplate) => {
@@ -244,14 +238,14 @@ export default function EmailComposer({
     
     const firstName = customerEmail.split('@')[0].split(/[^a-zA-Z]/)[0];
     const formattedFirstName = firstName.charAt(0).toUpperCase() + firstName.slice(1).toLowerCase();
-    
     const processedBody = template.body.replace(/\{\{firstName\}\}/g, formattedFirstName);
     
-    const editor = (window as any).tinymce.get('email-editor');
-    if (editor) {
-      editor.setContent(processedBody);
-    } else {
-      setContent(processedBody);
+    // Set the content state immediately
+    setContent(processedBody);
+    
+    // Also try to update the editor if it's available
+    if (editorRef.current) {
+      editorRef.current.setContent(processedBody);
     }
   };
 
@@ -273,16 +267,60 @@ export default function EmailComposer({
       const editor = (window as any).tinymce.get('email-editor');
       const newContent = editor ? editor.getContent() : content;
 
-      // Add thread history
+      // Extract all inline images from the content
+      const tempDiv = document.createElement('div');
+      tempDiv.innerHTML = newContent;
+      const images = tempDiv.getElementsByTagName('img');
+      const inlineImages: { filename: string; content: string; contentId: string; }[] = [];
+
+      // Process each image
+      for (let i = 0; i < images.length; i++) {
+        const img = images[i];
+        const src = img.getAttribute('src');
+        if (src && src.startsWith('data:')) {
+          // Generate a unique content ID for the image
+          const contentId = `image_${Date.now()}_${i}`;
+          const extension = src.split(';')[0].split('/')[1];
+          const filename = `image_${Date.now()}_${i}.${extension}`;
+
+          // Replace the data URL with a CID reference
+          img.setAttribute('src', `cid:${contentId}`);
+
+          // Store the image data
+          inlineImages.push({
+            filename,
+            content: src.split(',')[1], // Remove the data:image/xxx;base64, prefix
+            contentId
+          });
+        }
+      }
+
+      // Format the email with proper structure
       const threadHistory = formatThreadHistory();
-      const fullEmailContent = `<div class="gmail_message">
-  <div class="gmail_content">${newContent}</div>
-</div>
-${threadHistory}`;
+      const fullEmailContent = `<div dir="ltr" style="font-family:Arial,sans-serif;font-size:14px">
+${tempDiv.innerHTML}
+${threadHistory ? `<br>${threadHistory}` : ''}
+</div>`;
 
       let currentAccessToken = user.accessToken;
 
       const sendEmail = async (token: string) => {
+        // Get all messages in the thread for proper threading
+        const threadMessages = replyToMessage?.threadId ? 
+          threads?.find(t => t.id === replyToMessage.threadId)?.messages || [] : 
+          [];
+        
+        // Sort messages chronologically (oldest first) for References header
+        const sortedMessages = [...threadMessages].sort((a, b) => 
+          new Date(a.date).getTime() - new Date(b.date).getTime()
+        );
+        
+        // Build References header - should include all previous message IDs
+        const messageIds = sortedMessages
+          .map(msg => msg.messageId)
+          .filter(id => id)
+          .map(id => id.startsWith('<') ? id : `<${id}>`);
+
         const response = await fetch('/api/gmail/send', {
           method: 'POST',
           headers: {
@@ -295,8 +333,10 @@ ${threadHistory}`;
             content: fullEmailContent,
             threadId: replyToMessage?.threadId,
             messageId: replyToMessage?.messageId,
-            references: replyToMessage?.references,
-            inReplyTo: replyToMessage?.inReplyTo
+            references: messageIds,
+            inReplyTo: replyToMessage?.messageId,
+            originalContent: replyToMessage?.content,
+            inlineImages // Add inline images to the request
           })
         });
 
@@ -401,42 +441,12 @@ ${threadHistory}`;
               </div>
 
               <div>
-                <div className="flex justify-between items-center mb-2">
-                  <label className="block text-sm font-medium text-gray-700">
-                    Message
-                  </label>
-                  {replyToMessage && (
-                    <button
-                      onClick={() => {
-                        setShowPreviousEmails(!showPreviousEmails);
-                        const editor = (window as any).tinymce.get('email-editor');
-                        if (editor) {
-                          const currentContent = editor.getContent();
-                          const baseContent = currentContent.split('<div class="border-t')[0];
-                          editor.setContent(
-                            showPreviousEmails 
-                              ? baseContent 
-                              : baseContent + getPreviousEmailsContent()
-                          );
-                        }
-                      }}
-                      className="text-sm text-blue-600 hover:text-blue-800 flex items-center gap-1"
-                    >
-                      {showPreviousEmails ? 'Hide' : 'Show'} previous emails
-                      <svg 
-                        className={`w-4 h-4 transform transition-transform ${showPreviousEmails ? 'rotate-180' : ''}`}
-                        fill="none" 
-                        stroke="currentColor" 
-                        viewBox="0 0 24 24"
-                      >
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                      </svg>
-                    </button>
-                  )}
-                </div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Message
+                </label>
                 <Editor
                   id="email-editor"
-                  apiKey="lxujz1zpiz2jjj6a109swdlf62pgyqpfu5z4e88tkql1vlbr"
+                  apiKey={process.env.NEXT_PUBLIC_TINYMCE_API_KEY}
                   init={{
                     height: 500,
                     menubar: false,
@@ -444,8 +454,26 @@ ${threadHistory}`;
                     branding: false,
                     promotion: false,
                     skin: 'oxide',
-                    plugins: 'link lists',
-                    toolbar: 'bold italic | bullist numlist | link',
+                    plugins: [
+                      'advlist', 'autolink', 'lists', 'link', 'image',
+                      'charmap', 'preview', 'anchor', 'searchreplace',
+                      'visualblocks', 'code', 'fullscreen',
+                      'insertdatetime', 'media', 'table', 'help',
+                      'wordcount'
+                    ],
+                    toolbar: 'undo redo | formatselect | ' +
+                      'bold italic underline | alignleft aligncenter ' +
+                      'alignright alignjustify | bullist numlist | ' +
+                      'link image | removeformat',
+                    paste_data_images: true,
+                    paste_as_text: false,
+                    paste_enable_default_filters: true,
+                    paste_word_valid_elements: 'b,strong,i,em,h1,h2,h3,p,br',
+                    paste_webkit_styles: 'none',
+                    paste_retain_style_properties: 'none',
+                    paste_merge_formats: true,
+                    paste_convert_word_fake_lists: true,
+                    automatic_uploads: true,
                     content_style: `
                       body {
                         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -456,6 +484,12 @@ ${threadHistory}`;
                         background: #ffffff;
                       }
                       p { margin: 0 0 1em 0; }
+                      img { 
+                        max-width: 40%; 
+                        height: auto;
+                        display: block;
+                        margin: 8px 0;
+                      }
                     `,
                     setup: function(editor) {
                       editor.on('init', function() {
@@ -463,6 +497,50 @@ ${threadHistory}`;
                         body.style.backgroundColor = '#ffffff';
                         body.style.color = '#000000';
                       });
+
+                      // Handle paste events to ensure images are properly handled
+                      editor.on('paste', function(e) {
+                        if (e.clipboardData) {
+                          const items = e.clipboardData.items;
+                          for (let i = 0; i < items.length; i++) {
+                            if (items[i].type.indexOf('image') !== -1) {
+                              // Convert image to base64 immediately
+                              const blob = items[i].getAsFile();
+                              const reader = new FileReader();
+                              reader.onload = function(e) {
+                                editor.insertContent(`<img src="${e.target?.result}" style="max-width:40%; height:auto; display:block; margin:8px 0;" />`);
+                              };
+                              reader.readAsDataURL(blob);
+                              e.preventDefault();
+                            }
+                          }
+                        }
+                      });
+                    },
+                    // Add default image settings
+                    image_dimensions: false,
+                    image_class_list: [
+                      {title: 'Default (40%)', value: 'default-image'},
+                      {title: 'Full width', value: 'full-width'}
+                    ],
+                    image_default_size: {
+                      width: '40%',
+                      height: 'auto'
+                    },
+                    images_upload_handler: async function (blobInfo) {
+                      try {
+                        // Convert the blob to base64
+                        return new Promise((resolve) => {
+                          const reader = new FileReader();
+                          reader.onloadend = () => {
+                            resolve(reader.result as string);
+                          };
+                          reader.readAsDataURL(blobInfo.blob());
+                        });
+                      } catch (error) {
+                        console.error('Failed to upload image:', error);
+                        throw error;
+                      }
                     }
                   }}
                   onInit={(evt, editor) => {

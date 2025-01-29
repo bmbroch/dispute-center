@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '@/lib/hooks/useAuth';
 import { useStripeMetrics } from '@/lib/hooks/useStripeMetrics';
 import { getFirebaseDB } from '@/lib/firebase/firebase';
-import { collection, addDoc, query, where, getDocs, updateDoc, doc, deleteDoc, getDoc, setDoc } from 'firebase/firestore';
+import { collection, query, where, getDocs, updateDoc, doc, deleteDoc, getDoc, setDoc } from 'firebase/firestore';
 import { toast } from 'sonner';
 
 interface StripeKeyInputProps {
@@ -33,7 +33,8 @@ export default function StripeKeyInput({ onClose, onSuccess }: StripeKeyInputPro
           return;
         }
 
-        const docRef = doc(db, 'stripeKeys', user.email);
+        const normalizedEmail = user.email.toLowerCase();
+        const docRef = doc(db, 'stripeKeys', normalizedEmail);
         const docSnap = await getDoc(docRef);
 
         if (docSnap.exists()) {
@@ -62,15 +63,15 @@ export default function StripeKeyInput({ onClose, onSuccess }: StripeKeyInputPro
       return false;
     }
     
-    const stripeKeysRef = collection(db, 'stripeKeys');
-    const q = query(stripeKeysRef, where('userEmail', '==', user.email));
-    const querySnapshot = await getDocs(q);
+    const normalizedEmail = user.email.toLowerCase();
+    const docRef = doc(db, 'stripeKeys', normalizedEmail);
+    const docSnap = await getDoc(docRef);
     
-    return !querySnapshot.empty;
+    return docSnap.exists();
   };
 
   const handleDelete = async () => {
-    if (!existingKeyId || !user?.email) return;
+    if (!user?.email) return;
     
     try {
       setIsLoading(true);
@@ -81,8 +82,9 @@ export default function StripeKeyInput({ onClose, onSuccess }: StripeKeyInputPro
         throw new Error('Failed to initialize Firebase');
       }
       
-      const keyRef = doc(db, 'stripeKeys', existingKeyId);
-      await deleteDoc(keyRef);
+      const normalizedEmail = user.email.toLowerCase();
+      const docRef = doc(db, 'stripeKeys', normalizedEmail);
+      await deleteDoc(docRef);
 
       toast.success('API key deleted successfully');
       onClose();
@@ -90,7 +92,7 @@ export default function StripeKeyInput({ onClose, onSuccess }: StripeKeyInputPro
       // Wait a moment for Firebase to process, then refresh
       setTimeout(() => {
         window.location.reload();
-      }, 1000);
+      }, 2000); // Increased timeout to ensure Firebase processes the write
     } catch (err) {
       console.error('Error deleting Stripe key:', err);
       setError(err instanceof Error ? err.message : 'Failed to delete API key');
@@ -118,30 +120,45 @@ export default function StripeKeyInput({ onClose, onSuccess }: StripeKeyInputPro
         throw new Error('Invalid API key format. It should start with "sk_" or "rk_" and be at least 20 characters long.');
       }
 
-      if (existingKeyId) {
-        // Update existing key
-        const keyRef = doc(db, 'stripeKeys', existingKeyId);
-        await updateDoc(keyRef, {
-          stripeKey: apiKey,
-          updatedAt: new Date().toISOString()
-        });
-        toast.success('API key updated successfully');
-      } else {
-        // Add new key
-        await addDoc(collection(db, 'stripeKeys'), {
-          userEmail: user.email,
-          stripeKey: apiKey,
-          createdAt: new Date().toISOString()
-        });
-        toast.success('API key added successfully');
+      // Use email as document ID and store email in lowercase
+      const normalizedEmail = user.email.toLowerCase();
+      const docRef = doc(db, 'stripeKeys', normalizedEmail);
+      
+      // Save or update the key
+      const docData = {
+        userEmail: normalizedEmail,
+        stripeKey: apiKey,
+        updatedAt: new Date().toISOString(),
+      };
+
+      // Only add createdAt if this is a new key
+      if (!existingKeyId) {
+        docData.createdAt = new Date().toISOString();
       }
 
+      // Save with merge to preserve existing fields
+      await setDoc(docRef, docData, { merge: true });
+
+      // Verify the key after saving
+      const response = await fetch('/api/stripe/verify-key', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stripeKey: apiKey })
+      });
+
+      const data = await response.json();
+      if (!data.valid) {
+        throw new Error('Invalid Stripe key. Please check your key and try again.');
+      }
+
+      toast.success(existingKeyId ? 'API key updated successfully' : 'API key added successfully');
+      onSuccess();
       onClose();
       
       // Wait a moment for Firebase to process, then refresh
       setTimeout(() => {
         window.location.reload();
-      }, 1000);
+      }, 2000); // Increased timeout to ensure Firebase processes the write
     } catch (err) {
       console.error('Error saving Stripe key:', err);
       setError(err instanceof Error ? err.message : 'Failed to save API key');
