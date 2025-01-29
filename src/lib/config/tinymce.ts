@@ -61,19 +61,20 @@ export const TINYMCE_CONFIG = {
     width: '40%',
     height: 'auto'
   },
-  images_upload_handler: async function (blobInfo: any) {
+  images_upload_handler: async function (blobInfo: any): Promise<string> {
     try {
       // Convert the blob to base64
-      return new Promise((resolve) => {
+      return new Promise<string>((resolve) => {
         const reader = new FileReader();
         reader.onloadend = () => {
-          resolve(reader.result as string);
+          const result = reader.result as string;
+          resolve(result);
         };
         reader.readAsDataURL(blobInfo.blob());
       });
     } catch (error) {
       console.error('Failed to upload image:', error);
-      throw error;
+      throw new Error('Image upload failed');
     }
   }
 }; 

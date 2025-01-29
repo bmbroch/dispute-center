@@ -60,6 +60,11 @@ const getTimeAgo = (date: string) => {
   return 'just now';
 };
 
+interface SortConfig {
+  key: string;
+  direction: 'asc' | 'desc';
+}
+
 const DisputeTable: React.FC<DisputeTableProps> = ({ onDisputeCountChange }) => {
   const [disputes, setDisputes] = useState<DisputeWithMeta[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -70,71 +75,34 @@ const DisputeTable: React.FC<DisputeTableProps> = ({ onDisputeCountChange }) => 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [showNewEmail, setShowNewEmail] = useState<string | null>(null);
   const { user } = useAuth();
+  const [sortConfig, setSortConfig] = useState<SortConfig>({ key: 'created', direction: 'desc' });
   
   const fetchDisputes = useCallback(async () => {
-    if (!user) return;
-
+    if (!user?.email) return;
+    
     try {
       setIsLoading(true);
-      const response = await fetch(`/api/stripe/disputes?userEmail=${encodeURIComponent(user.email)}`);
+      const response = await fetch(`/api/stripe/disputes?userEmail=${encodeURIComponent(user.email || '')}`);
       if (!response.ok) throw new Error('Failed to fetch disputes');
       
       const data = await response.json();
-      const disputesData = data.data || [];
-
-      // Fetch email history for each dispute
-      const disputesWithEmails = await Promise.all(
-        disputesData.map(async (dispute: DisputeWithMeta) => {
-          if (!dispute.customerEmail) return dispute;
-
-          try {
-            const emailResponse = await fetch('/api/gmail', {
-              headers: {
-                'Authorization': `Bearer ${user.accessToken}`,
-                'X-Dispute-Email': dispute.customerEmail
-              }
-            });
-
-            if (emailResponse.ok) {
-              const emailData = await emailResponse.json();
-              return {
-                ...dispute,
-                emailThreads: emailData.threads || []
-              };
-            }
-          } catch (err) {
-            // Only log non-chrome-extension errors
-            if (!err.toString().includes('chrome-extension://')) {
-              console.error(`Error fetching emails for ${dispute.customerEmail}:`, err);
-            }
-          }
-          return dispute;
-        })
-      );
-
-      setDisputes(disputesWithEmails);
-      
-      // Calculate number of disputes needing attention
-      const disputesNeedingAttention = disputesWithEmails.filter(dispute => {
-        const lastEmail = getLastEmailInfo(dispute);
-        // Return true if either:
-        // 1. No email threads exist (no contact)
-        // 2. Last email was from customer (needs response)
-        return !lastEmail || lastEmail.isFromCustomer;
-      }).length;
-      
-      onDisputeCountChange(disputesNeedingAttention);
-      setLastFetchTime(Date.now());
-    } catch (err) {
-      // Only set error state for non-chrome-extension errors
-      if (!err.toString().includes('chrome-extension://')) {
-        setError(err instanceof Error ? err.message : 'An error occurred');
-        console.error('Error fetching disputes:', err);
+      setDisputes(data);
+      onDisputeCountChange(data.length);
+    } catch (err: unknown) {
+      // Only show error if it's not a chrome extension error
+      if (err instanceof Error) {
+        if (!err.message.includes('chrome-extension://')) {
+          console.error('Failed to fetch disputes:', err);
+          toast.error(err.message || 'Failed to fetch disputes');
+        }
+      } else {
+        console.error('An unknown error occurred:', err);
+        toast.error('Failed to fetch disputes');
       }
     } finally {
       setIsLoading(false);
     }
-  }, [user, onDisputeCountChange]);
+  }, [user?.email, onDisputeCountChange]);
   
   useEffect(() => {
     fetchDisputes();
@@ -180,6 +148,33 @@ const DisputeTable: React.FC<DisputeTableProps> = ({ onDisputeCountChange }) => 
     const url = new URL(window.location.href);
     url.searchParams.set('template', templateIndex.toString());
     window.history.replaceState({}, '', url.toString());
+  };
+
+  const handleSort = (column: string) => {
+    const direction = sortConfig.key === column && sortConfig.direction === 'asc' ? 'desc' : 'asc';
+    setSortConfig({ key: column, direction });
+  };
+
+  const getSortValue = (item: any, column: string): string | number | boolean => {
+    // Handle null values by converting them to empty strings for sorting
+    const value = item[column];
+    return value === null ? '' : value;
+  };
+
+  const handleStatusUpdate = async (disputeId: string, newStatus: string) => {
+    try {
+      // ... existing code ...
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        if (!err.message.includes('chrome-extension://')) {
+          console.error('Failed to update status:', err);
+          toast.error(err.message || 'Failed to update status');
+        }
+      } else {
+        console.error('An unknown error occurred:', err);
+        toast.error('Failed to update status');
+      }
+    }
   };
 
   if (isLoading) {
