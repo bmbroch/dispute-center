@@ -11,6 +11,7 @@ interface AuthUser {
   refreshToken: string | null;
   name?: string;
   picture?: string;
+  gmailConnected?: boolean;
 }
 
 interface AuthContextType {
@@ -18,6 +19,7 @@ interface AuthContextType {
   loading: boolean;
   error: string | null;
   signIn: () => Promise<void>;
+  connectGmail: () => Promise<void>;
   signOut: () => Promise<void>;
   refreshAccessToken: () => Promise<string | null>;
 }
@@ -27,6 +29,7 @@ export const AuthContext = createContext<AuthContextType>({
   loading: true,
   error: null,
   signIn: async () => {},
+  connectGmail: async () => {},
   signOut: async () => {},
   refreshAccessToken: async () => null,
 });
@@ -97,37 +100,53 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       setLoading(true);
       setError(null);
-      const { tokens, userInfo } = await googleAuthService.signInWithPopup();
       
-      // Save auth state
-      localStorage.setItem('auth_tokens', JSON.stringify(tokens));
+      // First authenticate with your main site
+      await googleAuthService.authenticateUser(user?.email || '', ''); // Implement proper auth
       
-      setUser({
-        email: userInfo.email,
-        name: userInfo.name,
-        picture: userInfo.picture,
-        accessToken: tokens.access_token,
-        refreshToken: tokens.refresh_token || null,
-      });
-
-      toast.success('Successfully signed in!');
+      // Set basic user state
+      const basicUser: AuthUser = {
+        email: user?.email,
+        accessToken: null,
+        refreshToken: null,
+        gmailConnected: false
+      };
+      
+      setUser(basicUser);
+      toast.success('Successfully signed in! You can now connect your Gmail account.');
+      
     } catch (err) {
       console.error('Sign in error:', err);
-      let errorMessage = 'Failed to sign in with Google';
+      const errorMessage = err instanceof Error ? err.message : 'Failed to sign in';
+      setError(errorMessage);
+      toast.error(errorMessage);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const connectGmail = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+
+      // Now handle Gmail authentication
+      const { tokens, userInfo } = await googleAuthService.signInWithPopup();
       
-      // Handle specific error cases
-      if (err instanceof Error) {
-        if (err.message.includes('popup')) {
-          errorMessage = 'Popup was blocked. Please allow popups and try again.';
-        } else if (err.message.includes('cross-origin')) {
-          errorMessage = 'Authentication failed due to a security restriction. Please try again.';
-        } else if (err.message.includes('cancelled')) {
-          errorMessage = 'Sign in was cancelled. Please try again.';
-        } else if (err.message.includes('network')) {
-          errorMessage = 'Network error. Please check your connection and try again.';
-        }
-      }
-      
+      // Update user with Gmail info
+      setUser(prev => prev ? {
+        ...prev,
+        accessToken: tokens.access_token,
+        refreshToken: tokens.refresh_token || null,
+        name: userInfo.name,
+        picture: userInfo.picture,
+        gmailConnected: true
+      } : null);
+
+      toast.success('Successfully connected Gmail account!');
+    } catch (err) {
+      console.error('Gmail connection error:', err);
+      const errorMessage = err instanceof Error ? err.message : 'Failed to connect Gmail';
       setError(errorMessage);
       toast.error(errorMessage);
     } finally {
@@ -177,7 +196,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, error, signIn, signOut: handleSignOut, refreshAccessToken }}>
+    <AuthContext.Provider value={{ user, loading, error, signIn, connectGmail, signOut: handleSignOut, refreshAccessToken }}>
       {children}
     </AuthContext.Provider>
   );

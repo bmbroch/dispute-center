@@ -22,6 +22,7 @@ class GoogleAuthService {
   private static instance: GoogleAuthService;
   private tokens: GoogleTokens | null = null;
   private userInfo: GoogleUserInfo | null = null;
+  private isAuthenticated: boolean = false;
 
   private constructor() {}
 
@@ -38,8 +39,17 @@ class GoogleAuthService {
       : GOOGLE_AUTH_ORIGINS[process.env.NODE_ENV === 'production' ? 'production' : 'development'];
   }
 
+  isUserAuthenticated(): boolean {
+    return this.isAuthenticated;
+  }
+
   async signInWithPopup(): Promise<{ tokens: GoogleTokens; userInfo: GoogleUserInfo }> {
     try {
+      // First ensure user is authenticated on the main site
+      if (!this.isAuthenticated) {
+        throw new Error('Please sign in to your account first');
+      }
+
       const origin = this.getOrigin();
       const response = await fetch('/api/auth/google', {
         method: 'POST',
@@ -56,7 +66,7 @@ class GoogleAuthService {
 
       const { url } = await response.json();
       
-      // Open popup with proper origin
+      // Open popup with proper origin for Gmail account selection
       const popup = window.open(url, 'Google Sign In', 'width=500,height=600');
       
       if (!popup) {
@@ -78,6 +88,11 @@ class GoogleAuthService {
               window.removeEventListener('message', handleMessage);
               clearTimeout(authTimeout);
               popup.close();
+              
+              // Store the tokens and user info
+              this.tokens = tokens;
+              this.userInfo = userInfo;
+              
               resolve({ tokens, userInfo });
             }
           } catch (error) {
@@ -96,6 +111,20 @@ class GoogleAuthService {
       });
     } catch (error) {
       console.error('Sign in error:', error);
+      throw error;
+    }
+  }
+
+  // Add method for main site authentication
+  async authenticateUser(email: string, password: string): Promise<void> {
+    try {
+      // Implement your main site authentication here
+      // This should be called before attempting Gmail authentication
+      
+      // On successful authentication:
+      this.isAuthenticated = true;
+    } catch (error) {
+      console.error('Main site authentication error:', error);
       throw error;
     }
   }
@@ -229,6 +258,7 @@ class GoogleAuthService {
   clearTokens(): void {
     this.tokens = null;
     this.userInfo = null;
+    this.isAuthenticated = false;
   }
 }
 

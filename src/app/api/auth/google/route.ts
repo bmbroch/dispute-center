@@ -9,10 +9,17 @@ const ALLOWED_ORIGINS = [
 const GOOGLE_OAUTH_CONFIG = {
   client_id: process.env.GOOGLE_CLIENT_ID!,
   client_secret: process.env.GOOGLE_CLIENT_SECRET!,
-  scope: 'https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email',
+  scope: [
+    'https://www.googleapis.com/auth/gmail.modify',
+    'https://www.googleapis.com/auth/gmail.compose',
+    'https://www.googleapis.com/auth/gmail.send',
+    'https://www.googleapis.com/auth/gmail.readonly',
+    'https://www.googleapis.com/auth/userinfo.profile',
+    'https://www.googleapis.com/auth/userinfo.email'
+  ].join(' '),
   response_type: 'code',
   access_type: 'offline',
-  prompt: 'consent'
+  prompt: 'consent select_account'
 };
 
 export async function POST(request: NextRequest) {
