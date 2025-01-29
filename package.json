@@ -4,9 +4,11 @@
   "private": true,
   "scripts": {
     "dev": "next dev -p 3002",
+    "prebuild": "ts-node scripts/prebuild.ts",
     "build": "next build",
     "start": "next start -p 3002",
-    "lint": "next lint"
+    "lint": "next lint",
+    "type-check": "tsc --noEmit"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^0.0.48",
@@ -61,7 +63,8 @@
     "glob": "^11.0.1",
     "postcss": "^8",
     "rimraf": "^6.0.1",
-    "tailwindcss": "^3.4.1",
+    "tailwindcss": "^3.4.17",
+    "ts-node": "^10.9.2",
     "typescript": "5.7.3"
   }
 }
