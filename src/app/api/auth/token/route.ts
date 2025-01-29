@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
-import { GOOGLE_OAUTH_CONFIG, getAllowedRedirectUris } from '@/lib/firebase/firebase';
+import { GOOGLE_OAUTH_CONFIG } from '@/lib/firebase/firebase';
 
 export async function POST(request: NextRequest) {
   try {
@@ -11,31 +11,28 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'No authorization code provided' }, { status: 400 });
     }
 
+    const clientId = process.env.GOOGLE_CLIENT_ID || process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
     const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-    if (!clientSecret) {
-      console.error('Missing GOOGLE_CLIENT_SECRET environment variable');
+    
+    if (!clientId || !clientSecret) {
+      console.error('Missing required environment variables:', {
+        hasClientId: !!clientId,
+        hasClientSecret: !!clientSecret
+      });
       return NextResponse.json({ error: 'Server configuration error' }, { status: 500 });
     }
 
-    // Get the redirect URI from the request origin
-    const redirectUri = `${request.nextUrl.origin}/api/auth/callback/google`;
-    
-    // Validate that the redirect URI is allowed
-    const allowedRedirectUris = getAllowedRedirectUris();
-    if (!allowedRedirectUris.includes(redirectUri)) {
-      console.error('Invalid redirect URI:', redirectUri);
-      return NextResponse.json({ error: 'Invalid redirect URI' }, { status: 400 });
-    }
-
+    // Get the redirect URI from the environment or construct it from the origin
+    const redirectUri = process.env.GOOGLE_REDIRECT_URI || `${request.nextUrl.origin}/api/auth/callback/google`;
     console.log('Using redirect URI:', redirectUri);
 
     const tokenRequestBody = {
       code,
-      client_id: GOOGLE_OAUTH_CONFIG.client_id,
+      client_id: clientId,
       client_secret: clientSecret,
       redirect_uri: redirectUri,
       grant_type: 'authorization_code',
-    } as const; // Use const assertion to ensure all properties are strings
+    } as const;
 
     console.log('Token request config:', {
       hasClientId: !!tokenRequestBody.client_id,

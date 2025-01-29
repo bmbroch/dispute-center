@@ -74,9 +74,10 @@ export const storage = typeof window !== 'undefined' ? getStorage(firebaseApp) :
 // Google Cloud OAuth Configuration
 export const GOOGLE_OAUTH_CONFIG = {
   client_id: process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID as string,
-  redirect_uri: typeof window !== 'undefined' 
-    ? `${window.location.origin}/api/auth/callback/google`
-    : process.env.NEXT_PUBLIC_GOOGLE_REDIRECT_URI as string,
+  redirect_uri: process.env.GOOGLE_REDIRECT_URI || 
+    (typeof window !== 'undefined' 
+      ? `${window.location.origin}/api/auth/callback/google`
+      : ''),
   scope: [
     'https://www.googleapis.com/auth/gmail.readonly',
     'https://www.googleapis.com/auth/gmail.modify',
