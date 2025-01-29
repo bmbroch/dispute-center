@@ -83,15 +83,25 @@ class GoogleAuthService {
           }
 
           try {
-            const { tokens, userInfo } = event.data;
+            const { tokens, userInfo, error } = event.data;
+            
+            if (error) {
+              reject(new Error(error));
+              return;
+            }
+
             if (tokens && userInfo) {
               window.removeEventListener('message', handleMessage);
               clearTimeout(authTimeout);
-              popup.close();
               
               // Store the tokens and user info
               this.tokens = tokens;
               this.userInfo = userInfo;
+              
+              // The callback will handle:
+              // 1. Storing tokens in localStorage
+              // 2. Updating parent window state
+              // 3. Closing the popup
               
               resolve({ tokens, userInfo });
             }
@@ -108,6 +118,16 @@ class GoogleAuthService {
           popup.close();
           reject(new Error('Authentication timed out. Please try again.'));
         }, 60000); // 1 minute timeout
+
+        // Handle popup closure
+        const checkClosed = setInterval(() => {
+          if (!popup || popup.closed) {
+            clearInterval(checkClosed);
+            clearTimeout(authTimeout);
+            window.removeEventListener('message', handleMessage);
+            reject(new Error('Authentication cancelled'));
+          }
+        }, 1000);
       });
     } catch (error) {
       console.error('Sign in error:', error);

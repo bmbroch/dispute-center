@@ -77,9 +77,26 @@ export async function GET(request: NextRequest) {
 
     const userInfo = await userInfoResponse.json();
 
+    // Return HTML that:
+    // 1. Posts message to opener (popup's parent)
+    // 2. Stores tokens in localStorage
+    // 3. Updates parent's window location
     return new NextResponse(
       `<script>
-        window.opener.postMessage({ tokens: ${JSON.stringify(tokens)}, userInfo: ${JSON.stringify(userInfo)} }, "${origin}");
+        // First, send data to parent window
+        window.opener.postMessage({ 
+          tokens: ${JSON.stringify(tokens)}, 
+          userInfo: ${JSON.stringify(userInfo)} 
+        }, "${origin}");
+
+        // Store tokens in parent window's localStorage
+        window.opener.localStorage.setItem('auth_tokens', JSON.stringify(${JSON.stringify(tokens)}));
+        window.opener.localStorage.setItem('user_info', JSON.stringify(${JSON.stringify(userInfo)}));
+
+        // Trigger parent window reload to update UI
+        window.opener.location.reload();
+
+        // Close popup
         window.close();
       </script>`,
       {
