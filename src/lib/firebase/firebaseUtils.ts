@@ -1,10 +1,5 @@
-import { auth, storage } from "./firebase";
+import { storage } from "./firebase";
 import { getFirebaseDB } from "./firebase";
-import {
-  signOut,
-  GoogleAuthProvider,
-  signInWithPopup,
-} from "firebase/auth";
 import {
   collection,
   addDoc,
@@ -17,25 +12,6 @@ import {
 } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import Stripe from "stripe";
-
-// Auth functions
-export const logoutUser = async () => {
-  if (!auth) throw new Error('Auth not initialized');
-  return signOut(auth);
-};
-
-export const signInWithGoogle = async () => {
-  if (!auth) throw new Error('Auth not initialized');
-
-  const provider = new GoogleAuthProvider();
-  try {
-    const result = await signInWithPopup(auth, provider);
-    return result.user;
-  } catch (error) {
-    console.error("Error signing in with Google", error);
-    throw error;
-  }
-};
 
 // Stripe functions
 export const getStripeKey = async (userEmail: string): Promise<string | null> => {
