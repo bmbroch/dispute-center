@@ -273,7 +273,7 @@ export default function DisputeSettingsModal({ isOpen, onClose, onUpdate }: Disp
                                   />
                                 </div>
                                 <p className="mt-2 text-sm text-gray-500">
-Use {'{{firstName}}'} to insert the customer                                  Use {"{"}{"{"}}firstName{"}"}{"}"} to insert the customer&apos;s first name.apos;s first name.
+                                  Use Use {'{{firstName}}'} to insert the customer                                  Use {"{"}{"{"}}firstName{"}"}{"}"} to insert the customer&apos;s first name.apos;s first name.#123;Use {'{{firstName}}'} to insert the customer                                  Use {"{"}{"{"}}firstName{"}"}{"}"} to insert the customer&apos;s first name.apos;s first name.#123;firstNameUse {'{{firstName}}'} to insert the customer                                  Use {"{"}{"{"}}firstName{"}"}{"}"} to insert the customer&apos;s first name.apos;s first name.#125;Use {'{{firstName}}'} to insert the customer                                  Use {"{"}{"{"}}firstName{"}"}{"}"} to insert the customer&apos;s first name.apos;s first name.#125; to insert the customerUse {'{{firstName}}'} to insert the customer                                  Use {"{"}{"{"}}firstName{"}"}{"}"} to insert the customer&apos;s first name.apos;s first name.apos;s first name.
                                 </p>
                               </div>
 
