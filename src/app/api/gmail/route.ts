@@ -29,14 +29,14 @@ export async function GET(request: NextRequest) {
     });
 
     // Query Gmail API for email threads related to this dispute
-    const query = `from:${disputeEmail} OR to:${disputeEmail}`;
+    const query = `{from:${disputeEmail} OR to:${disputeEmail}} in:anywhere`;
     const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
 
-    // Fetch threads
+    // Fetch threads with increased limit
     const threadsResponse = await gmail.users.threads.list({
       userId: 'me',
       q: query,
-      maxResults: 10
+      maxResults: 50 // Increased from 10 to ensure we catch all correspondence
     });
 
     if (!threadsResponse.data.threads || !Array.isArray(threadsResponse.data.threads)) {

@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server';
-import { headers } from 'next/headers';
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -19,16 +18,19 @@ export async function GET(request: Request) {
         <body>
           <script>
             function isValidOrigin(origin) {
-              return origin === 'http://localhost:3002' || 
-                     origin === 'https://dispute-center-leli.vercel.app' ||
-                     origin.endsWith('.vercel.app');
+              return origin === 'http://localhost:3000' || 
+                     origin === 'http://localhost:3001' || 
+                     origin === 'http://localhost:3002' ||
+                     origin === window.location.origin;
             }
 
             function sendMessage() {
               if (window.opener) {
                 const validOrigins = [
+                  'http://localhost:3000',
+                  'http://localhost:3001',
                   'http://localhost:3002',
-                  'https://dispute-center-leli.vercel.app'
+                  window.location.origin
                 ];
 
                 for (const origin of validOrigins) {

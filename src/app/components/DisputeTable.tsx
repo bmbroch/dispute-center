@@ -85,9 +85,45 @@ const DisputeTable: React.FC<DisputeTableProps> = ({ onDisputeCountChange }) => 
       const response = await fetch(`/api/stripe/disputes?userEmail=${encodeURIComponent(user.email || '')}`);
       if (!response.ok) throw new Error('Failed to fetch disputes');
       
-      const data = await response.json();
-      setDisputes(data);
-      onDisputeCountChange(data.length);
+      const { success, data, error } = await response.json();
+      
+      if (!success) {
+        throw new Error(error || 'Failed to fetch disputes');
+      }
+      
+      // Ensure data is an array
+      const disputesArray = Array.isArray(data) ? data : [];
+
+      // Fetch email history for each dispute
+      const disputesWithEmails = await Promise.all(
+        disputesArray.map(async (dispute) => {
+          if (!dispute.customerEmail) return dispute;
+
+          try {
+            const emailResponse = await fetch('/api/gmail', {
+              headers: {
+                'Authorization': `Bearer ${user.accessToken}`,
+                'X-Dispute-Email': dispute.customerEmail
+              }
+            });
+
+            if (emailResponse.ok) {
+              const { threads } = await emailResponse.json();
+              return {
+                ...dispute,
+                emailThreads: threads || []
+              };
+            }
+          } catch (error) {
+            console.error('Error fetching emails for dispute:', error);
+          }
+          return dispute;
+        })
+      );
+      
+      setDisputes(disputesWithEmails);
+      onDisputeCountChange(disputesWithEmails.length);
+      setIsLoading(false);
     } catch (err: unknown) {
       // Only show error if it's not a chrome extension error
       if (err instanceof Error) {
@@ -96,13 +132,15 @@ const DisputeTable: React.FC<DisputeTableProps> = ({ onDisputeCountChange }) => 
           toast.error(err.message || 'Failed to fetch disputes');
         }
       } else {
-        console.error('An unknown error occurred:', err);
         toast.error('Failed to fetch disputes');
       }
+      // Initialize disputes as empty array on error
+      setDisputes([]);
+      onDisputeCountChange(0);
     } finally {
       setIsLoading(false);
     }
-  }, [user?.email, onDisputeCountChange]);
+  }, [user?.email, user?.accessToken, onDisputeCountChange]);
   
   useEffect(() => {
     fetchDisputes();
@@ -112,26 +150,59 @@ const DisputeTable: React.FC<DisputeTableProps> = ({ onDisputeCountChange }) => 
   }, [fetchDisputes]);
   
   const sortedDisputes = useMemo(() => {
+    if (!Array.isArray(disputes)) {
+      console.error('Disputes is not an array:', disputes);
+      return [];
+    }
+    
     return [...disputes].sort((a, b) => {
-      const dateA = new Date(a.created * 1000);
-      const dateB = new Date(b.created * 1000);
-      return dateB.getTime() - dateA.getTime();
+      if (!a || !b) return 0;
+      
+      switch (sortConfig.key) {
+        case 'created':
+          const dateA = new Date(a.created * 1000);
+          const dateB = new Date(b.created * 1000);
+          return sortConfig.direction === 'asc' 
+            ? dateA.getTime() - dateB.getTime()
+            : dateB.getTime() - dateA.getTime();
+        
+        case 'amount':
+          const amountA = typeof a.amount === 'number' ? a.amount : 0;
+          const amountB = typeof b.amount === 'number' ? b.amount : 0;
+          return sortConfig.direction === 'asc'
+            ? amountA - amountB
+            : amountB - amountA;
+        
+        case 'status':
+          return sortConfig.direction === 'asc'
+            ? (a.status || '').localeCompare(b.status || '')
+            : (b.status || '').localeCompare(a.status || '');
+        
+        default:
+          return 0;
+      }
     });
-  }, [disputes]);
+  }, [disputes, sortConfig]);
   
   const getLastEmailInfo = (dispute: DisputeWithMeta) => {
     if (!dispute.emailThreads || dispute.emailThreads.length === 0) {
       return null;
     }
 
-    // Get the most recent thread
-    const latestThread = dispute.emailThreads[0]; // Threads are already sorted by date
-    if (!latestThread.messages || latestThread.messages.length === 0) {
-      return null;
-    }
+    // Get all messages from all threads
+    const allMessages = dispute.emailThreads.flatMap(thread => thread.messages);
 
-    // Get the last message from the thread
-    const lastMessage = latestThread.messages[latestThread.messages.length - 1];
+    // Sort all messages by date in descending order
+    const sortedMessages = allMessages.sort((a, b) => {
+      const dateA = new Date(a.date).getTime();
+      const dateB = new Date(b.date).getTime();
+      return dateB - dateA;
+    });
+
+    if (sortedMessages.length === 0) return null;
+
+    // Get the most recent message
+    const lastMessage = sortedMessages[0];
     const isFromCustomer = lastMessage.from.toLowerCase().includes(dispute.customerEmail?.toLowerCase() || '');
 
     return {
@@ -174,6 +245,36 @@ const DisputeTable: React.FC<DisputeTableProps> = ({ onDisputeCountChange }) => 
         console.error('An unknown error occurred:', err);
         toast.error('Failed to update status');
       }
+    }
+  };
+
+  const updateDisputeEmailThreads = async (disputeId: string) => {
+    if (!user?.email) return;
+
+    try {
+      const dispute = disputes.find(d => d.id === disputeId);
+      if (!dispute?.customerEmail) return;
+
+      const emailResponse = await fetch('/api/gmail', {
+        headers: {
+          'Authorization': `Bearer ${user.accessToken}`,
+          'X-Dispute-Email': dispute.customerEmail
+        }
+      });
+
+      if (emailResponse.ok) {
+        const { threads } = await emailResponse.json();
+        // Update only the specific dispute's email threads
+        setDisputes(prevDisputes => 
+          prevDisputes.map(d => 
+            d.id === disputeId 
+              ? { ...d, emailThreads: threads || [] }
+              : d
+          )
+        );
+      }
+    } catch (error) {
+      console.error('Error updating email threads:', error);
     }
   };
 
@@ -329,7 +430,13 @@ const DisputeTable: React.FC<DisputeTableProps> = ({ onDisputeCountChange }) => 
                   <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                     <div className="flex items-center space-x-4">
                       <button
-                        onClick={() => setShowNewEmail(dispute.id)}
+                        onClick={() => {
+                          setShowNewEmail(dispute.id);
+                          // Set template index to 1 (Second Response) when clicking email button
+                          const url = new URL(window.location.href);
+                          url.searchParams.set('template', '1');
+                          window.history.replaceState({}, '', url.toString());
+                        }}
                         className="text-indigo-600 hover:text-indigo-900 flex items-center"
                       >
                         <svg className="h-5 w-5 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -359,6 +466,7 @@ const DisputeTable: React.FC<DisputeTableProps> = ({ onDisputeCountChange }) => 
                       {showNewEmail === dispute.id ? (
                         <EmailComposer
                           customerEmail={dispute.customerEmail || ''}
+                          firstName={dispute.firstName}
                           onClose={() => {
                             setShowNewEmail(null);
                             // Clear template param when closing
@@ -366,13 +474,14 @@ const DisputeTable: React.FC<DisputeTableProps> = ({ onDisputeCountChange }) => 
                             url.searchParams.delete('template');
                             window.history.replaceState({}, '', url.toString());
                           }}
-                          onEmailSent={() => {
+                          onEmailSent={async () => {
                             setShowNewEmail(null);
-                            fetchDisputes();
                             // Clear template param after sending
                             const url = new URL(window.location.href);
                             url.searchParams.delete('template');
                             window.history.replaceState({}, '', url.toString());
+                            // Only update email threads for this dispute
+                            await updateDisputeEmailThreads(dispute.id);
                           }}
                           threads={dispute.emailThreads || []}
                           initialTemplate={new URLSearchParams(window.location.search).get('template')}
@@ -380,8 +489,12 @@ const DisputeTable: React.FC<DisputeTableProps> = ({ onDisputeCountChange }) => 
                       ) : (
                         <EmailCorrespondence
                           customerEmail={dispute.customerEmail || ''}
+                          firstName={dispute.firstName}
                           disputeId={dispute.id}
-                          onEmailSent={fetchDisputes}
+                          onEmailSent={async () => {
+                            // Only update email threads for this dispute
+                            await updateDisputeEmailThreads(dispute.id);
+                          }}
                           initialThreads={dispute.emailThreads || []}
                           showEmailHistory={true}
                         />
@@ -397,7 +510,6 @@ const DisputeTable: React.FC<DisputeTableProps> = ({ onDisputeCountChange }) => 
       <DisputeSettingsModal
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
-        onUpdate={fetchDisputes}
       />
     </div>
   );

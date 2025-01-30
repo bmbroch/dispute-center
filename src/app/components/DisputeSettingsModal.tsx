@@ -10,7 +10,6 @@ import { TINYMCE_CONFIG } from '@/lib/config/tinymce';
 interface DisputeSettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onUpdate: () => void;
 }
 
 interface EmailTemplate {
@@ -45,7 +44,7 @@ const DEFAULT_TEMPLATES: EmailTemplate[] = [
   }
 ];
 
-export default function DisputeSettingsModal({ isOpen, onClose, onUpdate }: DisputeSettingsModalProps) {
+export default function DisputeSettingsModal({ isOpen, onClose }: DisputeSettingsModalProps) {
   const { user } = useAuth();
   const [templates, setTemplates] = useState<EmailTemplate[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -144,7 +143,6 @@ export default function DisputeSettingsModal({ isOpen, onClose, onUpdate }: Disp
       // Update local state with the saved templates
       setTemplates(data.templates || updatedTemplates);
       toast.success('Templates saved successfully');
-      onUpdate(); // Call onUpdate after successful save
 
     } catch (error) {
       console.error('Error saving templates:', error);
@@ -284,6 +282,37 @@ export default function DisputeSettingsModal({ isOpen, onClose, onUpdate }: Disp
                                     init={{
                                       ...TINYMCE_CONFIG,
                                       height: 400,
+                                      content_style: `
+                                        body {
+                                          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+                                          font-size: 14px;
+                                          line-height: 1.6;
+                                          padding: 1rem;
+                                          color: #000000;
+                                          background: #ffffff;
+                                        }
+                                        p { 
+                                          margin: 0;
+                                          padding: 0;
+                                          min-height: 1.6em;
+                                        }
+                                        p + p {
+                                          margin-top: 0;
+                                        }
+                                        img { 
+                                          max-width: 40%; 
+                                          height: auto;
+                                          display: block;
+                                          margin: 8px 0;
+                                        }
+                                      `,
+                                      forced_root_block: 'p',
+                                      forced_root_block_attrs: {
+                                        style: 'margin: 0; padding: 0; min-height: 1.6em;'
+                                      },
+                                      formats: {
+                                        p: { block: 'p', styles: { margin: '0', padding: '0', 'min-height': '1.6em' } }
+                                      },
                                     }}
                                   />
                                 </div>

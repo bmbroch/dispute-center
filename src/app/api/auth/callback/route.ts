@@ -1,54 +1,58 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-const ALLOWED_ORIGINS = [
-  'http://localhost:3002',
-  'https://dispute-center-leli.vercel.app'
-];
-
 export async function GET(request: NextRequest) {
   try {
-    const origin = request.headers.get('origin') || '';
-    if (!ALLOWED_ORIGINS.includes(origin)) {
-      return new NextResponse(JSON.stringify({ error: 'Invalid origin' }), {
-        status: 403,
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      });
-    }
-
     const searchParams = request.nextUrl.searchParams;
     const code = searchParams.get('code');
     const error = searchParams.get('error');
 
-    if (error) {
+    // Get origin from referer or default to localhost
+    const referer = request.headers.get('referer');
+    const origin = referer?.includes('localhost:3002') 
+      ? 'http://localhost:3002' 
+      : 'https://dispute-center-leli.vercel.app';
+
+    const createResponse = (content: string) => {
       return new NextResponse(
-        `<script>
-          window.opener.postMessage({ error: "${error}" }, "${origin}");
-          window.close();
-        </script>`,
+        `
+        <!DOCTYPE html>
+        <html>
+          <head>
+            <title>Authentication Callback</title>
+            <script>
+              function sendMessageAndClose(data) {
+                if (window.opener) {
+                  window.opener.postMessage(data, '${origin}');
+                  // Close after a short delay to ensure message is sent
+                  setTimeout(() => window.close(), 500);
+                }
+              }
+            </script>
+          </head>
+          <body>
+            <script>
+              ${content}
+            </script>
+          </body>
+        </html>
+        `,
         {
           status: 200,
-          headers: {
-            'Content-Type': 'text/html',
-          },
+          headers: { 'Content-Type': 'text/html' },
         }
       );
+    };
+
+    if (error) {
+      return createResponse(`
+        sendMessageAndClose({ error: "${error}" });
+      `);
     }
 
     if (!code) {
-      return new NextResponse(
-        `<script>
-          window.opener.postMessage({ error: "No authorization code received" }, "${origin}");
-          window.close();
-        </script>`,
-        {
-          status: 200,
-          headers: {
-            'Content-Type': 'text/html',
-          },
-        }
-      );
+      return createResponse(`
+        sendMessageAndClose({ error: "No authorization code received" });
+      `);
     }
 
     // Exchange code for tokens
@@ -68,6 +72,12 @@ export async function GET(request: NextRequest) {
 
     const tokens = await tokenResponse.json();
 
+    if (!tokenResponse.ok) {
+      return createResponse(`
+        sendMessageAndClose({ error: "Failed to get access token" });
+      `);
+    }
+
     // Get user info
     const userInfoResponse = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
       headers: {
@@ -77,49 +87,25 @@ export async function GET(request: NextRequest) {
 
     const userInfo = await userInfoResponse.json();
 
-    // Return HTML that:
-    // 1. Posts message to opener (popup's parent)
-    // 2. Stores tokens in localStorage
-    // 3. Updates parent's window location
-    return new NextResponse(
-      `<script>
-        // First, send data to parent window
-        window.opener.postMessage({ 
-          tokens: ${JSON.stringify(tokens)}, 
-          userInfo: ${JSON.stringify(userInfo)} 
-        }, "${origin}");
+    if (!userInfoResponse.ok) {
+      return createResponse(`
+        sendMessageAndClose({ error: "Failed to get user info" });
+      `);
+    }
 
-        // Store tokens in parent window's localStorage
-        window.opener.localStorage.setItem('auth_tokens', JSON.stringify(${JSON.stringify(tokens)}));
-        window.opener.localStorage.setItem('user_info', JSON.stringify(${JSON.stringify(userInfo)}));
+    // Return success response
+    return createResponse(`
+      const data = {
+        tokens: ${JSON.stringify(tokens)},
+        userInfo: ${JSON.stringify(userInfo)}
+      };
+      sendMessageAndClose(data);
+    `);
 
-        // Trigger parent window reload to update UI
-        window.opener.location.reload();
-
-        // Close popup
-        window.close();
-      </script>`,
-      {
-        status: 200,
-        headers: {
-          'Content-Type': 'text/html',
-          'Access-Control-Allow-Origin': origin,
-        },
-      }
-    );
   } catch (error) {
     console.error('Callback error:', error);
-    return new NextResponse(
-      `<script>
-        window.opener.postMessage({ error: "Authentication failed" }, "*");
-        window.close();
-      </script>`,
-      {
-        status: 200,
-        headers: {
-          'Content-Type': 'text/html',
-        },
-      }
-    );
+    return createResponse(`
+      sendMessageAndClose({ error: "Authentication failed" });
+    `);
   }
 } 

@@ -40,6 +40,7 @@ export interface EmailThread {
 
 interface EmailCorrespondenceProps {
   customerEmail: string;
+  firstName?: string;
   disputeId: string;
   onEmailSent?: () => void;
   initialThreads?: EmailThread[];
@@ -54,7 +55,8 @@ const decodeHtmlEntities = (text: string) => {
 };
 
 export default function EmailCorrespondence({ 
-  customerEmail, 
+  customerEmail,
+  firstName,
   disputeId,
   onEmailSent,
   initialThreads = [],
@@ -353,6 +355,7 @@ export default function EmailCorrespondence({
       {replyToMessage && (
         <EmailComposer
           customerEmail={customerEmail}
+          firstName={firstName}
           onClose={() => setReplyToMessage(null)}
           onEmailSent={handleEmailSent}
           replyToMessage={replyToMessage}

@@ -25,13 +25,19 @@ export async function POST(request: NextRequest) {
     if (!response.ok) {
       const error = await response.text();
       console.error('Token refresh failed:', error);
-      return NextResponse.json({ error: 'Failed to refresh tokens' }, { status: response.status });
+      return NextResponse.json(
+        { error: 'Failed to refresh token' },
+        { status: response.status }
+      );
     }
 
     const tokens = await response.json();
     return NextResponse.json(tokens);
   } catch (error) {
-    console.error('Token refresh error:', error);
-    return NextResponse.json({ error: 'Token refresh failed' }, { status: 500 });
+    console.error('Error in token refresh:', error);
+    return NextResponse.json(
+      { error: 'Internal server error' },
+      { status: 500 }
+    );
   }
 } 
