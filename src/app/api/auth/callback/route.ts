@@ -1,5 +1,42 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+const createResponse = (content: string, origin: string) => {
+  return new NextResponse(
+    `
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <title>Authentication Callback</title>
+        <script>
+          function sendMessageAndClose(data) {
+            if (window.opener) {
+              window.opener.postMessage(data, '${origin}');
+              // Close after a short delay to ensure message is sent
+              setTimeout(() => window.close(), 500);
+            }
+          }
+        </script>
+      </head>
+      <body>
+        <script>
+          ${content}
+        </script>
+      </body>
+    </html>
+    `,
+    {
+      status: 200,
+      headers: {
+        'Content-Type': 'text/html',
+        'Access-Control-Allow-Origin': origin,
+        'Access-Control-Allow-Methods': 'GET, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+        'Cross-Origin-Opener-Policy': 'unsafe-none'
+      },
+    }
+  );
+};
+
 export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
@@ -12,53 +49,16 @@ export async function GET(request: NextRequest) {
                     ? 'http://localhost:3002'
                     : 'https://dispute-center-leli.vercel.app');
 
-    const createResponse = (content: string) => {
-      return new NextResponse(
-        `
-        <!DOCTYPE html>
-        <html>
-          <head>
-            <title>Authentication Callback</title>
-            <script>
-              function sendMessageAndClose(data) {
-                if (window.opener) {
-                  window.opener.postMessage(data, '${origin}');
-                  // Close after a short delay to ensure message is sent
-                  setTimeout(() => window.close(), 500);
-                }
-              }
-            </script>
-          </head>
-          <body>
-            <script>
-              ${content}
-            </script>
-          </body>
-        </html>
-        `,
-        {
-          status: 200,
-          headers: {
-            'Content-Type': 'text/html',
-            'Access-Control-Allow-Origin': origin,
-            'Access-Control-Allow-Methods': 'GET, OPTIONS',
-            'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-            'Cross-Origin-Opener-Policy': 'unsafe-none'
-          },
-        }
-      );
-    };
-
     if (error) {
       return createResponse(`
         sendMessageAndClose({ error: "${error}" });
-      `);
+      `, origin);
     }
 
     if (!code) {
       return createResponse(`
         sendMessageAndClose({ error: "No authorization code received" });
-      `);
+      `, origin);
     }
 
     // Exchange code for tokens
@@ -81,7 +81,7 @@ export async function GET(request: NextRequest) {
     if (!tokenResponse.ok) {
       return createResponse(`
         sendMessageAndClose({ error: "Failed to get access token" });
-      `);
+      `, origin);
     }
 
     // Get user info
@@ -96,7 +96,7 @@ export async function GET(request: NextRequest) {
     if (!userInfoResponse.ok) {
       return createResponse(`
         sendMessageAndClose({ error: "Failed to get user info" });
-      `);
+      `, origin);
     }
 
     // Return success response
@@ -106,12 +106,16 @@ export async function GET(request: NextRequest) {
         userInfo: ${JSON.stringify(userInfo)}
       };
       sendMessageAndClose(data);
-    `);
+    `, origin);
 
   } catch (error) {
     console.error('Callback error:', error);
+    const origin = request.headers.get('origin') || 
+                  (request.headers.get('referer')?.includes('localhost') 
+                    ? 'http://localhost:3002'
+                    : 'https://dispute-center-leli.vercel.app');
     return createResponse(`
       sendMessageAndClose({ error: "Authentication failed" });
-    `);
+    `, origin);
   }
 } 
