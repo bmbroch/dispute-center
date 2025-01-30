@@ -16,7 +16,8 @@ export async function GET(request: Request) {
     if (!userEmail) {
       return NextResponse.json({ 
         success: false,
-        error: 'User email is required' 
+        error: 'User email is required',
+        data: [] 
       }, { status: 400 });
     }
 
@@ -25,7 +26,8 @@ export async function GET(request: Request) {
     if (!stripeKey) {
       return NextResponse.json({ 
         success: false,
-        error: 'No Stripe key found. Please add your Stripe API key in settings.'
+        error: 'No Stripe key found. Please add your Stripe API key in settings.',
+        data: []
       }, { status: 404 });
     }
 
@@ -84,40 +86,25 @@ export async function GET(request: Request) {
           created: dispute.created,
           customerEmail,
           firstName: firstName.charAt(0).toUpperCase() + firstName.slice(1).toLowerCase(),
-          dueDate: dueBy
+          dueDate: dueBy,
+          emailThreads: [], // Initialize empty email threads array
+          charge: charge || null,
+          payment_intent: paymentIntent || null
         };
       });
 
-    // Add test dispute for bmbroch@gmail.com
-    const testDispute = {
-      id: 'test-dispute',
-      amount: 2500, // $25.00
-      currency: 'usd',
-      status: 'needs_response',
-      reason: 'test_dispute',
-      created: Date.now() / 1000,
-      customerEmail: 'bmbroch@gmail.com',
-      firstName: 'Ben',
-      dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toLocaleDateString('en-US', {
-        month: 'short',
-        day: 'numeric',
-        year: 'numeric'
-      })
-    };
-
-    // Add test dispute to beginning of array
-    const allDisputes = [testDispute, ...activeDisputes];
-
     return NextResponse.json({ 
       success: true,
-      data: allDisputes 
+      data: activeDisputes,
+      error: null
     });
 
   } catch (error) {
     console.error('Error in disputes route:', error);
     return NextResponse.json({ 
       success: false,
-      error: error instanceof Error ? error.message : 'Failed to fetch disputes'
+      error: error instanceof Error ? error.message : 'Failed to fetch disputes',
+      data: []
     }, { status: 500 });
   }
 } 

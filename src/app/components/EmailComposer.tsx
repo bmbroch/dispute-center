@@ -57,6 +57,7 @@ interface EmailTemplate {
 
 interface EmailComposerProps {
   customerEmail: string;
+  firstName?: string;
   onClose: () => void;
   onEmailSent: () => void;
   replyToMessage?: EmailMessage;
@@ -65,7 +66,8 @@ interface EmailComposerProps {
 }
 
 export default function EmailComposer({ 
-  customerEmail, 
+  customerEmail,
+  firstName,
   onClose, 
   onEmailSent, 
   replyToMessage,
@@ -113,8 +115,10 @@ export default function EmailComposer({
           setSelectedTemplate(templateToUse);
           setSubject(templateToUse.subject);
           
-          const firstName = customerEmail.split('@')[0].split(/[^a-zA-Z]/)[0];
-          const formattedFirstName = firstName.charAt(0).toUpperCase() + firstName.slice(1).toLowerCase();
+          const formattedFirstName = firstName || (() => {
+            const nameFromEmail = customerEmail.split('@')[0].split(/[^a-zA-Z]/)[0];
+            return nameFromEmail.charAt(0).toUpperCase() + nameFromEmail.slice(1).toLowerCase();
+          })();
           
           const processedBody = templateToUse.body.replace(/\{\{firstName\}\}/g, formattedFirstName);
           setContent(processedBody);
@@ -137,8 +141,10 @@ export default function EmailComposer({
           setSelectedTemplate(templateToUse);
           setSubject(templateToUse.subject);
           
-          const firstName = customerEmail.split('@')[0].split(/[^a-zA-Z]/)[0];
-          const formattedFirstName = firstName.charAt(0).toUpperCase() + firstName.slice(1).toLowerCase();
+          const formattedFirstName = firstName || (() => {
+            const nameFromEmail = customerEmail.split('@')[0].split(/[^a-zA-Z]/)[0];
+            return nameFromEmail.charAt(0).toUpperCase() + nameFromEmail.slice(1).toLowerCase();
+          })();
           
           const processedBody = templateToUse.body.replace(/\{\{firstName\}\}/g, formattedFirstName);
           setContent(processedBody);
@@ -155,7 +161,7 @@ export default function EmailComposer({
     }
 
     fetchTemplates();
-  }, [user?.email, customerEmail, replyToMessage, initialTemplate]);
+  }, [user?.email, customerEmail, replyToMessage, initialTemplate, firstName]);
 
   // Handle reply message
   useEffect(() => {
@@ -237,8 +243,12 @@ export default function EmailComposer({
       template.subject
     );
     
-    const firstName = customerEmail.split('@')[0].split(/[^a-zA-Z]/)[0];
-    const formattedFirstName = firstName.charAt(0).toUpperCase() + firstName.slice(1).toLowerCase();
+    // Use provided firstName or fall back to email-based name if not provided
+    const formattedFirstName = firstName || (() => {
+      const nameFromEmail = customerEmail.split('@')[0].split(/[^a-zA-Z]/)[0];
+      return nameFromEmail.charAt(0).toUpperCase() + nameFromEmail.slice(1).toLowerCase();
+    })();
+    
     const processedBody = template.body.replace(/\{\{firstName\}\}/g, formattedFirstName);
     
     // Set the content state immediately
@@ -466,82 +476,63 @@ ${threadHistory ? `<br>${threadHistory}` : ''}
                       'bold italic underline | alignleft aligncenter ' +
                       'alignright alignjustify | bullist numlist | ' +
                       'link image | removeformat',
-                    paste_data_images: true,
-                    paste_as_text: false,
-                    paste_enable_default_filters: true,
-                    paste_word_valid_elements: 'b,strong,i,em,h1,h2,h3,p,br',
-                    paste_webkit_styles: 'none',
-                    paste_retain_style_properties: 'none',
-                    paste_merge_formats: true,
-                    paste_convert_word_fake_lists: true,
-                    automatic_uploads: true,
                     content_style: `
                       body {
                         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
                         font-size: 14px;
-                        line-height: 1.5;
-                        padding: 1rem;
+                        line-height: 1.4;
                         color: #000000;
                         background: #ffffff;
+                        margin: 0;
+                        padding: 16px;
                       }
-                      p { margin: 0 0 1em 0; }
-                      img { 
-                        max-width: 40%; 
+                      .mce-content-body {
+                        padding: 16px !important;
+                      }
+                      p {
+                        margin: 0;
+                        padding: 0;
+                        min-height: 1.4em;
+                      }
+                      p:empty {
+                        min-height: 1.4em;
+                      }
+                      p + p {
+                        margin-top: 0.7em;
+                      }
+                      img {
+                        max-width: 40%;
                         height: auto;
                         display: block;
                         margin: 8px 0;
                       }
+                      ul, ol {
+                        margin: 0.7em 0;
+                        padding-left: 2em;
+                      }
+                      li {
+                        margin: 0;
+                        padding: 0;
+                      }
+                      li + li {
+                        margin-top: 0.2em;
+                      }
                     `,
+                    content_css: 'default',
+                    content_css_cors: true,
+                    forced_root_block: 'p',
+                    forced_root_block_attrs: {
+                      style: 'margin: 0; padding: 0; min-height: 1.4em;'
+                    },
+                    formats: {
+                      p: { block: 'p', styles: { margin: '0', padding: '0', 'min-height': '1.4em' } }
+                    },
                     setup: function(editor) {
                       editor.on('init', function() {
                         const body = editor.getBody();
                         body.style.backgroundColor = '#ffffff';
                         body.style.color = '#000000';
                       });
-
-                      // Handle paste events to ensure images are properly handled
-                      editor.on('paste', function(e) {
-                        if (e.clipboardData) {
-                          const items = e.clipboardData.items;
-                          for (let i = 0; i < items.length; i++) {
-                            if (items[i].type.indexOf('image') !== -1) {
-                              // Convert image to base64 immediately
-                              const blob = items[i].getAsFile();
-                              const reader = new FileReader();
-                              reader.onload = function(e) {
-                                editor.insertContent(`<img src="${e.target?.result}" style="max-width:40%; height:auto; display:block; margin:8px 0;" />`);
-                              };
-                              if (blob) { reader.readAsDataURL(blob); }
-                              e.preventDefault();
-                            }
-                          }
-                        }
-                      });
-                    },
-                    // Add default image settings
-                    image_dimensions: false,
-                    image_class_list: [
-                      {title: 'Default (40%)', value: 'default-image'},
-                      {title: 'Full width', value: 'full-width'}
-                    ],
-                    image_default_size: {
-                      width: '40%',
-                      height: 'auto'
-                    },
-                    images_upload_handler: async function (blobInfo) {
-                      try {
-                        // Convert the blob to base64
-                        return new Promise((resolve) => {
-                          const reader = new FileReader();
-                          reader.onloadend = () => {
-                            resolve(reader.result as string);
-                          };
-                          reader.readAsDataURL(blobInfo.blob());
-                        });
-                      } catch (error) {
-                        console.error('Failed to upload image:', error);
-                        throw error;
-                      }
                     }
                   }}
                   onInit={(evt, editor) => {
