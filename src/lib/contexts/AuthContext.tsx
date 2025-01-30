@@ -119,7 +119,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             } catch (refreshError) {
               console.error('Error refreshing token:', refreshError);
               // Only clear tokens if refresh explicitly fails
-              if (refreshError.message === 'Invalid refresh token') {
+              if (refreshError instanceof Error && refreshError.message === 'Invalid refresh token') {
                 localStorage.removeItem('auth_tokens');
                 googleAuthService.clearTokens();
               }
@@ -135,7 +135,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       } catch (error) {
         console.error('Error loading saved auth:', error);
         // Only clear tokens on critical errors
-        if (error.message === 'Invalid token structure') {
+        if (error instanceof Error && error.message === 'Invalid token structure') {
           localStorage.removeItem('auth_tokens');
           googleAuthService.clearTokens();
           setUser(null);

@@ -93,8 +93,7 @@ export async function POST(request: NextRequest) {
     const responseToSend = NextResponse.json(responseData);
 
     // Set the auth cookie
-    const cookieStore = cookies();
-    cookieStore.set('auth', 'true', {
+    responseToSend.cookies.set('auth', 'true', {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
