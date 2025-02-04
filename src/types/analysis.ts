@@ -1,3 +1,27 @@
+export interface ThreadSummary {
+  subject: string;
+  content: string;
+  sentiment: string;
+  key_points: string[];
+}
+
+export interface EmailData {
+  subject: string;
+  from: string;
+  body: string;
+  date: string;
+  summary: ThreadSummary | null;
+  isSupport: boolean;
+  confidence: number;
+  reason: string;
+  fullData?: {
+    subject: string;
+    from: string;
+    body: string;
+    date: string;
+  };
+}
+
 export interface FAQ {
   question: string;
   typicalAnswer: string;
@@ -27,10 +51,10 @@ export interface AIInsights {
 export interface SavedEmailAnalysis {
   id: string;
   timestamp: number;
-  emails: Array<any>; // You might want to define a more specific type for emails
+  emails: Array<EmailData>;
   totalEmails: number;
   totalEmailsAnalyzed: number;
-  supportEmails: Array<any>; // You might want to define a more specific type for support emails
+  supportEmails: Array<EmailData>;
   tokenUsage: TokenUsage;
   aiInsights: AIInsights;
 } 

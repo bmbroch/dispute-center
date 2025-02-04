@@ -17,20 +17,16 @@ import { getFirebaseDB } from '@/lib/firebase/firebase';
 import Image from 'next/image';
 import AnalysisModal from '../components/AnalysisModal';
 import AnalysisSummary from '../components/AnalysisSummary';
-import { SavedEmailAnalysis, FAQ } from '@/types/analysis';
+import { SavedEmailAnalysis, FAQ, EmailData, ThreadSummary } from '@/types/analysis';
 
 interface ProcessingResult {
   id: string;
   timestamp: number;
-  emails: any[];
   totalEmails: number;
   totalEmailsAnalyzed: number;
-  supportEmails: any[];
-  tokenUsage: {
-    totalTokens: number;
-    promptTokens: number;
-    completionTokens: number;
-  };
+  supportEmails: number;
+  emails: EmailData[];
+  tokenUsage: TokenUsage;
   aiInsights: {
     keyPoints: string[];
     keyCustomerPoints: string[];
@@ -251,7 +247,7 @@ export default function KnowledgePage() {
   const [currentAnalysis, setCurrentAnalysis] = useState<SavedEmailAnalysis | null>(null);
   const [latestSavedAnalysis, setLatestSavedAnalysis] = useState<SavedEmailAnalysis | null>(null);
   const [visibleAnalysesCount, setVisibleAnalysesCount] = useState(3);
-  const [supportEmails, setSupportEmails] = useState<Array<any>>([]);
+  const [supportEmails, setSupportEmails] = useState<EmailData[]>([]);
 
   // Get Firestore instance
   const db = getFirebaseDB();
@@ -753,29 +749,37 @@ export default function KnowledgePage() {
     }
 
     try {
+      const emailsWithSummary: EmailData[] = analyzedEmails
+        .filter(email => email.isSupport)
+        .map(email => {
+          const originalEmail = emailData.find(e => 
+            normalizeSubject(e.subject) === normalizeSubject(email.subject)
+          );
+          return {
+            subject: email.subject || '',
+            from: originalEmail?.from || '',
+            body: originalEmail?.body || '',
+            date: originalEmail?.date || new Date().toISOString(),
+            isSupport: true,
+            confidence: email.confidence || 0,
+            reason: email.reason || '',
+            summary: {
+              subject: email.subject || '',
+              content: originalEmail?.body?.slice(0, 200) || '',
+              sentiment: 'neutral',
+              key_points: [email.reason || '']
+            }
+          };
+        });
+
       // Create complete analysis object with all required fields
       const analysisToSave: SavedEmailAnalysis = {
         id: Date.now().toString(),
         timestamp: Date.now(),
         totalEmails: processingStatus.totalEmails || 0,
         totalEmailsAnalyzed: processingStatus.totalEmails || 0,
-        supportEmails: supportEmails,
-        emails: analyzedEmails
-          .filter(email => email.isSupport)
-          .map(email => {
-            const originalEmail = emailData.find(e => 
-              normalizeSubject(e.subject) === normalizeSubject(email.subject)
-            );
-            return {
-              subject: email.subject || '',
-              from: originalEmail?.from || '',
-              body: originalEmail?.body || '',
-              date: originalEmail?.date || new Date().toISOString(),
-              isSupport: true,
-              confidence: email.confidence || 0,
-              reason: email.reason || ''
-            };
-          }),
+        supportEmails: emailsWithSummary.length,
+        emails: emailsWithSummary,
         tokenUsage: {
           promptTokens: tokenUsage.promptTokens || 0,
           completionTokens: tokenUsage.completionTokens || 0,
@@ -783,13 +787,13 @@ export default function KnowledgePage() {
         },
         aiInsights: {
           keyPoints: result.aiInsights.keyPoints,
-          keyCustomerPoints: result.aiInsights.keyPoints,
+          keyCustomerPoints: result.aiInsights.keyCustomerPoints,
           commonQuestions: result.aiInsights.commonQuestions,
           suggestedActions: result.aiInsights.suggestedActions,
-          recommendedActions: result.aiInsights.suggestedActions,
+          recommendedActions: result.aiInsights.recommendedActions,
           customerSentiment: {
             overall: "Analysis complete",
-            details: `Analyzed ${processingStatus.totalEmails} emails and found ${supportEmails.length} support-related emails.`
+            details: `Analyzed ${processingStatus.totalEmails} emails and found ${emailsWithSummary.length} support-related emails.`
           }
         }
       };

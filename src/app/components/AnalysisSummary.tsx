@@ -64,7 +64,7 @@ export default function AnalysisSummary({ analysis, onClose, showCloseButton = t
           </div>
           <div className="bg-green-50 rounded-lg px-3 py-2">
             <span className="text-sm text-green-600">
-              {analysis.supportEmails.length || 0} support emails found
+              {analysis.supportEmails} support emails found
             </span>
           </div>
           <div className="bg-purple-50 rounded-lg px-3 py-2">
