@@ -34,7 +34,7 @@ export const AuthContext = createContext<AuthContextType>({
   checkGmailAccess: async () => false,
 });
 
-const PUBLIC_PATHS = ['/', '/auth', '/login'];
+const PUBLIC_PATHS = ['/', '/auth', '/login', '/knowledge'];
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
@@ -48,13 +48,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (loading) return;
 
     const currentPath = pathname || '/';
+    const LOGIN_PATHS = ['/auth', '/login'];
 
+    // Only redirect to home if user is not logged in and trying to access a protected path
     if (!user && !PUBLIC_PATHS.includes(currentPath)) {
       router.replace('/');
       return;
     }
 
-    if (user && PUBLIC_PATHS.includes(currentPath) && currentPath !== '/') {
+    // Only redirect to disputes if user is logged in and on a login-specific path
+    if (user && LOGIN_PATHS.includes(currentPath)) {
       router.replace('/disputes');
     }
   }, [loading, pathname, router, user]);

@@ -17,7 +17,9 @@ export default function SearchParamsHandler({ showLoginSplash, setShowLoginSplas
   useEffect(() => {
     // Check if there's a redirect parameter and user is not authenticated
     const redirect = searchParams.get('redirect');
-    if (redirect && !user) {
+    // Only show login splash for non-public paths
+    const PUBLIC_PATHS = ['/', '/auth', '/login', '/knowledge'];
+    if (redirect && !user && !PUBLIC_PATHS.includes(redirect)) {
       setShowLoginSplash(true);
     }
   }, [searchParams, user, setShowLoginSplash]);

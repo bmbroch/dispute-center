@@ -1,9 +1,6 @@
-'use client';
-
 import './globals.css'
 import { Providers } from './providers'
 import { Roboto } from 'next/font/google'
-import { Toaster } from 'react-hot-toast'
 
 const roboto = Roboto({
   weight: ['300', '400', '500', '700'],
@@ -24,7 +21,6 @@ export default function RootLayout({
             {children}
           </div>
         </Providers>
-        <Toaster position="top-right" />
       </body>
     </html>
   )

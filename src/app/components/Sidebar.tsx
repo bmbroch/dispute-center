@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Home, User, CreditCard, Settings, HelpCircle, LogOut } from 'lucide-react';
+import { Home, User, CreditCard, Settings, HelpCircle, LogOut, BookOpen } from 'lucide-react';
 import { useAuth } from '@/lib/hooks/useAuth';
 import Image from 'next/image';
 
@@ -57,6 +57,16 @@ export function Sidebar() {
         >
           <Home className="w-5 h-5" />
           <span className="font-medium">Home</span>
+        </Link>
+
+        <Link 
+          href="/knowledge"
+          className={`flex items-center gap-3 px-4 py-3 rounded-lg text-gray-700 mt-2 ${
+            isActive('/knowledge') ? 'bg-red-100 text-red-600' : 'hover:bg-gray-50'
+          }`}
+        >
+          <BookOpen className="w-5 h-5" />
+          <span className="font-medium">Knowledge Base</span>
         </Link>
       </div>
 
