@@ -1,74 +1,114 @@
-import { NextResponse } from 'next/server';
 import { google } from 'googleapis';
-import { getAuth } from '@/lib/firebase/firebaseUtils';
-import { getFirebaseDB } from '@/lib/firebase/firebase';
-import { doc, getDoc } from 'firebase/firestore';
+import { NextResponse } from 'next/server';
 import { getOAuth2Client } from '@/lib/google/auth';
+
+const BATCH_SIZE = 100; // Number of emails to fetch per batch
+const MAX_BATCHES = 5; // Maximum number of batches to prevent infinite loops
 
 export async function POST(req: Request) {
   try {
-    const { count } = await req.json();
-    const auth = getAuth();
-    const user = auth.currentUser;
-
-    if (!user) {
-      return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+    const authHeader = req.headers.get('Authorization');
+    
+    if (!authHeader) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    // Get user's Gmail credentials from Firestore
-    const db = getFirebaseDB();
-    const userDoc = await getDoc(doc(db, 'users', user.uid));
-    const userData = userDoc.data();
-
-    if (!userData?.googleTokens) {
-      return NextResponse.json({ error: 'Gmail not connected' }, { status: 401 });
-    }
-
+    const accessToken = authHeader.replace('Bearer ', '');
     const oauth2Client = getOAuth2Client();
-    oauth2Client.setCredentials(userData.googleTokens);
-
-    const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
-
-    // List emails
-    const response = await gmail.users.messages.list({
-      userId: 'me',
-      maxResults: count,
+    oauth2Client.setCredentials({
+      access_token: accessToken,
+      scope: [
+        'https://www.googleapis.com/auth/gmail.readonly',
+        'https://www.googleapis.com/auth/gmail.modify',
+        'https://www.googleapis.com/auth/gmail.send'
+      ].join(' ')
     });
 
-    const emails = [];
-    for (const message of response.data.messages || []) {
-      const email = await gmail.users.messages.get({
+    const gmail = google.gmail('v1');
+    const emailDetails = [];
+    let pageToken = undefined;
+    let batchCount = 0;
+    let response: { emails: any[]; nextPageToken?: string } = { emails: [] };
+
+    // Keep fetching emails until we have enough valid ones or hit the max batch limit
+    while (emailDetails.length < 50 && batchCount < MAX_BATCHES) {
+      const gmailResponse: { data: { messages?: { id: string }[]; nextPageToken?: string } } = await gmail.users.messages.list({
+        auth: oauth2Client,
         userId: 'me',
-        id: message.id!,
+        maxResults: BATCH_SIZE,
+        pageToken: pageToken,
       });
 
-      const headers = email.data.payload?.headers;
-      const subject = headers?.find(h => h.name === 'Subject')?.value || '';
-      const from = headers?.find(h => h.name === 'From')?.value || '';
-      const date = headers?.find(h => h.name === 'Date')?.value || '';
+      const messages = gmailResponse.data.messages || [];
+      pageToken = gmailResponse.data.nextPageToken;
 
-      // Get email body
-      let body = '';
-      if (email.data.payload?.parts) {
-        for (const part of email.data.payload.parts) {
-          if (part.mimeType === 'text/plain') {
-            body = Buffer.from(part.body?.data || '', 'base64').toString();
-            break;
+      // Fetch details for each email
+      for (const message of messages) {
+        if (emailDetails.length >= 50) break;
+
+        const emailData = await gmail.users.messages.get({
+          auth: oauth2Client,
+          userId: 'me',
+          id: message.id!,
+          format: 'full',
+        });
+
+        const headers = emailData.data.payload?.headers;
+        const subject = headers?.find(h => h.name === 'Subject')?.value;
+        const from = headers?.find(h => h.name === 'From')?.value;
+        const to = headers?.find(h => h.name === 'To')?.value;
+        const date = headers?.find(h => h.name === 'Date')?.value;
+
+        // Get email body
+        let body = '';
+        if (emailData.data.payload?.parts) {
+          // Try to find text/plain part first
+          const textPart = emailData.data.payload.parts.find(
+            part => part.mimeType === 'text/plain'
+          );
+          // Fallback to text/html if no plain text
+          const htmlPart = !textPart ? emailData.data.payload.parts.find(
+            part => part.mimeType === 'text/html'
+          ) : null;
+          
+          if (textPart?.body?.data) {
+            body = Buffer.from(textPart.body.data, 'base64').toString();
+          } else if (htmlPart?.body?.data) {
+            body = Buffer.from(htmlPart.body.data, 'base64').toString();
           }
+        } else if (emailData.data.payload?.body?.data) {
+          body = Buffer.from(emailData.data.payload.body.data, 'base64').toString();
         }
-      } else if (email.data.payload?.body?.data) {
-        body = Buffer.from(email.data.payload.body.data, 'base64').toString();
+
+        // Only add emails that have a body
+        if (body.trim()) {
+          emailDetails.push({
+            id: message.id,
+            subject,
+            from,
+            to,
+            date,
+            body,
+          });
+        }
       }
 
-      emails.push({
-        subject,
-        from,
-        date,
-        body,
-      });
+      batchCount++;
+      if (!pageToken) break;
     }
 
-    return NextResponse.json(emails);
+    if (emailDetails.length === 0) {
+      return NextResponse.json(
+        { error: 'No valid emails found' },
+        { status: 404 }
+      );
+    }
+
+    return NextResponse.json({ 
+      emails: emailDetails,
+      totalFetched: emailDetails.length,
+      batchesUsed: batchCount
+    });
   } catch (error) {
     console.error('Error fetching emails:', error);
     return NextResponse.json(

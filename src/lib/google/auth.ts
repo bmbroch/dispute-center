@@ -1,26 +1,25 @@
 import { google } from 'googleapis';
 
-const oauth2Client = new google.auth.OAuth2(
-  process.env.GOOGLE_CLIENT_ID,
-  process.env.GOOGLE_CLIENT_SECRET,
-  process.env.GOOGLE_REDIRECT_URI
-);
+export function getOAuth2Client() {
+  // Check for required environment variables
+  if (!process.env.GOOGLE_CLIENT_ID) {
+    throw new Error('GOOGLE_CLIENT_ID environment variable is not set');
+  }
+  if (!process.env.GOOGLE_CLIENT_SECRET) {
+    throw new Error('GOOGLE_CLIENT_SECRET environment variable is not set');
+  }
+  if (!process.env.GOOGLE_REDIRECT_URI) {
+    throw new Error('GOOGLE_REDIRECT_URI environment variable is not set');
+  }
 
-export const getOAuth2Client = () => oauth2Client;
+  console.log('Initializing Google OAuth2 client...');
+  console.log('Redirect URI:', process.env.GOOGLE_REDIRECT_URI);
+  
+  const oauth2Client = new google.auth.OAuth2(
+    process.env.GOOGLE_CLIENT_ID,
+    process.env.GOOGLE_CLIENT_SECRET,
+    process.env.GOOGLE_REDIRECT_URI
+  );
 
-export const getAuthUrl = () => {
-  return oauth2Client.generateAuthUrl({
-    access_type: 'offline',
-    scope: [
-      'https://www.googleapis.com/auth/gmail.readonly',
-      'https://www.googleapis.com/auth/gmail.modify',
-      'https://www.googleapis.com/auth/gmail.send'
-    ],
-    prompt: 'consent'
-  });
-};
-
-export const getTokens = async (code: string) => {
-  const { tokens } = await oauth2Client.getToken(code);
-  return tokens;
-}; 
+  return oauth2Client;
+} 

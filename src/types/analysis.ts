@@ -40,20 +40,21 @@ export interface CustomerSentiment {
 }
 
 export interface AIInsights {
-  keyPoints: string[];
-  keyCustomerPoints: string[];
-  commonQuestions: FAQ[];
-  suggestedActions: string[];
-  recommendedActions: string[];
+  keyPoints: Array<string>;
+  keyCustomerPoints: Array<string>;
+  commonQuestions: Array<FAQ>;
+  suggestedActions: Array<string>;
+  recommendedActions: Array<string>;
   customerSentiment: CustomerSentiment;
 }
 
 export interface SavedEmailAnalysis {
   id: string;
   timestamp: number;
+  emails: Array<EmailData>;
   totalEmails: number;
   totalEmailsAnalyzed: number;
-  emails: EmailData[];
+  supportEmails: Array<EmailData>;
   tokenUsage: TokenUsage;
   aiInsights: AIInsights;
 } 
