@@ -28,7 +28,7 @@ interface ProcessingResult {
   aiInsights: AIInsights;
 }
 
-export default function KnowledgePage() {
+const KnowledgePage = () => {
   const [latestAnalysis, setLatestAnalysis] = useState<SavedEmailAnalysis | null>(null);
   const [showRunTestModal, setShowRunTestModal] = useState(false);
   const [selectedEmail, setSelectedEmail] = useState<EmailData | null>(null);
@@ -59,7 +59,6 @@ export default function KnowledgePage() {
   const db = getFirebaseDB();
 
   useEffect(() => {
-    // Check authentication status
     if (user) {
       setIsCheckingAuth(false);
       setShowLoginSplash(false);
@@ -79,7 +78,135 @@ export default function KnowledgePage() {
     setLoading(true);
     setError(null);
     setProcessingStatus({ stage: 'fetching_emails', progress: 0 });
-    // ... rest of the function implementation
+
+    try {
+      // Start fetching emails
+      const response = await fetch('/api/gmail/fetch-emails', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          count: count,
+        }),
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        if (data.error === 'Gmail not connected') {
+          // Redirect to Gmail auth
+          const authResponse = await fetch('/api/google/auth/url');
+          const { url } = await authResponse.json();
+          window.location.href = url;
+          return;
+        }
+        throw new Error(data.error || 'Failed to fetch emails');
+      }
+
+      const emails = await response.json();
+      setProcessingStatus({ 
+        stage: 'analyzing', 
+        progress: 0,
+        totalEmails: emails.length 
+      });
+
+      // Start analyzing emails in batches
+      const batchSize = 5;
+      const batches = Math.ceil(emails.length / batchSize);
+      const analyzedEmails: EmailData[] = [];
+      let totalTokens = 0;
+      let promptTokens = 0;
+      let completionTokens = 0;
+
+      for (let i = 0; i < emails.length; i += batchSize) {
+        const batch = emails.slice(i, i + batchSize);
+        const response = await fetch('/api/analyze-emails', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            emails: batch,
+            model: model,
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to analyze emails');
+        }
+
+        const results = await response.json();
+        analyzedEmails.push(...results.emails);
+        totalTokens += results.tokenUsage.totalTokens;
+        promptTokens += results.tokenUsage.promptTokens;
+        completionTokens += results.tokenUsage.completionTokens;
+
+        setCurrentEmailIndex(i + batch.length);
+        setProcessingStatus(prev => ({
+          ...prev,
+          progress: ((i + batch.length) / emails.length) * 100
+        }));
+
+        // Update estimated time remaining
+        const elapsed = Date.now() - analysisStartTime;
+        const progress = (i + batch.length) / emails.length;
+        if (progress > 0) {
+          const total = elapsed / progress;
+          setEstimatedTimeRemaining(Math.max(0, total - elapsed) / 1000);
+        }
+      }
+
+      // Set final results
+      setResult({
+        totalEmails: emails.length,
+        totalEmailsAnalyzed: analyzedEmails.length,
+        emails: analyzedEmails,
+        tokenUsage: {
+          totalTokens,
+          promptTokens,
+          completionTokens
+        },
+        aiInsights: await generateInsights(analyzedEmails)
+      });
+
+    } catch (error) {
+      console.error('Error during analysis:', error);
+      setError(error instanceof Error ? error.message : 'An error occurred during analysis');
+    } finally {
+      setLoading(false);
+      setProcessingStatus({ stage: 'idle', progress: 0 });
+    }
+  };
+
+  const generateInsights = async (emails: EmailData[]) => {
+    try {
+      const response = await fetch('/api/generate-insights', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ emails }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to generate insights');
+      }
+
+      return await response.json();
+    } catch (error) {
+      console.error('Error generating insights:', error);
+      return {
+        keyPoints: [],
+        keyCustomerPoints: [],
+        commonQuestions: [],
+        suggestedActions: [],
+        recommendedActions: [],
+        customerSentiment: {
+          overall: 'Error generating insights',
+          details: 'Failed to analyze customer sentiment'
+        }
+      };
+    }
   };
 
   const handleSaveAnalysis = async (analysis: SavedEmailAnalysis) => {
@@ -88,7 +215,6 @@ export default function KnowledgePage() {
     try {
       const analysisRef = collection(db, 'analyses');
       await addDoc(analysisRef, analysis);
-      // ... rest of the function implementation
     } catch (error) {
       console.error('Error saving analysis:', error);
       setError('Failed to save analysis');
@@ -96,7 +222,7 @@ export default function KnowledgePage() {
   };
 
   const downloadDebugLogs = () => {
-    // ... implementation
+    // Implementation
   };
 
   const supportEmailCount = result?.emails.filter(email => email.isSupport).length || 0;
@@ -208,7 +334,7 @@ export default function KnowledgePage() {
                   <FAQPieChart
                     faqs={result.aiInsights.commonQuestions}
                     totalEmails={result.totalEmails}
-                    supportEmails={result.emails.filter(email => email.isSupport).length}
+                    supportEmails={supportEmailCount}
                   />
                 </div>
               )}
@@ -307,4 +433,6 @@ export default function KnowledgePage() {
       />
     </div>
   );
-} 
+};
+
+export default KnowledgePage; 
