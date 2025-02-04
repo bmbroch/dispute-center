@@ -23,7 +23,9 @@ interface ProcessingResult {
   id: string;
   timestamp: number;
   emails: any[];
+  totalEmails: number;
   totalEmailsAnalyzed: number;
+  supportEmails: any[];
   tokenUsage: {
     totalTokens: number;
     promptTokens: number;
@@ -31,8 +33,14 @@ interface ProcessingResult {
   };
   aiInsights: {
     keyPoints: string[];
+    keyCustomerPoints: string[];
     commonQuestions: FAQ[];
     suggestedActions: string[];
+    recommendedActions: string[];
+    customerSentiment: {
+      overall: string;
+      details: string;
+    };
   };
 }
 
@@ -243,7 +251,7 @@ export default function KnowledgePage() {
   const [currentAnalysis, setCurrentAnalysis] = useState<SavedEmailAnalysis | null>(null);
   const [latestSavedAnalysis, setLatestSavedAnalysis] = useState<SavedEmailAnalysis | null>(null);
   const [visibleAnalysesCount, setVisibleAnalysesCount] = useState(3);
-  const [supportEmails, setSupportEmails] = useState<any[]>([]);
+  const [supportEmails, setSupportEmails] = useState<Array<any>>([]);
 
   // Get Firestore instance
   const db = getFirebaseDB();
@@ -746,12 +754,12 @@ export default function KnowledgePage() {
 
     try {
       // Create complete analysis object with all required fields
-      const analysisToSave = {
+      const analysisToSave: SavedEmailAnalysis = {
         id: Date.now().toString(),
         timestamp: Date.now(),
         totalEmails: processingStatus.totalEmails || 0,
         totalEmailsAnalyzed: processingStatus.totalEmails || 0,
-        supportEmails: supportEmailCount || 0,
+        supportEmails: supportEmails,
         emails: analyzedEmails
           .filter(email => email.isSupport)
           .map(email => {
@@ -765,13 +773,7 @@ export default function KnowledgePage() {
               date: originalEmail?.date || new Date().toISOString(),
               isSupport: true,
               confidence: email.confidence || 0,
-              reason: email.reason || '',
-              summary: {
-                subject: email.subject || '',
-                content: originalEmail?.body?.slice(0, 200) || '',
-                sentiment: 'neutral',
-                key_points: [email.reason || '']
-              }
+              reason: email.reason || ''
             };
           }),
         tokenUsage: {
@@ -780,23 +782,26 @@ export default function KnowledgePage() {
           totalTokens: tokenUsage.totalTokens || 0
         },
         aiInsights: {
+          keyPoints: result.aiInsights.keyPoints,
           keyCustomerPoints: result.aiInsights.keyPoints,
           commonQuestions: result.aiInsights.commonQuestions,
+          suggestedActions: result.aiInsights.suggestedActions,
+          recommendedActions: result.aiInsights.suggestedActions,
           customerSentiment: {
             overall: "Analysis complete",
-            details: `Analyzed ${processingStatus.totalEmails} emails and found ${supportEmailCount} support-related emails.`
-          },
-          recommendedActions: result.aiInsights.suggestedActions
-        },
-        createdAt: new Date().toISOString(),
-        userId: user.email || ''
+            details: `Analyzed ${processingStatus.totalEmails} emails and found ${supportEmails.length} support-related emails.`
+          }
+        }
       };
 
       console.log('Saving analysis:', analysisToSave);
 
       // Save to Firebase
       const analysesRef = collection(db, 'emailAnalyses');
-      const docRef = await addDoc(analysesRef, analysisToSave);
+      const docRef = await addDoc(analysesRef, {
+        ...analysisToSave,
+        userId: user.email || ''
+      });
       
       console.log('Successfully saved analysis with ID:', docRef.id);
       

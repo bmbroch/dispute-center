@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { SavedEmailAnalysis, FAQ } from '@/types/analysis';
 import FAQPieChart from './FAQPieChart';
 
@@ -64,7 +64,7 @@ export default function AnalysisSummary({ analysis, onClose, showCloseButton = t
           </div>
           <div className="bg-green-50 rounded-lg px-3 py-2">
             <span className="text-sm text-green-600">
-              {analysis.supportEmails || 0} support emails found
+              {analysis.supportEmails.length || 0} support emails found
             </span>
           </div>
           <div className="bg-purple-50 rounded-lg px-3 py-2">

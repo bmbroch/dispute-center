@@ -32,15 +32,15 @@ export async function POST(req: Request) {
 
     // Keep fetching emails until we have enough valid ones or hit the max batch limit
     while (emailDetails.length < 50 && batchCount < MAX_BATCHES) {
-      const response = await gmail.users.messages.list({
+      const gmailResponse = await gmail.users.messages.list({
         auth: oauth2Client,
         userId: 'me',
         maxResults: BATCH_SIZE,
         pageToken: pageToken,
       });
 
-      const messages = response.data.messages || [];
-      pageToken = response.data.nextPageToken;
+      const messages = gmailResponse.data.messages || [];
+      pageToken = gmailResponse.data.nextPageToken;
 
       // Fetch details for each email
       for (const message of messages) {

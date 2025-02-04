@@ -10,10 +10,18 @@ export interface TokenUsage {
   completionTokens: number;
 }
 
+export interface CustomerSentiment {
+  overall: string;
+  details: string;
+}
+
 export interface AIInsights {
   keyPoints: Array<string>;
+  keyCustomerPoints: Array<string>;
   commonQuestions: Array<FAQ>;
   suggestedActions: Array<string>;
+  recommendedActions: Array<string>;
+  customerSentiment: CustomerSentiment;
 }
 
 export interface SavedEmailAnalysis {
