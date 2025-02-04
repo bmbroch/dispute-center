@@ -50,6 +50,16 @@ export default function KnowledgePage() {
   const router = useRouter();
   const db = getFirebaseDB();
 
+  useEffect(() => {
+    // If we have a user or explicitly know there is no user, we're done checking
+    if (user !== undefined) {
+      setIsCheckingAuth(false);
+      if (!user) {
+        setShowLoginSplash(true);
+      }
+    }
+  }, [user]);
+
   const handleCloseLogin = () => {
     setShowLoginSplash(false);
   };
