@@ -1,5 +1,5 @@
 {
-  "buildCommand": "next build || exit 0",
+  "buildCommand": "tsc --noEmit && next build",
   "devCommand": "next dev",
   "builds": [
     {
@@ -8,6 +8,7 @@
     }
   ],
   "github": {
-    "silent": false
+    "silent": false,
+    "autoJobCancelation": false
   }
 } 
