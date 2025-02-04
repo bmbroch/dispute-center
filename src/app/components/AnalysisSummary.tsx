@@ -6,7 +6,15 @@ interface Props {
   analysis: SavedEmailAnalysis;
 }
 
+interface FAQ {
+  question: string;
+  typicalAnswer: string;
+  frequency: number;
+}
+
 export default function AnalysisSummary({ analysis }: Props) {
+  const sortedFaqs = [...analysis.aiInsights.commonQuestions].sort((a: FAQ, b: FAQ) => b.frequency - a.frequency);
+
   const renderKeyPoints = (points: string[]) => {
     return (
       <ul className="list-disc pl-5 space-y-2">
@@ -48,56 +56,53 @@ export default function AnalysisSummary({ analysis }: Props) {
   };
 
   return (
-    <div className="bg-white rounded-lg shadow-md p-6 space-y-6">
-      <div className="space-y-4">
-        <h2 className="text-2xl font-semibold text-gray-800">Analysis Summary</h2>
+    <div className="space-y-6">
+      <div className="bg-white rounded-lg shadow-sm p-6">
+        <h2 className="text-xl font-semibold mb-4">Analysis Summary</h2>
         <div className="grid grid-cols-2 gap-4">
-          <div className="bg-blue-50 p-4 rounded-lg">
+          <div>
             <p className="text-sm text-gray-600">Total Emails</p>
-            <p className="text-2xl font-semibold text-blue-600">{analysis.totalEmails}</p>
+            <p className="text-2xl font-semibold">{analysis.totalEmails}</p>
           </div>
-          <div className="bg-green-50 p-4 rounded-lg">
-            <p className="text-sm text-gray-600">Support Emails Found</p>
-            <p className="text-2xl font-semibold text-green-600">
-              {analysis.emails.filter(email => email.isSupport).length}
-            </p>
+          <div>
+            <p className="text-sm text-gray-600">Support Emails</p>
+            <p className="text-2xl font-semibold">{analysis.emails.filter(email => email.isSupport).length}</p>
           </div>
         </div>
       </div>
 
-      <div className="space-y-4">
-        <h3 className="text-xl font-semibold text-gray-800">Key Points</h3>
-        {renderKeyPoints(analysis.aiInsights.keyPoints)}
+      <div className="bg-white rounded-lg shadow-sm p-6">
+        <h2 className="text-xl font-semibold mb-4">Common Questions</h2>
+        <div className="space-y-4">
+          {sortedFaqs.map((faq, index) => (
+            <div key={index} className="border-b border-gray-100 last:border-0 pb-4 last:pb-0">
+              <p className="font-medium text-gray-900 mb-1">Q: {faq.question}</p>
+              <p className="text-gray-600 text-sm mb-2">A: {faq.typicalAnswer}</p>
+              <p className="text-xs text-gray-500">Frequency: {Math.round(faq.frequency * 100)}%</p>
+            </div>
+          ))}
+        </div>
       </div>
 
-      <div className="space-y-4">
-        <h3 className="text-xl font-semibold text-gray-800">Customer Insights</h3>
-        {renderKeyPoints(analysis.aiInsights.keyCustomerPoints)}
+      <div className="bg-white rounded-lg shadow-sm p-6">
+        <h2 className="text-xl font-semibold mb-4">Customer Sentiment</h2>
+        <div className="mb-4">
+          <p className="font-medium text-gray-900 mb-1">Overall</p>
+          <p className="text-gray-600">{analysis.aiInsights.customerSentiment.overall}</p>
+        </div>
+        <div>
+          <p className="font-medium text-gray-900 mb-1">Details</p>
+          <p className="text-gray-600">{analysis.aiInsights.customerSentiment.details}</p>
+        </div>
       </div>
 
-      <div className="space-y-4">
-        <h3 className="text-xl font-semibold text-gray-800">Common Questions</h3>
+      <div className="bg-white rounded-lg shadow-sm p-6">
+        <h2 className="text-xl font-semibold mb-4">Recommended Actions</h2>
         <ul className="list-disc pl-5 space-y-2">
-          {analysis.aiInsights.commonQuestions.map((faq, index) => (
-            <li key={index} className="text-gray-700">
-              <p className="font-medium">{faq.question}</p>
-              <p className="text-sm text-gray-600">{faq.typicalAnswer}</p>
-            </li>
+          {analysis.aiInsights.recommendedActions.map((action, index) => (
+            <li key={index} className="text-gray-600">{action}</li>
           ))}
         </ul>
-      </div>
-
-      <div className="space-y-4">
-        <h3 className="text-xl font-semibold text-gray-800">Customer Sentiment</h3>
-        <div className="bg-gray-50 p-4 rounded-lg">
-          <p className="font-medium text-gray-800">{analysis.aiInsights.customerSentiment.overall}</p>
-          <p className="text-sm text-gray-600 mt-2">{analysis.aiInsights.customerSentiment.details}</p>
-        </div>
-      </div>
-
-      <div className="space-y-4">
-        <h3 className="text-xl font-semibold text-gray-800">Recommended Actions</h3>
-        {renderKeyPoints(analysis.aiInsights.recommendedActions)}
       </div>
     </div>
   );

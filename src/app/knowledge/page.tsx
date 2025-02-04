@@ -12,13 +12,21 @@ import SaveAnalysisButton from '../components/SaveAnalysisButton';
 import DebugPanel from '../components/DebugPanel';
 import RunTestModal from '../components/RunTestModal';
 import FAQPieChart from '../components/FAQPieChart';
-import { collection, query, orderBy, limit, getDocs, addDoc, where } from 'firebase/firestore';
+import { collection, query, orderBy, limit, getDocs, addDoc, where, Firestore } from 'firebase/firestore';
 import { getFirebaseDB } from '@/lib/firebase/firebase';
 import Image from 'next/image';
 import AnalysisModal from '../components/AnalysisModal';
 import AnalysisSummary from '../components/AnalysisSummary';
-import { SavedEmailAnalysis, FAQ, EmailData, ThreadSummary, TokenUsage, AIInsights, ProcessingResult } from '@/types/analysis';
+import { SavedEmailAnalysis, EmailData, ThreadSummary, TokenUsage, AIInsights } from '@/types/analysis';
 import { v4 as uuidv4 } from 'uuid';
+
+interface ProcessingResult {
+  totalEmails: number;
+  totalEmailsAnalyzed: number;
+  emails: EmailData[];
+  tokenUsage: TokenUsage;
+  aiInsights: AIInsights;
+}
 
 export default function KnowledgePage() {
   const [latestAnalysis, setLatestAnalysis] = useState<SavedEmailAnalysis | null>(null);
@@ -51,12 +59,12 @@ export default function KnowledgePage() {
   const db = getFirebaseDB();
 
   useEffect(() => {
-    // If we have a user or explicitly know there is no user, we're done checking
-    if (user !== undefined) {
+    // Check authentication status
+    if (user) {
       setIsCheckingAuth(false);
-      if (!user) {
-        setShowLoginSplash(true);
-      }
+      setShowLoginSplash(false);
+    } else {
+      setIsCheckingAuth(false);
     }
   }, [user]);
 
@@ -75,6 +83,8 @@ export default function KnowledgePage() {
   };
 
   const handleSaveAnalysis = async (analysis: SavedEmailAnalysis) => {
+    if (!db) return;
+    
     try {
       const analysisRef = collection(db, 'analyses');
       await addDoc(analysisRef, analysis);
@@ -90,8 +100,10 @@ export default function KnowledgePage() {
   };
 
   const renderLastAnalysis = () => {
-    // ... implementation
+    return null; // Implement this later
   };
+
+  const supportEmailCount = result?.emails.filter(email => email.isSupport).length || 0;
 
   return (
     <div className="min-h-screen bg-gray-50">
