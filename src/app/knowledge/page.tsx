@@ -34,12 +34,6 @@ export default function KnowledgePage() {
             <h1 className="text-3xl font-bold">Knowledge Base Generator</h1>
             <div className="flex gap-2">
               <button
-                onClick={testFirebaseSave}
-                className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
-              >
-                Test Firebase Save
-              </button>
-              <button
                 onClick={() => setShowRunTestModal(true)}
                 className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
               >
