@@ -1,0 +1,13 @@
+{
+  "buildCommand": "next build || exit 0",
+  "devCommand": "next dev",
+  "builds": [
+    {
+      "src": "next.config.js",
+      "use": "@vercel/next"
+    }
+  ],
+  "github": {
+    "silent": false
+  }
+} 

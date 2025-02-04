@@ -437,35 +437,16 @@ export default function KnowledgePage() {
         const newAnalysis: SavedEmailAnalysis = {
           id: Date.now().toString(),
           timestamp: Date.now(),
-          totalEmails: processingStatus.totalEmails || 0,
-          totalEmailsAnalyzed: processingStatus.totalEmails || 0,
-          supportEmails: supportEmails,
           emails: supportEmails.map(email => ({
-            subject: email.subject,
-            from: email.from || '',
-            body: email.body || '',
-            date: email.date || new Date().toISOString(),
-            isSupport: true,
-            confidence: email.confidence || 0,
-            reason: email.reason || '',
-            summary: null
+            ...email,
+            fullData: emails.find(e => normalizeSubject(e.subject) === normalizeSubject(email.subject))
           })),
+          totalEmailsAnalyzed: totalEmails,
           tokenUsage: {
-            promptTokens: tokenUsage.promptTokens || 0,
-            completionTokens: tokenUsage.completionTokens || 0,
-            totalTokens: tokenUsage.totalTokens || 0
+            ...tokenUsage,
+            totalTokens: tokenUsage.totalTokens
           },
-          aiInsights: {
-            keyPoints: [],
-            keyCustomerPoints: aiInsights.keyCustomerPoints || [],
-            commonQuestions: aiInsights.commonQuestions || [],
-            suggestedActions: aiInsights.suggestedActions || [],
-            recommendedActions: aiInsights.recommendedActions || [],
-            customerSentiment: {
-              overall: aiInsights.customerSentiment?.overall || 'Analysis complete',
-              details: aiInsights.customerSentiment?.details || ''
-            }
-          }
+          aiInsights
         };
 
         // Final save to Firebase
