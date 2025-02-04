@@ -1,6 +1,7 @@
 {
-  "buildCommand": "tsc --noEmit; next lint --max-warnings 0 || true; next build || true",
+  "buildCommand": "next build",
   "devCommand": "next dev",
+  "ignoreCommand": "tsc --noEmit && next lint --max-warnings 0",
   "github": {
     "silent": false,
     "autoJobCancelation": false
