@@ -1,5 +1,5 @@
 import React from 'react';
-import { SavedEmailAnalysis, FAQ } from '@/types/analysis';
+import { SavedEmailAnalysis, FAQ, EmailData } from '@/types/analysis';
 import FAQPieChart from './FAQPieChart';
 
 interface AnalysisSummaryProps {
@@ -43,6 +43,11 @@ export default function AnalysisSummary({ analysis, onClose, showCloseButton = t
     ));
   };
 
+  // Get the number of support emails
+  const supportEmailCount = Array.isArray(analysis.supportEmails) 
+    ? analysis.supportEmails.length 
+    : (typeof analysis.supportEmails === 'number' ? analysis.supportEmails : 0);
+
   return (
     <div className="bg-white rounded-xl shadow-lg max-w-4xl w-full mx-auto">
       <div className="p-6">
@@ -64,7 +69,7 @@ export default function AnalysisSummary({ analysis, onClose, showCloseButton = t
           </div>
           <div className="bg-green-50 rounded-lg px-3 py-2">
             <span className="text-sm text-green-600">
-              {analysis.supportEmails.length} support emails found
+              {supportEmailCount} support emails found
             </span>
           </div>
           <div className="bg-purple-50 rounded-lg px-3 py-2">
@@ -88,7 +93,7 @@ export default function AnalysisSummary({ analysis, onClose, showCloseButton = t
               answer: q?.typicalAnswer || ''
             })) || []}
             totalEmails={analysis.totalEmailsAnalyzed || analysis.totalEmails || 0}
-            supportEmails={analysis.supportEmails || 0}
+            supportEmails={supportEmailCount}
           />
         </div>
 

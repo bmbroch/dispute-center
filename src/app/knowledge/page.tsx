@@ -17,32 +17,7 @@ import { getFirebaseDB } from '@/lib/firebase/firebase';
 import Image from 'next/image';
 import AnalysisModal from '../components/AnalysisModal';
 import AnalysisSummary from '../components/AnalysisSummary';
-import { SavedEmailAnalysis, FAQ, EmailData, ThreadSummary } from '@/types/analysis';
-
-interface ProcessingResult {
-  id: string;
-  timestamp: number;
-  emails: any[];
-  totalEmails: number;
-  totalEmailsAnalyzed: number;
-  supportEmails: any[];
-  tokenUsage: {
-    totalTokens: number;
-    promptTokens: number;
-    completionTokens: number;
-  };
-  aiInsights: {
-    keyPoints: string[];
-    keyCustomerPoints: string[];
-    commonQuestions: FAQ[];
-    suggestedActions: string[];
-    recommendedActions: string[];
-    customerSentiment: {
-      overall: string;
-      details: string;
-    };
-  };
-}
+import { SavedEmailAnalysis, FAQ, EmailData, ThreadSummary, AIInsights, TokenUsage } from '@/types/analysis';
 
 interface EmailAnalysis {
   subject: string;
@@ -67,7 +42,7 @@ interface AnalysisJob {
   totalEmails: number;
   analyzedEmails: number;
   supportEmailsFound: number;
-  results?: ProcessingResult;
+  results?: SavedEmailAnalysis;
   error?: string;
   createdAt: Date;
   updatedAt: Date;
@@ -221,7 +196,7 @@ export default function KnowledgePage() {
     currentEmail?: number;
     totalEmails?: number;
   }>({ stage: 'idle', progress: 0 });
-  const [result, setResult] = useState<ProcessingResult | null>(null);
+  const [result, setResult] = useState<SavedEmailAnalysis | null>(null);
   const [analyzedEmails, setAnalyzedEmails] = useState<EmailAnalysis[]>([]);
   const [supportEmailCount, setSupportEmailCount] = useState(0);
   const [activeJob, setActiveJob] = useState<AnalysisJob | null>(null);
@@ -462,16 +437,35 @@ export default function KnowledgePage() {
         const newAnalysis: SavedEmailAnalysis = {
           id: Date.now().toString(),
           timestamp: Date.now(),
+          totalEmails: processingStatus.totalEmails || 0,
+          totalEmailsAnalyzed: processingStatus.totalEmails || 0,
+          supportEmails: supportEmails,
           emails: supportEmails.map(email => ({
-            ...email,
-            fullData: emails.find(e => normalizeSubject(e.subject) === normalizeSubject(email.subject))
+            subject: email.subject,
+            from: email.from || '',
+            body: email.body || '',
+            date: email.date || new Date().toISOString(),
+            isSupport: true,
+            confidence: email.confidence || 0,
+            reason: email.reason || '',
+            summary: null
           })),
-          totalEmailsAnalyzed: totalEmails,
           tokenUsage: {
-            ...tokenUsage,
-            totalTokens: tokenUsage.totalTokens
+            promptTokens: tokenUsage.promptTokens || 0,
+            completionTokens: tokenUsage.completionTokens || 0,
+            totalTokens: tokenUsage.totalTokens || 0
           },
-          aiInsights
+          aiInsights: {
+            keyPoints: [],
+            keyCustomerPoints: aiInsights.keyCustomerPoints || [],
+            commonQuestions: aiInsights.commonQuestions || [],
+            suggestedActions: aiInsights.suggestedActions || [],
+            recommendedActions: aiInsights.recommendedActions || [],
+            customerSentiment: {
+              overall: aiInsights.customerSentiment?.overall || 'Analysis complete',
+              details: aiInsights.customerSentiment?.details || ''
+            }
+          }
         };
 
         // Final save to Firebase
@@ -490,22 +484,7 @@ export default function KnowledgePage() {
           setLatestAnalysis(newAnalysis);
         }
 
-        setResult({
-          id: Date.now().toString(),
-          timestamp: Date.now(),
-          emails: supportEmails,
-          totalEmailsAnalyzed: totalEmails,
-          tokenUsage: {
-            totalTokens: tokenUsage.totalTokens,
-            promptTokens: tokenUsage.promptTokens,
-            completionTokens: tokenUsage.completionTokens
-          },
-          aiInsights: {
-            keyPoints: aiInsights.commonQuestions.map(q => q.question),
-            commonQuestions: aiInsights.commonQuestions,
-            suggestedActions: aiInsights.recommendedActions
-          }
-        });
+        setResult(newAnalysis);
       }
 
       // Only set complete after everything is done
@@ -885,10 +864,7 @@ export default function KnowledgePage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Sidebar */}
       <Sidebar />
-
-      {/* Main Content */}
       <div className="pl-64">
         <main className="max-w-4xl mx-auto px-4 py-8">
           <div className="flex items-center justify-between mb-8">
@@ -909,10 +885,8 @@ export default function KnowledgePage() {
             </div>
           </div>
 
-          {/* Last Analysis Quick Access */}
           {!latestAnalysis && processingStatus.stage === 'idle' && !loading && renderLastAnalysis()}
 
-          {/* Show Analysis Summary when selected */}
           {latestAnalysis && (
             <div>
               <div className="flex items-center justify-between mb-6">
@@ -933,10 +907,8 @@ export default function KnowledgePage() {
             </div>
           )}
 
-          {/* Only show the rest of the content when not viewing an analysis */}
           {!latestAnalysis && (
             <>
-              {/* Analysis Completion Message */}
               {result && (
                 <div className="bg-blue-50 border border-blue-100 rounded-xl p-6 mb-8">
                   <div className="flex flex-col gap-2">
@@ -1003,7 +975,6 @@ export default function KnowledgePage() {
                 </div>
               )}
 
-              {/* Pie Chart Section - Moved up */}
               {result && (
                 <div className="mb-8">
                   <FAQPieChart
@@ -1028,7 +999,6 @@ export default function KnowledgePage() {
             </div>
           )}
 
-              {/* Loading State */}
               {loading && (
                 <div className="bg-white rounded-2xl shadow-sm p-8 mb-8">
                   <div className="max-w-2xl mx-auto">
@@ -1060,7 +1030,6 @@ export default function KnowledgePage() {
                         </div>
                       </div>
 
-                      {/* Progress Bar */}
                       <div className="w-full bg-gray-100 rounded-full h-2 mb-4">
                         <div 
                           className="h-full bg-orange-500 rounded-full transition-all duration-500"
@@ -1068,7 +1037,6 @@ export default function KnowledgePage() {
                     />
                   </div>
 
-                      {/* Progress Steps */}
                       <div className="flex justify-between items-center max-w-sm mx-auto mb-8">
                         <div className="flex flex-col items-center">
                           <div className={`w-8 h-8 rounded-full flex items-center justify-center mb-2 ${
@@ -1081,7 +1049,7 @@ export default function KnowledgePage() {
                             1
                     </div>
                           <span className="text-sm text-gray-600">Fetch</span>
-                    </div>
+                        </div>
                         <div className="h-px w-20 bg-gray-200" />
                         <div className="flex flex-col items-center">
                           <div className={`w-8 h-8 rounded-full flex items-center justify-center mb-2 ${
@@ -1108,10 +1076,9 @@ export default function KnowledgePage() {
                         </div>
                 </div>
 
-                {/* Stats */}
-                      <div className="grid grid-cols-2 gap-6">
-                        <div className="bg-gray-50 rounded-xl p-4">
-                          <div className="text-4xl font-bold text-gray-900 mb-1">
+                <div className="grid grid-cols-2 gap-6">
+                      <div className="bg-gray-50 rounded-xl p-4">
+                        <div className="text-4xl font-bold text-gray-900 mb-1">
                       {processingStatus.totalEmails || 0}
                   </div>
                           <div className="text-sm text-gray-600">Total Emails</div>
@@ -1124,7 +1091,6 @@ export default function KnowledgePage() {
                         </div>
                       </div>
 
-                      {/* Estimated Time */}
                       {estimatedTimeRemaining > 0 && (
                         <p className="text-sm text-gray-500 mt-6">
                           Estimated time remaining: {Math.ceil(estimatedTimeRemaining / 60)} min {estimatedTimeRemaining % 60} sec
@@ -1135,7 +1101,6 @@ export default function KnowledgePage() {
             </div>
           )}
 
-          {/* Show initial modal by default */}
               {(!latestAnalysis || !latestAnalysis.aiInsights || !latestAnalysis.emails?.length) && processingStatus.stage === 'idle' && (
                 <div className="bg-white rounded-2xl shadow-sm p-8 mb-8">
                   <div className="max-w-2xl mx-auto">
@@ -1151,7 +1116,6 @@ export default function KnowledgePage() {
                 </p>
                     </div>
                 
-                  {/* Model selection */}
                     <div className="mb-12">
                       <label className="block text-sm font-medium text-gray-700 mb-4 text-center">
                       Select AI Model
@@ -1203,7 +1167,6 @@ export default function KnowledgePage() {
                       </div>
                   </div>
 
-                  {/* Email count selection */}
                     <div className="mb-12">
                       <label className="block text-sm font-medium text-gray-700 mb-4 text-center">
                       Number of emails to analyze
@@ -1260,7 +1223,6 @@ export default function KnowledgePage() {
             </div>
           )}
 
-              {/* Only show analysis if it's complete with all required data */}
               {latestAnalysis && latestAnalysis.aiInsights && latestAnalysis.emails?.length > 0 && (
             <div className="mb-8">
               <div className="bg-white rounded-lg shadow-sm">
@@ -1277,9 +1239,7 @@ export default function KnowledgePage() {
                     </div>
                   </div>
 
-                  {/* AI Insights Section */}
                   <div className="space-y-6">
-                    {/* Key Customer Points */}
                     <div className="bg-purple-50 rounded-lg p-4">
                       <div className="flex items-center gap-2 mb-3">
                         <span className="text-2xl">🪄</span>
@@ -1292,14 +1252,12 @@ export default function KnowledgePage() {
                       </ul>
                     </div>
 
-                    {/* Customer Sentiment */}
                     <div className="bg-blue-50 rounded-lg p-4">
                       <h3 className="text-lg font-semibold text-blue-900 mb-2">Customer Sentiment</h3>
                           <p className="text-blue-800 font-medium mb-2">{latestAnalysis?.aiInsights?.customerSentiment?.overall}</p>
                           <p className="text-blue-700">{latestAnalysis?.aiInsights?.customerSentiment?.details}</p>
                     </div>
 
-                    {/* Common Questions and Answers */}
                     <div className="bg-green-50 rounded-lg p-4">
                       <h3 className="text-lg font-semibold text-green-900 mb-3">Frequently Asked Questions</h3>
                       <div className="space-y-4">
@@ -1321,7 +1279,6 @@ export default function KnowledgePage() {
                       </div>
                     </div>
 
-                    {/* Recommended Actions */}
                     <div className="bg-amber-50 rounded-lg p-4">
                       <h3 className="text-lg font-semibold text-amber-900 mb-2">Recommended Actions</h3>
                       <ul className="space-y-2">
@@ -1336,10 +1293,8 @@ export default function KnowledgePage() {
             </div>
           )}
           
-              {/* Analysis Results Section - Remove duplicate message */}
-          {result && (
+              {result && (
             <>
-              {/* Individual Emails Section */}
               {analyzedEmails.length > 0 && (
                 <div className="bg-white rounded-lg shadow-sm p-6 mt-8">
                   <div className="flex items-center justify-between mb-4">
@@ -1414,7 +1369,6 @@ export default function KnowledgePage() {
                               )}
                             </div>
                           </div>
-                          {/* Add debug panel */}
                           {email.debug && <DebugPanel logs={email.debug} />}
                         </div>
                       );
@@ -1439,7 +1393,6 @@ export default function KnowledgePage() {
             </>
           )}
 
-          {/* Show saved analyses if available */}
               {savedAnalyses.length > 0 && !processingStatus.stage && (
             <div className="mb-8">
               <h2 className="text-xl font-semibold mb-4">Previous Analyses</h2>
@@ -1469,7 +1422,6 @@ export default function KnowledgePage() {
                       </div>
                     </div>
 
-                    {/* Quick stats */}
                     <div className="grid grid-cols-3 gap-4">
                       <div className="bg-gray-50 rounded-lg p-4">
                         <p className="text-sm text-gray-600 mb-1">Support Rate</p>
@@ -1493,7 +1445,6 @@ export default function KnowledgePage() {
                   </div>
                 ))}
                 
-                {/* Show More button */}
                 {savedAnalyses.length > visibleAnalysesCount && (
                   <div className="text-center mt-6">
                     <button
@@ -1515,14 +1466,12 @@ export default function KnowledgePage() {
         </main>
       </div>
 
-      {/* Only show login splash if we're not checking auth and it should be shown */}
       <LoginSplashScreen
         isOpen={!isCheckingAuth && showLoginSplash}
         onClose={handleCloseLogin}
         message="Sign in to access the Knowledge Base Generator"
       />
 
-      {/* Show loading state while checking auth */}
       {isCheckingAuth && (
         <div className="fixed inset-0 bg-white flex items-center justify-center">
           <div className="w-16 h-16">
@@ -1534,7 +1483,6 @@ export default function KnowledgePage() {
         </div>
       )}
 
-      {/* Email Thread Modal */}
       {selectedEmail && (
         <EmailThread
           email={selectedEmail}
@@ -1545,7 +1493,6 @@ export default function KnowledgePage() {
         />
       )}
 
-      {/* Run Test Modal */}
       <RunTestModal
         isOpen={showRunTestModal}
         onClose={() => setShowRunTestModal(false)}
