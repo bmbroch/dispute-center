@@ -28,6 +28,7 @@ export async function POST(req: Request) {
     const emailDetails = [];
     let pageToken = undefined;
     let batchCount = 0;
+    let response: { emails: any[]; nextPageToken?: string } = { emails: [] };
 
     // Keep fetching emails until we have enough valid ones or hit the max batch limit
     while (emailDetails.length < 50 && batchCount < MAX_BATCHES) {

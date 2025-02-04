@@ -1,5 +1,5 @@
-import React from 'react';
-import { SavedEmailAnalysis } from '@/types/analysis';
+import React, { useState } from 'react';
+import { SavedEmailAnalysis, FAQ } from '@/types/analysis';
 import FAQPieChart from './FAQPieChart';
 
 interface AnalysisSummaryProps {
@@ -9,6 +9,40 @@ interface AnalysisSummaryProps {
 }
 
 export default function AnalysisSummary({ analysis, onClose, showCloseButton = true }: AnalysisSummaryProps) {
+  const renderKeyPoints = (points: string[], onDelete: (index: number) => void) => {
+    return points.map((point: string, index: number) => (
+      <li key={index} className="text-purple-800">• {point}</li>
+    ));
+  };
+
+  const renderCommonQuestions = (questions: FAQ[], onDelete: (index: number) => void) => {
+    return questions.map((qa: FAQ, index: number) => (
+      <div key={index} className="border-b border-green-200 pb-3 last:border-0 last:pb-0">
+        <div className="flex items-start gap-2">
+          <div className="flex-1">
+            <p className="font-medium mb-2">
+              Q: {qa?.question || ''}
+              <span className="ml-2 text-xs bg-green-200 text-green-800 px-2 py-0.5 rounded-full">
+                Asked {qa?.frequency || 1}x
+              </span>
+            </p>
+            {qa?.typicalAnswer && (
+              <p className="text-green-700 pl-4">
+                A: {qa.typicalAnswer}
+              </p>
+            )}
+          </div>
+        </div>
+      </div>
+    ));
+  };
+
+  const renderSuggestedActions = (actions: string[], onDelete: (index: number) => void) => {
+    return actions.map((action: string, index: number) => (
+      <li key={index} className="text-amber-800">→ {action}</li>
+    ));
+  };
+
   return (
     <div className="bg-white rounded-xl shadow-lg max-w-4xl w-full mx-auto">
       <div className="p-6">
@@ -66,9 +100,7 @@ export default function AnalysisSummary({ analysis, onClose, showCloseButton = t
               <h3 className="text-lg font-semibold text-purple-900">Key Customer Points</h3>
             </div>
             <ul className="space-y-2">
-              {analysis.aiInsights.keyCustomerPoints.map((point, index) => (
-                <li key={index} className="text-purple-800">• {point}</li>
-              ))}
+              {renderKeyPoints(analysis.aiInsights.keyCustomerPoints, () => {})}
             </ul>
           </div>
         )}
@@ -89,25 +121,7 @@ export default function AnalysisSummary({ analysis, onClose, showCloseButton = t
           <div className="bg-green-50 rounded-lg p-4 mb-4">
             <h3 className="text-lg font-semibold text-green-900 mb-3">Frequently Asked Questions</h3>
             <div className="space-y-4">
-              {analysis.aiInsights.commonQuestions.map((qa, index) => (
-                <div key={index} className="border-b border-green-200 pb-3 last:border-0 last:pb-0">
-                  <div className="flex items-start gap-2">
-                    <div className="flex-1">
-                      <p className="font-medium mb-2">
-                        Q: {qa?.question || ''}
-                        <span className="ml-2 text-xs bg-green-200 text-green-800 px-2 py-0.5 rounded-full">
-                          Asked {qa?.frequency || 1}x
-                        </span>
-                      </p>
-                      {qa?.typicalAnswer && (
-                        <p className="text-green-700 pl-4">
-                          A: {qa.typicalAnswer}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              ))}
+              {renderCommonQuestions(analysis.aiInsights.commonQuestions, () => {})}
             </div>
           </div>
         )}
@@ -117,9 +131,7 @@ export default function AnalysisSummary({ analysis, onClose, showCloseButton = t
           <div className="bg-amber-50 rounded-lg p-4 mb-4">
             <h3 className="text-lg font-semibold text-amber-900 mb-2">Recommended Actions</h3>
             <ul className="space-y-2">
-              {analysis.aiInsights.recommendedActions.map((action, index) => (
-                <li key={index} className="text-amber-800">→ {action}</li>
-              ))}
+              {renderSuggestedActions(analysis.aiInsights.recommendedActions, () => {})}
             </ul>
           </div>
         )}

@@ -17,18 +17,23 @@ import { getFirebaseDB } from '@/lib/firebase/firebase';
 import Image from 'next/image';
 import AnalysisModal from '../components/AnalysisModal';
 import AnalysisSummary from '../components/AnalysisSummary';
-
-interface FAQ {
-  question: string;
-  answer: string;
-  frequency: number;
-  category: string;
-}
+import { SavedEmailAnalysis, FAQ } from '@/types/analysis';
 
 interface ProcessingResult {
-  totalEmails: number;
-  supportEmails: number;
-  faqs: FAQ[];
+  id: string;
+  timestamp: number;
+  emails: any[];
+  totalEmailsAnalyzed: number;
+  tokenUsage: {
+    totalTokens: number;
+    promptTokens: number;
+    completionTokens: number;
+  };
+  aiInsights: {
+    keyPoints: string[];
+    commonQuestions: FAQ[];
+    suggestedActions: string[];
+  };
 }
 
 interface EmailAnalysis {
@@ -235,8 +240,10 @@ export default function KnowledgePage() {
   const [analysisStartTime, setAnalysisStartTime] = useState<number>(0);
   const [showRunTestModal, setShowRunTestModal] = useState(false);
   const [savedAnalyses, setSavedAnalyses] = useState<SavedEmailAnalysis[]>([]);
+  const [currentAnalysis, setCurrentAnalysis] = useState<SavedEmailAnalysis | null>(null);
   const [latestSavedAnalysis, setLatestSavedAnalysis] = useState<SavedEmailAnalysis | null>(null);
   const [visibleAnalysesCount, setVisibleAnalysesCount] = useState(3);
+  const [supportEmails, setSupportEmails] = useState<any[]>([]);
 
   // Get Firestore instance
   const db = getFirebaseDB();
@@ -476,9 +483,20 @@ export default function KnowledgePage() {
         }
 
         setResult({
-          totalEmails: totalEmails,
-          supportEmails: supportEmails.length,
-          faqs: aiInsights.commonQuestions
+          id: Date.now().toString(),
+          timestamp: Date.now(),
+          emails: supportEmails,
+          totalEmailsAnalyzed: totalEmails,
+          tokenUsage: {
+            totalTokens: tokenUsage.totalTokens,
+            promptTokens: tokenUsage.promptTokens,
+            completionTokens: tokenUsage.completionTokens
+          },
+          aiInsights: {
+            keyPoints: aiInsights.commonQuestions.map(q => q.question),
+            commonQuestions: aiInsights.commonQuestions,
+            suggestedActions: aiInsights.recommendedActions
+          }
         });
       }
 
@@ -762,19 +780,13 @@ export default function KnowledgePage() {
           totalTokens: tokenUsage.totalTokens || 0
         },
         aiInsights: {
-          keyCustomerPoints: result.faqs.map(faq => faq.question || '').filter(Boolean),
-          commonQuestions: result.faqs.map(faq => ({
-            question: faq.question || '',
-            typicalAnswer: faq.answer || '',
-            frequency: faq.frequency || 1
-          })),
+          keyCustomerPoints: result.aiInsights.keyPoints,
+          commonQuestions: result.aiInsights.commonQuestions,
           customerSentiment: {
             overall: "Analysis complete",
             details: `Analyzed ${processingStatus.totalEmails} emails and found ${supportEmailCount} support-related emails.`
           },
-          recommendedActions: result.faqs.map(faq => 
-            `Consider documenting: ${faq.question} (asked ${faq.frequency} times)`
-          ).filter(Boolean)
+          recommendedActions: result.aiInsights.suggestedActions
         },
         createdAt: new Date().toISOString(),
         userId: user.email || ''
@@ -935,20 +947,17 @@ export default function KnowledgePage() {
                     </button>
                     <SaveAnalysisButton
                       analysis={{
-                        totalEmails: processingStatus.totalEmails || 0,
-                        totalEmailsAnalyzed: processingStatus.totalEmails || 0,
-                        supportEmails: supportEmailCount,
-                        faqs: result.faqs,
-                        keyCustomerPoints: result.faqs.map(faq => faq.question),
-                        customerSentiment: {
-                          overall: "Analysis complete",
-                          details: `Analyzed ${processingStatus.totalEmails} emails and found ${supportEmailCount} support-related emails.`
-                        },
-                        recommendedActions: result.faqs.map(faq => 
-                          `Consider documenting: ${faq.question} (asked ${faq.frequency} times)`
-                        ),
-                        tokenUsage,
-                        timestamp: Date.now(),
+                        id: result.id,
+                        timestamp: result.timestamp,
+                        totalEmails: result.totalEmails,
+                        totalEmailsAnalyzed: result.totalEmailsAnalyzed,
+                        supportEmails: result.supportEmails,
+                        faqs: result.aiInsights.commonQuestions,
+                        keyCustomerPoints: result.aiInsights.keyPoints,
+                        customerSentiment: result.aiInsights.customerSentiment,
+                        recommendedActions: result.aiInsights.suggestedActions,
+                        tokenUsage: result.tokenUsage,
+                        emails: result.emails,
                         analyzedEmails: analyzedEmails
                           .filter(email => email.isSupport)
                           .map(email => {
@@ -985,7 +994,7 @@ export default function KnowledgePage() {
               {result && (
                 <div className="mb-8">
                   <FAQPieChart
-                    faqs={result.faqs}
+                    faqs={result.aiInsights.commonQuestions}
                     totalEmails={result.totalEmails}
                     supportEmails={result.supportEmails}
                   />
