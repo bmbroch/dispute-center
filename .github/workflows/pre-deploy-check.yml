@@ -9,7 +9,7 @@ on:
 jobs:
   validate:
     runs-on: ubuntu-latest
-
+    
     steps:
       - uses: actions/checkout@v4
 
@@ -22,13 +22,39 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run pre-build validation
-        run: npm run prebuild
+      - name: TypeScript type check
+        id: type-check
+        continue-on-error: true
+        run: npm run type-check || echo "TYPE_CHECK_FAILED=true" >> $GITHUB_ENV
+
+      - name: ESLint check
+        id: lint
+        continue-on-error: true
+        run: npm run lint || echo "LINT_FAILED=true" >> $GITHUB_ENV
+
+      - name: Next.js build
+        id: build
+        continue-on-error: true
+        run: npm run build || echo "BUILD_FAILED=true" >> $GITHUB_ENV
         env:
           NEXT_PUBLIC_FIREBASE_API_KEY: ${{ secrets.NEXT_PUBLIC_FIREBASE_API_KEY }}
           NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: ${{ secrets.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN }}
           NEXT_PUBLIC_FIREBASE_PROJECT_ID: ${{ secrets.NEXT_PUBLIC_FIREBASE_PROJECT_ID }}
+          FIREBASE_SERVICE_ACCOUNT_KEY: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           REPLICATE_API_TOKEN: ${{ secrets.REPLICATE_API_TOKEN }}
-          DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }} 
+          DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
+
+      - name: Check for failures
+        if: always()
+        run: |
+          if [[ "${{ env.TYPE_CHECK_FAILED }}" == "true" || "${{ env.LINT_FAILED }}" == "true" || "${{ env.BUILD_FAILED }}" == "true" ]]; then
+            echo "One or more checks failed:"
+            [[ "${{ env.TYPE_CHECK_FAILED }}" == "true" ]] && echo "❌ TypeScript type check failed"
+            [[ "${{ env.LINT_FAILED }}" == "true" ]] && echo "❌ ESLint check failed"
+            [[ "${{ env.BUILD_FAILED }}" == "true" ]] && echo "❌ Next.js build failed"
+            exit 1
+          else
+            echo "✅ All checks passed!"
+          fi 
