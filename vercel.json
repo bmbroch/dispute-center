@@ -1,5 +1,5 @@
 {
-  "buildCommand": "npm install && npm install -D typescript @types/node @types/react ts-node tsconfig-paths tailwindcss postcss autoprefixer && npm run build",
+  "buildCommand": "npm install && npm install -D typescript @types/node @types/react ts-node tsconfig-paths tailwindcss postcss autoprefixer && NODE_ENV=production npx ts-node -P tsconfig.build.json scripts/prebuild.ts && next build",
   "devCommand": "next dev",
   "installCommand": "npm install",
   "github": {
