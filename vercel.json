@@ -2,7 +2,14 @@
   "buildCommand": "npm install && next build",
   "devCommand": "next dev",
   "installCommand": "npm install",
-  "ignoreCommand": "npm install typescript @types/node && npx tsc --noEmit && npx next lint --max-warnings 0",
+  "checks": {
+    "typecheck": {
+      "command": "npm install typescript @types/node && npx tsc --noEmit"
+    },
+    "lintcheck": {
+      "command": "npx next lint --max-warnings 0"
+    }
+  },
   "github": {
     "silent": false,
     "autoJobCancelation": false
