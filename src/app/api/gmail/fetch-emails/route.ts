@@ -2,8 +2,8 @@ import { google } from 'googleapis';
 import { NextResponse } from 'next/server';
 import { getOAuth2Client } from '@/lib/google/auth';
 
-const MAX_FETCH_ATTEMPTS = 3; // Maximum number of fetch attempts to avoid infinite loops
-const EMAILS_PER_FETCH = 100; // Number of emails to fetch per request
+const BATCH_SIZE = 100; // Number of emails to fetch per batch
+const MAX_BATCHES = 5; // Maximum number of batches to prevent infinite loops
 
 export async function POST(req: Request) {
   try {
@@ -14,8 +14,6 @@ export async function POST(req: Request) {
     }
 
     const accessToken = authHeader.replace('Bearer ', '');
-
-    // Initialize OAuth2 client using the existing setup
     const oauth2Client = getOAuth2Client();
     oauth2Client.setCredentials({
       access_token: accessToken,
@@ -27,18 +25,16 @@ export async function POST(req: Request) {
     });
 
     const gmail = google.gmail('v1');
-    const validEmails = [];
+    const emailDetails = [];
     let pageToken = undefined;
-    let attempts = 0;
+    let batchCount = 0;
 
-    while (validEmails.length < 50 && attempts < MAX_FETCH_ATTEMPTS) {
-      attempts++;
-
-      // Fetch batch of emails
+    // Keep fetching emails until we have enough valid ones or hit the max batch limit
+    while (emailDetails.length < 50 && batchCount < MAX_BATCHES) {
       const response = await gmail.users.messages.list({
         auth: oauth2Client,
         userId: 'me',
-        maxResults: EMAILS_PER_FETCH,
+        maxResults: BATCH_SIZE,
         pageToken: pageToken,
       });
 
@@ -47,7 +43,7 @@ export async function POST(req: Request) {
 
       // Fetch details for each email
       for (const message of messages) {
-        if (validEmails.length >= 50) break;
+        if (emailDetails.length >= 50) break;
 
         const emailData = await gmail.users.messages.get({
           auth: oauth2Client,
@@ -83,34 +79,34 @@ export async function POST(req: Request) {
           body = Buffer.from(emailData.data.payload.body.data, 'base64').toString();
         }
 
-        // Only add emails that have actual body content
+        // Only add emails that have a body
         if (body.trim()) {
-          validEmails.push({
+          emailDetails.push({
             id: message.id,
-            subject: subject || 'No Subject',
-            from: from || 'No Sender',
-            to: to || 'No Recipient',
-            date: date || new Date().toISOString(),
+            subject,
+            from,
+            to,
+            date,
             body,
           });
         }
       }
 
-      // If no more emails to fetch, break the loop
+      batchCount++;
       if (!pageToken) break;
     }
 
-    if (validEmails.length === 0) {
+    if (emailDetails.length === 0) {
       return NextResponse.json(
-        { error: 'No valid emails found with body content' },
+        { error: 'No valid emails found' },
         { status: 404 }
       );
     }
 
     return NextResponse.json({ 
-      emails: validEmails,
-      totalFetched: validEmails.length,
-      reachedTarget: validEmails.length >= 50
+      emails: emailDetails,
+      totalFetched: emailDetails.length,
+      batchesUsed: batchCount
     });
   } catch (error) {
     console.error('Error fetching emails:', error);

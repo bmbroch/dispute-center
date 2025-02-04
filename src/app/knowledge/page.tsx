@@ -422,11 +422,11 @@ export default function KnowledgePage() {
       
       // Keep the loading state until everything is complete
       if (supportEmails.length > 0) {
-        setProcessingStatus(prev => ({
-          ...prev,
+      setProcessingStatus(prev => ({
+        ...prev,
           stage: 'analyzing',
           progress: 90
-        }));
+      }));
 
         // AI Insights generation
         const aiInsightsResponse = await fetch('/api/knowledge/generate-insights', {
@@ -443,60 +443,43 @@ export default function KnowledgePage() {
 
         const aiInsights = await aiInsightsResponse.json();
 
-        // Create new analysis object
-        const analysisToSave = {
+        // Create new analysis object and save
+        const newAnalysis: SavedEmailAnalysis = {
           id: Date.now().toString(),
           timestamp: Date.now(),
-          totalEmails: processingStatus.totalEmails || 0,
-          totalEmailsAnalyzed: processingStatus.totalEmails || 0,
-          supportEmails: supportEmailCount,
           emails: supportEmails.map(email => ({
             ...email,
-            fullData: emailData.find(e => normalizeSubject(e.subject) === normalizeSubject(email.subject))
+            fullData: emails.find(e => normalizeSubject(e.subject) === normalizeSubject(email.subject))
           })),
+          totalEmailsAnalyzed: totalEmails,
           tokenUsage: {
-            promptTokens: tokenUsage.promptTokens || 0,
-            completionTokens: tokenUsage.completionTokens || 0,
-            totalTokens: tokenUsage.totalTokens || 0
+            ...tokenUsage,
+            totalTokens: tokenUsage.totalTokens
           },
-          aiInsights: {
-            keyCustomerPoints: aiInsights.keyCustomerPoints || [],
-            commonQuestions: aiInsights.commonQuestions || [],
-            customerSentiment: aiInsights.customerSentiment || {
-              overall: "Analysis complete",
-              details: `Analyzed ${processingStatus.totalEmails} emails and found ${supportEmailCount} support-related emails.`
-            },
-            recommendedActions: aiInsights.recommendedActions || []
-          },
-          userId: user.email,
-          createdAt: new Date().toISOString()
+          aiInsights
         };
 
+        // Final save to Firebase
         try {
-          // Auto-save to Firebase
           const analysesRef = collection(db, 'emailAnalyses');
-          const docRef = await addDoc(analysesRef, analysisToSave);
-          console.log('Analysis auto-saved with ID:', docRef.id);
-          
-          // Update local state
-          setLatestAnalysis(analysisToSave);
-          setSavedAnalyses(prev => [analysisToSave, ...prev].slice(0, 5));
-          
-          setResult({
-            totalEmails: totalEmails,
-            supportEmails: supportEmails.length,
-            faqs: aiInsights.commonQuestions || []
+          await addDoc(analysesRef, {
+            ...newAnalysis,
+            userId: user.email,
+            createdAt: new Date().toISOString()
           });
+
+        setLatestAnalysis(newAnalysis);
+          setSavedAnalyses(prev => [newAnalysis, ...prev].slice(0, 5));
         } catch (error) {
-          console.error('Error auto-saving analysis:', error);
-          // Still update local state even if save fails
-          setLatestAnalysis(analysisToSave);
-          setResult({
-            totalEmails: totalEmails,
-            supportEmails: supportEmails.length,
-            faqs: aiInsights.commonQuestions || []
-          });
+          console.error('Error saving analysis to Firebase:', error);
+          setLatestAnalysis(newAnalysis);
         }
+
+        setResult({
+          totalEmails: totalEmails,
+          supportEmails: supportEmails.length,
+          faqs: aiInsights.commonQuestions
+        });
       }
 
       // Only set complete after everything is done
@@ -513,7 +496,7 @@ export default function KnowledgePage() {
     } finally {
       // Only stop loading after a short delay to ensure smooth transition
       setTimeout(() => {
-        setLoading(false);
+      setLoading(false);
       }, 1000);
     }
   };
