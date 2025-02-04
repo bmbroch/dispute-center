@@ -17,13 +17,71 @@ import { getFirebaseDB } from '@/lib/firebase/firebase';
 import Image from 'next/image';
 import AnalysisModal from '../components/AnalysisModal';
 import AnalysisSummary from '../components/AnalysisSummary';
-import { SavedEmailAnalysis, FAQ, EmailData, ThreadSummary, TokenUsage, AIInsights } from '@/types/analysis';
+import { SavedEmailAnalysis, FAQ, EmailData, ThreadSummary, TokenUsage, AIInsights, ProcessingResult } from '@/types/analysis';
 import { v4 as uuidv4 } from 'uuid';
 
-// ... rest of the imports and interfaces ...
-
 export default function KnowledgePage() {
-  // ... state and helper functions ...
+  const [latestAnalysis, setLatestAnalysis] = useState<SavedEmailAnalysis | null>(null);
+  const [showRunTestModal, setShowRunTestModal] = useState(false);
+  const [selectedEmail, setSelectedEmail] = useState<EmailData | null>(null);
+  const [result, setResult] = useState<ProcessingResult | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [analyzedEmails, setAnalyzedEmails] = useState<EmailData[]>([]);
+  const [processingStatus, setProcessingStatus] = useState<{
+    stage: 'idle' | 'fetching_emails' | 'analyzing';
+    progress: number;
+    totalEmails?: number;
+  }>({ stage: 'idle', progress: 0 });
+  const [selectedModel, setSelectedModel] = useState('gpt-4');
+  const [emailCountToAnalyze, setEmailCountToAnalyze] = useState(50);
+  const [analysisStartTime, setAnalysisStartTime] = useState(Date.now());
+  const [currentEmailIndex, setCurrentEmailIndex] = useState(0);
+  const [estimatedTimeRemaining, setEstimatedTimeRemaining] = useState(0);
+  const [tokenUsage, setTokenUsage] = useState<TokenUsage>({ 
+    promptTokens: 0, 
+    completionTokens: 0, 
+    totalTokens: 0 
+  });
+  const [showLoginSplash, setShowLoginSplash] = useState(true);
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+
+  const { user } = useAuth();
+  const router = useRouter();
+  const db = getFirebaseDB();
+
+  const handleCloseLogin = () => {
+    setShowLoginSplash(false);
+  };
+
+  const handleStartAnalysis = async (model: string, count: number) => {
+    setSelectedModel(model);
+    setEmailCountToAnalyze(count);
+    setAnalysisStartTime(Date.now());
+    setLoading(true);
+    setError(null);
+    setProcessingStatus({ stage: 'fetching_emails', progress: 0 });
+    // ... rest of the function implementation
+  };
+
+  const handleSaveAnalysis = async (analysis: SavedEmailAnalysis) => {
+    try {
+      const analysisRef = collection(db, 'analyses');
+      await addDoc(analysisRef, analysis);
+      // ... rest of the function implementation
+    } catch (error) {
+      console.error('Error saving analysis:', error);
+      setError('Failed to save analysis');
+    }
+  };
+
+  const downloadDebugLogs = () => {
+    // ... implementation
+  };
+
+  const renderLastAnalysis = () => {
+    // ... implementation
+  };
 
   return (
     <div className="min-h-screen bg-gray-50">
