@@ -1,7 +1,8 @@
 {
-  "buildCommand": "next build",
+  "buildCommand": "npm install && next build",
   "devCommand": "next dev",
-  "ignoreCommand": "tsc --noEmit && next lint --max-warnings 0",
+  "installCommand": "npm install",
+  "ignoreCommand": "npm install typescript @types/node && npx tsc --noEmit && npx next lint --max-warnings 0",
   "github": {
     "silent": false,
     "autoJobCancelation": false
