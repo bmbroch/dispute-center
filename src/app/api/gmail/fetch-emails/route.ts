@@ -1,6 +1,8 @@
 import { google } from 'googleapis';
 import { NextResponse } from 'next/server';
 import { getOAuth2Client } from '@/lib/google/auth';
+import { GaxiosResponse } from 'gaxios';
+import { gmail_v1 } from 'googleapis';
 
 const BATCH_SIZE = 100; // Number of emails to fetch per batch
 const MAX_BATCHES = 5; // Maximum number of batches to prevent infinite loops
@@ -32,12 +34,12 @@ export async function POST(req: Request) {
 
     // Keep fetching emails until we have enough valid ones or hit the max batch limit
     while (emailDetails.length < 50 && batchCount < MAX_BATCHES) {
-      const gmailResponse: { data: { messages?: { id: string }[]; nextPageToken?: string } } = await gmail.users.messages.list({
+      const gmailResponse = await gmail.users.messages.list({
         auth: oauth2Client,
         userId: 'me',
         maxResults: BATCH_SIZE,
         pageToken: pageToken,
-      });
+      }) as GaxiosResponse<gmail_v1.Schema$ListMessagesResponse>;
 
       const messages = gmailResponse.data.messages || [];
       pageToken = gmailResponse.data.nextPageToken;
