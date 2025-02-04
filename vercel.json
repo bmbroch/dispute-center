@@ -1,12 +1,6 @@
 {
   "buildCommand": "tsc --noEmit && next build",
   "devCommand": "next dev",
-  "builds": [
-    {
-      "src": "next.config.js",
-      "use": "@vercel/next"
-    }
-  ],
   "github": {
     "silent": false,
     "autoJobCancelation": false
