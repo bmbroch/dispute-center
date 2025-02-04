@@ -1,5 +1,5 @@
 {
-  "buildCommand": "npm install -D tailwindcss @types/tailwindcss && npm run type-check && npm run lint && next build",
+  "buildCommand": "npm install && npm install -D typescript @types/node @types/react tailwindcss @types/tailwindcss && npm run type-check && npm run lint && next build",
   "devCommand": "next dev",
   "installCommand": "npm install",
   "github": {
