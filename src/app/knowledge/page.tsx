@@ -6,15 +6,17 @@ import { useRouter } from 'next/navigation';
 import FAQList from '../components/FAQList';
 import { Sidebar } from '../components/Sidebar';
 import LoginSplashScreen from '../components/LoginSplashScreen';
-import { BookOpen, Mail, CheckCircle2, XCircle } from 'lucide-react';
+import { BookOpen, Mail, CheckCircle2, XCircle, Loader2 } from 'lucide-react';
 import EmailThread from '../components/EmailThread';
 import SaveAnalysisButton from '../components/SaveAnalysisButton';
 import DebugPanel from '../components/DebugPanel';
 import RunTestModal from '../components/RunTestModal';
 import FAQPieChart from '../components/FAQPieChart';
-import { collection, query, orderBy, limit, getDocs, addDoc } from 'firebase/firestore';
+import { collection, query, orderBy, limit, getDocs, addDoc, where } from 'firebase/firestore';
 import { getFirebaseDB } from '@/lib/firebase/firebase';
 import Image from 'next/image';
+import AnalysisModal from '../components/AnalysisModal';
+import AnalysisSummary from '../components/AnalysisSummary';
 
 interface FAQ {
   question: string;
@@ -66,9 +68,18 @@ interface TokenUsage {
 }
 
 // Add these interfaces at the top with the other interfaces
+interface ThreadSummary {
+  subject: string;
+  content: string;
+  sentiment: string;
+  key_points: string[];
+}
+
 interface SavedEmailAnalysis {
   id: string;
   timestamp: number;
+  totalEmails: number;
+  supportEmails: number;
   emails: Array<{
     subject: string;
     from: string;
@@ -189,6 +200,7 @@ export default function KnowledgePage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showLoginSplash, setShowLoginSplash] = useState(false);
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const [emailCountToAnalyze, setEmailCountToAnalyze] = useState(20);
   const [processingStatus, setProcessingStatus] = useState<{
     stage: 'idle' | 'fetching_emails' | 'filtering' | 'analyzing' | 'complete';
@@ -223,6 +235,8 @@ export default function KnowledgePage() {
   const [analysisStartTime, setAnalysisStartTime] = useState<number>(0);
   const [showRunTestModal, setShowRunTestModal] = useState(false);
   const [savedAnalyses, setSavedAnalyses] = useState<SavedEmailAnalysis[]>([]);
+  const [latestSavedAnalysis, setLatestSavedAnalysis] = useState<SavedEmailAnalysis | null>(null);
+  const [visibleAnalysesCount, setVisibleAnalysesCount] = useState(3);
 
   // Get Firestore instance
   const db = getFirebaseDB();
@@ -297,8 +311,37 @@ export default function KnowledgePage() {
 
       setEmailData(emails);
 
-      const uniqueThreadEmails = groupEmailsByThread(emails);
-      const totalEmails = Math.min(uniqueThreadEmails.length, emailCountToAnalyze);
+      // Sort all emails by date first
+      const sortedEmails = [...emails].sort((a, b) => {
+        const dateA = new Date(a.date || 0);
+        const dateB = new Date(b.date || 0);
+        return dateB.getTime() - dateA.getTime();
+      });
+
+      // First try to get unique thread emails
+      const threadMap = new Map();
+      sortedEmails.forEach(email => {
+        const normalizedSubject = normalizeSubject(email.subject || '');
+        if (!threadMap.has(normalizedSubject)) {
+          threadMap.set(normalizedSubject, email);
+        }
+      });
+      let emailsToProcess = Array.from(threadMap.values());
+
+      // If we don't have enough unique threads, add more recent emails until we reach the requested count
+      if (emailsToProcess.length < emailCountToAnalyze) {
+        const remainingCount = emailCountToAnalyze - emailsToProcess.length;
+        const existingSubjects = new Set(emailsToProcess.map(e => normalizeSubject(e.subject || '')));
+        
+        // Add more recent emails that weren't included in threads
+        const additionalEmails = sortedEmails.filter(email => 
+          !existingSubjects.has(normalizeSubject(email.subject || ''))
+        ).slice(0, remainingCount);
+        
+        emailsToProcess = [...emailsToProcess, ...additionalEmails];
+      }
+
+      const totalEmails = Math.min(emailsToProcess.length, emailCountToAnalyze);
 
       setProcessingStatus({ 
         stage: 'analyzing', 
@@ -307,7 +350,7 @@ export default function KnowledgePage() {
       });
 
       // Prepare emails for analysis
-      const emailsToAnalyze = uniqueThreadEmails.slice(0, totalEmails).map(email => ({
+      const emailsToAnalyze = emailsToProcess.slice(0, emailCountToAnalyze).map(email => ({
         subject: email.subject || 'No Subject',
         from: email.from || 'No Sender',
         body: typeof email.body === 'string' ? truncateEmailBody(email.body.trim()) : '',
@@ -351,6 +394,12 @@ export default function KnowledgePage() {
       // Process results
       const supportEmails = [];
       const newAnalyzedEmails = results.map((result: any, index: number) => {
+        // Update progress as each email is processed
+        setProcessingStatus(prev => ({
+          ...prev,
+          progress: Math.round((index + 1) / totalEmails * 100)
+        }));
+
         const email = validEmails[index];
         if (result.isSupport && result.confidence >= 0.70) {
           supportEmails.push({
@@ -371,14 +420,15 @@ export default function KnowledgePage() {
       setAnalyzedEmails(newAnalyzedEmails);
       setSupportEmailCount(supportEmails.length);
       
-      setProcessingStatus(prev => ({
-        ...prev,
-        stage: 'complete',
-        progress: 100
-      }));
-
-      // After successful analysis, save to Firebase
+      // Keep the loading state until everything is complete
       if (supportEmails.length > 0) {
+        setProcessingStatus(prev => ({
+          ...prev,
+          stage: 'analyzing',
+          progress: 90
+        }));
+
+        // AI Insights generation
         const aiInsightsResponse = await fetch('/api/knowledge/generate-insights', {
           method: 'POST',
           headers: {
@@ -394,65 +444,96 @@ export default function KnowledgePage() {
         const aiInsights = await aiInsightsResponse.json();
 
         // Create new analysis object
-        const newAnalysis: SavedEmailAnalysis = {
+        const analysisToSave = {
           id: Date.now().toString(),
           timestamp: Date.now(),
+          totalEmails: processingStatus.totalEmails || 0,
+          totalEmailsAnalyzed: processingStatus.totalEmails || 0,
+          supportEmails: supportEmailCount,
           emails: supportEmails.map(email => ({
             ...email,
-            fullData: emails.find(e => normalizeSubject(e.subject) === normalizeSubject(email.subject))
+            fullData: emailData.find(e => normalizeSubject(e.subject) === normalizeSubject(email.subject))
           })),
-          totalEmailsAnalyzed: totalEmails,
           tokenUsage: {
-            ...tokenUsage,
-            totalTokens: tokenUsage.totalTokens
+            promptTokens: tokenUsage.promptTokens || 0,
+            completionTokens: tokenUsage.completionTokens || 0,
+            totalTokens: tokenUsage.totalTokens || 0
           },
-          aiInsights
+          aiInsights: {
+            keyCustomerPoints: aiInsights.keyCustomerPoints || [],
+            commonQuestions: aiInsights.commonQuestions || [],
+            customerSentiment: aiInsights.customerSentiment || {
+              overall: "Analysis complete",
+              details: `Analyzed ${processingStatus.totalEmails} emails and found ${supportEmailCount} support-related emails.`
+            },
+            recommendedActions: aiInsights.recommendedActions || []
+          },
+          userId: user.email,
+          createdAt: new Date().toISOString()
         };
 
-        // Save to Firebase
         try {
+          // Auto-save to Firebase
           const analysesRef = collection(db, 'emailAnalyses');
-          await addDoc(analysesRef, {
-            ...newAnalysis,
-            userId: user.uid,
-            createdAt: new Date().toISOString()
-          });
+          const docRef = await addDoc(analysesRef, analysisToSave);
+          console.log('Analysis auto-saved with ID:', docRef.id);
           
           // Update local state
-          setLatestAnalysis(newAnalysis);
-          setSavedAnalyses(prev => [newAnalysis, ...prev].slice(0, 5));
+          setLatestAnalysis(analysisToSave);
+          setSavedAnalyses(prev => [analysisToSave, ...prev].slice(0, 5));
           
+          setResult({
+            totalEmails: totalEmails,
+            supportEmails: supportEmails.length,
+            faqs: aiInsights.commonQuestions || []
+          });
         } catch (error) {
-          console.error('Error saving analysis to Firebase:', error);
-          // Still set the latest analysis even if saving fails
-          setLatestAnalysis(newAnalysis);
+          console.error('Error auto-saving analysis:', error);
+          // Still update local state even if save fails
+          setLatestAnalysis(analysisToSave);
+          setResult({
+            totalEmails: totalEmails,
+            supportEmails: supportEmails.length,
+            faqs: aiInsights.commonQuestions || []
+          });
         }
-
-        setResult({
-          totalEmails: totalEmails,
-          supportEmails: supportEmails.length,
-          faqs: aiInsights.commonQuestions
-        });
       }
+
+      // Only set complete after everything is done
+      setProcessingStatus(prev => ({
+        ...prev,
+        stage: 'complete',
+        progress: 100
+      }));
 
     } catch (error) {
       console.error('Error processing emails:', error);
       setError(error instanceof Error ? error.message : 'Failed to process emails');
       setProcessingStatus({ stage: 'idle', progress: 0 });
     } finally {
-      setLoading(false);
+      // Only stop loading after a short delay to ensure smooth transition
+      setTimeout(() => {
+        setLoading(false);
+      }, 1000);
     }
   };
 
   useEffect(() => {
-    // Only show login splash if user is not logged in and not loading
+    // Start a timer to wait for auth state to settle
+    const timer = setTimeout(() => {
     if (!user && !loading) {
       setShowLoginSplash(true);
-    } else if (user) {
-      // Hide login splash when user is logged in
+      }
+      setIsCheckingAuth(false);
+    }, 1000); // Wait 1 second before showing login splash
+
+    // If user is logged in, hide the splash screen
+    if (user) {
       setShowLoginSplash(false);
+      setIsCheckingAuth(false);
     }
-    // Don't do anything while loading to prevent flashing
+
+    return () => clearTimeout(timer);
   }, [user, loading]);
 
   useEffect(() => {
@@ -509,37 +590,290 @@ export default function KnowledgePage() {
     URL.revokeObjectURL(url);
   };
 
-  // Add this useEffect to load saved analyses
+  // Update the Last Analysis card section
+  const renderLastAnalysis = () => {
+    if (!latestSavedAnalysis) return null;
+
+    return (
+      <div className="bg-gradient-to-br from-blue-50 to-purple-50 rounded-xl border border-blue-100/50 p-6 mb-8 hover:shadow-lg transition-all duration-300">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <div className="bg-white/80 backdrop-blur-sm rounded-lg p-3 shadow-sm">
+              <svg className="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+              </svg>
+            </div>
+            <div>
+              <div className="flex items-center gap-3">
+                <h2 className="text-lg font-semibold text-gray-900">Last Analysis</h2>
+                <span className="text-sm text-blue-600">
+                  {latestSavedAnalysis.totalEmailsAnalyzed || latestSavedAnalysis.totalEmails} emails analyzed
+                </span>
+              </div>
+              <p className="text-sm text-gray-600">
+                {new Date(latestSavedAnalysis.timestamp).toLocaleDateString()} at {new Date(latestSavedAnalysis.timestamp).toLocaleTimeString()}
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => handleViewDetails(latestSavedAnalysis)}
+            className="group px-4 py-2 bg-white/80 backdrop-blur-sm text-blue-600 rounded-lg hover:bg-blue-600 hover:text-white transition-all duration-300 flex items-center gap-2 shadow-sm hover:shadow"
+          >
+            View Details
+            <svg 
+              className="w-4 h-4 transition-transform duration-300 group-hover:translate-x-1" 
+              fill="none" 
+              stroke="currentColor" 
+              viewBox="0 0 24 24"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+            </svg>
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  // Add this useEffect to load saved analyses with debugging
   useEffect(() => {
     const loadSavedAnalyses = async () => {
       try {
-        if (!db) {
-          console.error('Firebase database not initialized');
-          setError('Database connection error. Please try again later.');
+        if (!db || !user?.email) {
+          console.log('Debug: Missing db or user email', { db: !!db, userEmail: user?.email });
           return;
         }
 
+        console.log('Debug: Loading analyses for user:', user.email);
+        
         const analysesRef = collection(db, 'emailAnalyses');
-        const q = query(analysesRef, orderBy('timestamp', 'desc'), limit(5));
+        const q = query(
+          analysesRef,
+          where('userId', '==', user.email)
+        );
+
+        console.log('Debug: Executing query');
         const querySnapshot = await getDocs(q);
+        console.log('Debug: Got query snapshot, size:', querySnapshot.size);
+
         const analyses: SavedEmailAnalysis[] = [];
         
         querySnapshot.forEach((doc) => {
-          analyses.push({ id: doc.id, ...doc.data() } as SavedEmailAnalysis);
+          console.log('Debug: Processing doc:', doc.id);
+          const data = doc.data();
+          
+          // Ensure all required fields are present with proper types
+          const analysis: SavedEmailAnalysis = {
+            id: doc.id,
+            timestamp: data.timestamp || Date.parse(data.createdAt) || Date.now(),
+            totalEmails: data.totalEmails || 0,
+            totalEmailsAnalyzed: data.totalEmailsAnalyzed || data.totalEmails || 0,
+            supportEmails: data.supportEmails || 0,
+            emails: (data.emails || []).map((email: any) => ({
+              subject: email.subject || '',
+              from: email.from || '',
+              body: email.body || '',
+              date: email.date || '',
+              isSupport: email.isSupport || false,
+              confidence: email.confidence || 0,
+              reason: email.reason || '',
+              summary: email.summary || {
+                subject: email.subject || '',
+                content: email.body?.slice(0, 200) || '',
+                sentiment: 'neutral',
+                key_points: [email.reason || '']
+              }
+            })),
+            tokenUsage: {
+              promptTokens: data.tokenUsage?.promptTokens || 0,
+              completionTokens: data.tokenUsage?.completionTokens || 0,
+              totalTokens: data.tokenUsage?.totalTokens || 0
+            },
+            aiInsights: {
+              keyCustomerPoints: data.aiInsights?.keyCustomerPoints || [],
+              commonQuestions: (data.aiInsights?.commonQuestions || []).map((q: any) => ({
+                question: q.question || '',
+                typicalAnswer: q.typicalAnswer || '',
+                frequency: q.frequency || 1
+              })),
+              customerSentiment: {
+                overall: data.aiInsights?.customerSentiment?.overall || 'Analysis complete',
+                details: data.aiInsights?.customerSentiment?.details || ''
+              },
+              recommendedActions: data.aiInsights?.recommendedActions || []
+            }
+          };
+          
+          analyses.push(analysis);
         });
         
-        setSavedAnalyses(analyses);
-        if (analyses.length > 0) {
-          setLatestAnalysis(analyses[0]);
+        // Sort in memory by timestamp (newest first)
+        const sortedAnalyses = analyses.sort((a, b) => b.timestamp - a.timestamp);
+        
+        console.log('Debug: Processed analyses:', sortedAnalyses.length);
+        
+        setSavedAnalyses(sortedAnalyses);
+        if (sortedAnalyses.length > 0) {
+          console.log('Debug: Setting latest analysis:', sortedAnalyses[0]);
+          setLatestSavedAnalysis(sortedAnalyses[0]);
         }
       } catch (error) {
-        console.error('Error loading saved analyses:', error);
-        setError('Failed to load saved analyses. Please try again later.');
+        console.error('Debug: Error in loadSavedAnalyses:', {
+          error,
+          message: error instanceof Error ? error.message : 'Unknown error'
+        });
+        setError('Failed to load saved analyses. Please check console for details.');
       }
     };
 
-    loadSavedAnalyses();
-  }, [user]);
+    if (user?.email) {
+      loadSavedAnalyses();
+    }
+  }, [user, db]);
+
+  // Update the view details click handler
+  const handleViewDetails = (analysis: SavedEmailAnalysis) => {
+    console.log('Viewing analysis:', analysis);
+    setLatestAnalysis(analysis);
+  };
+
+  // Add this function before the return statement
+  const handleSaveAnalysis = async () => {
+    if (!result || !user || !db) {
+      console.error('Missing required data for saving:', { result: !!result, user: !!user, db: !!db });
+      return;
+    }
+
+    try {
+      // Create complete analysis object with all required fields
+      const analysisToSave = {
+        id: Date.now().toString(),
+        timestamp: Date.now(),
+        totalEmails: processingStatus.totalEmails || 0,
+        totalEmailsAnalyzed: processingStatus.totalEmails || 0,
+        supportEmails: supportEmailCount || 0,
+        emails: analyzedEmails
+          .filter(email => email.isSupport)
+          .map(email => {
+            const originalEmail = emailData.find(e => 
+              normalizeSubject(e.subject) === normalizeSubject(email.subject)
+            );
+            return {
+              subject: email.subject || '',
+              from: originalEmail?.from || '',
+              body: originalEmail?.body || '',
+              date: originalEmail?.date || new Date().toISOString(),
+              isSupport: true,
+              confidence: email.confidence || 0,
+              reason: email.reason || '',
+              summary: {
+                subject: email.subject || '',
+                content: originalEmail?.body?.slice(0, 200) || '',
+                sentiment: 'neutral',
+                key_points: [email.reason || '']
+              }
+            };
+          }),
+        tokenUsage: {
+          promptTokens: tokenUsage.promptTokens || 0,
+          completionTokens: tokenUsage.completionTokens || 0,
+          totalTokens: tokenUsage.totalTokens || 0
+        },
+        aiInsights: {
+          keyCustomerPoints: result.faqs.map(faq => faq.question || '').filter(Boolean),
+          commonQuestions: result.faqs.map(faq => ({
+            question: faq.question || '',
+            typicalAnswer: faq.answer || '',
+            frequency: faq.frequency || 1
+          })),
+          customerSentiment: {
+            overall: "Analysis complete",
+            details: `Analyzed ${processingStatus.totalEmails} emails and found ${supportEmailCount} support-related emails.`
+          },
+          recommendedActions: result.faqs.map(faq => 
+            `Consider documenting: ${faq.question} (asked ${faq.frequency} times)`
+          ).filter(Boolean)
+        },
+        createdAt: new Date().toISOString(),
+        userId: user.email || ''
+      };
+
+      console.log('Saving analysis:', analysisToSave);
+
+      // Save to Firebase
+      const analysesRef = collection(db, 'emailAnalyses');
+      const docRef = await addDoc(analysesRef, analysisToSave);
+      
+      console.log('Successfully saved analysis with ID:', docRef.id);
+      
+      // Update local state
+      setLatestAnalysis(analysisToSave);
+      setSavedAnalyses(prev => [analysisToSave, ...prev].slice(0, 5));
+      
+      // Show success message
+      setError(null);
+      
+    } catch (error) {
+      console.error('Error saving analysis:', error);
+      setError('Failed to save analysis. Please try again.');
+    }
+  };
+
+  // Add this test function before the return statement
+  const testFirebaseSave = async () => {
+    if (!user || !db) {
+      console.error('No user or db not initialized');
+      return;
+    }
+
+    try {
+      // Create a simple test document
+      const testAnalysis = {
+        id: 'test-' + Date.now(),
+        timestamp: Date.now(),
+        userId: user.email,
+        totalEmails: 1,
+        supportEmails: 1,
+        emails: [{
+          subject: 'Test Email',
+          from: 'test@example.com',
+          body: 'Test body',
+          date: new Date().toISOString(),
+          isSupport: true,
+          confidence: 0.9,
+          reason: 'Test reason'
+        }],
+        tokenUsage: {
+          promptTokens: 100,
+          completionTokens: 100,
+          totalTokens: 200
+        },
+        aiInsights: {
+          keyCustomerPoints: ['Test point'],
+          commonQuestions: [{
+            question: 'Test question?',
+            typicalAnswer: 'Test answer',
+            frequency: 1
+          }],
+          customerSentiment: {
+            overall: 'Test sentiment',
+            details: 'Test details'
+          },
+          recommendedActions: ['Test action']
+        }
+      };
+
+      console.log('Attempting to save test analysis:', testAnalysis);
+      
+      const analysesRef = collection(db, 'emailAnalyses');
+      const docRef = await addDoc(analysesRef, testAnalysis);
+      
+      console.log('Successfully saved test document with ID:', docRef.id);
+      alert('Test save successful! Document ID: ' + docRef.id);
+    } catch (error) {
+      console.error('Error in test save:', error);
+      alert('Test save failed: ' + (error instanceof Error ? error.message : String(error)));
+    }
+  };
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -551,13 +885,129 @@ export default function KnowledgePage() {
         <main className="max-w-4xl mx-auto px-4 py-8">
           <div className="flex items-center justify-between mb-8">
             <h1 className="text-3xl font-bold">Knowledge Base Generator</h1>
+            <div className="flex gap-2">
+              <button
+                onClick={testFirebaseSave}
+                className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
+              >
+                Test Firebase Save
+              </button>
             <button
               onClick={() => setShowRunTestModal(true)}
               className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
             >
               Run New Analysis
             </button>
+            </div>
           </div>
+
+          {/* Last Analysis Quick Access */}
+          {!latestAnalysis && processingStatus.stage === 'idle' && !loading && renderLastAnalysis()}
+
+          {/* Show Analysis Summary when selected */}
+          {latestAnalysis && (
+            <div>
+              <div className="flex items-center justify-between mb-6">
+                <button
+                  onClick={() => setLatestAnalysis(null)}
+                  className="flex items-center gap-2 text-gray-600 hover:text-gray-900 transition-colors"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                  </svg>
+                  Back to Knowledge Base
+                </button>
+              </div>
+              <AnalysisSummary 
+                analysis={latestAnalysis}
+                showCloseButton={false}
+              />
+            </div>
+          )}
+
+          {/* Only show the rest of the content when not viewing an analysis */}
+          {!latestAnalysis && (
+            <>
+              {/* Analysis Completion Message */}
+              {result && (
+                <div className="bg-blue-50 border border-blue-100 rounded-xl p-6 mb-8">
+                  <div className="flex flex-col gap-2">
+                    <div className="text-lg text-blue-800 font-medium">
+                      Analysis complete! Found {supportEmailCount} support emails after analyzing {processingStatus.totalEmails} emails
+                      in {Math.floor((Date.now() - analysisStartTime) / 60000)} minutes {Math.floor(((Date.now() - analysisStartTime) % 60000) / 1000)} seconds.
+                    </div>
+                    <div className="text-sm text-blue-600">
+                      Token usage: {tokenUsage.totalTokens} total tokens ({tokenUsage.promptTokens} prompt, {tokenUsage.completionTokens} completion)
+                    </div>
+                    <div className="text-sm text-blue-600">
+                      Using batched processing: {Math.ceil(processingStatus.totalEmails! / 5)} API calls for {processingStatus.totalEmails} emails
+                    </div>
+                  </div>
+                  <div className="flex gap-3 mt-4">
+                    <button
+                      onClick={() => downloadDebugLogs()}
+                      className="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors"
+                    >
+                      Download Debug Logs
+                    </button>
+                    <SaveAnalysisButton
+                      analysis={{
+                        totalEmails: processingStatus.totalEmails || 0,
+                        totalEmailsAnalyzed: processingStatus.totalEmails || 0,
+                        supportEmails: supportEmailCount,
+                        faqs: result.faqs,
+                        keyCustomerPoints: result.faqs.map(faq => faq.question),
+                        customerSentiment: {
+                          overall: "Analysis complete",
+                          details: `Analyzed ${processingStatus.totalEmails} emails and found ${supportEmailCount} support-related emails.`
+                        },
+                        recommendedActions: result.faqs.map(faq => 
+                          `Consider documenting: ${faq.question} (asked ${faq.frequency} times)`
+                        ),
+                        tokenUsage,
+                        timestamp: Date.now(),
+                        analyzedEmails: analyzedEmails
+                          .filter(email => email.isSupport)
+                          .map(email => {
+                            const originalEmail = emailData.find(e => 
+                              normalizeSubject(e.subject) === normalizeSubject(email.subject)
+                            );
+                            return {
+                              subject: email.subject,
+                              from: originalEmail?.from || '',
+                              body: originalEmail?.body || '',
+                              date: originalEmail?.date || new Date().toISOString(),
+                              isSupport: true,
+                              confidence: email.confidence || 0,
+                              reason: email.reason || ''
+                            };
+                          })
+                      }}
+                      onSave={handleSaveAnalysis}
+                      className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
+                    >
+                      Save Analysis
+                    </SaveAnalysisButton>
+                    <button
+                      onClick={() => setShowRunTestModal(true)}
+                      className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                    >
+                      Run Test Again
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Pie Chart Section - Moved up */}
+              {result && (
+                <div className="mb-8">
+                  <FAQPieChart
+                    faqs={result.faqs}
+                    totalEmails={result.totalEmails}
+                    supportEmails={result.supportEmails}
+                  />
+                </div>
+              )}
           
           {error && (
             <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-8">
@@ -573,216 +1023,240 @@ export default function KnowledgePage() {
             </div>
           )}
 
-          {processingStatus.stage !== 'idle' && processingStatus.stage !== 'complete' && (
-            <div className="bg-white rounded-lg shadow-sm p-8 mb-8">
-              <div className="max-w-xl mx-auto">
-                <div className="flex flex-col items-center text-center mb-8">
-                  <div className="relative w-24 h-24 mb-6">
-                    {processingStatus.stage === 'fetching_emails' ? (
-                      // Email fetching animation
-                      <div className="absolute inset-0 flex items-center justify-center">
-                        <Mail className="w-12 h-12 text-red-500 animate-bounce" />
+              {/* Loading State */}
+              {loading && (
+                <div className="bg-white rounded-2xl shadow-sm p-8 mb-8">
+                  <div className="max-w-2xl mx-auto">
+                    <div className="text-center mb-8">
+                      <div className="w-16 h-16 mx-auto mb-4">
+                        <div className="relative">
+                          <div className="w-16 h-16 border-4 border-orange-100 rounded-full" />
+                          <div className="absolute top-0 left-0 w-16 h-16 border-4 border-orange-500 rounded-full border-t-transparent animate-spin" />
                       </div>
-                    ) : (
-                      // Analysis animation
-                      <div className="absolute inset-0 flex items-center justify-center">
-                        <div className="w-12 h-12 border-4 border-red-500 border-t-transparent rounded-full animate-spin" />
                       </div>
-                    )}
-                  </div>
-                  
-                  <h2 className="text-2xl font-semibold mb-2">Analysis in Progress</h2>
-                  <p className="text-gray-600 mb-6">
+                      <h2 className="text-xl font-semibold text-gray-900 mb-2">
                     {processingStatus.stage === 'fetching_emails' 
-                      ? 'Fetching your emails...'
-                      : `Analyzing email ${currentEmailIndex} of ${processingStatus.totalEmails || 0}`
-                    }
-                  </p>
+                          ? 'Fetching Emails' 
+                          : processingStatus.stage === 'analyzing'
+                          ? 'Analyzing Content'
+                          : 'Processing...'}
+                      </h2>
+                      <p className="text-gray-600 mb-2">
+                        {processingStatus.stage === 'fetching_emails'
+                          ? 'Retrieving your recent emails...'
+                          : processingStatus.stage === 'analyzing'
+                          ? `Analyzing email ${currentEmailIndex + 1} of ${processingStatus.totalEmails}`
+                          : 'Please wait while we process your request...'}
+                      </p>
+                      <div className="text-sm text-gray-500 bg-gray-100 rounded-lg p-3 mb-6 flex items-center gap-2">
+                        <div className="min-w-0">
+                          <p className="font-medium mb-1">Please keep this tab open</p>
+                          <p>You can switch to other tabs but don't close this one until the analysis is complete (max 10 minutes).</p>
+                        </div>
+                      </div>
 
-                  {/* Progress bar */}
-                  <div className="w-full bg-gray-100 rounded-full h-3 mb-4 overflow-hidden">
-                    <div 
-                      className="h-full bg-gradient-to-r from-red-500 to-red-600 transition-all duration-500 ease-out rounded-full"
-                      style={{ 
-                        width: `${processingStatus.progress}%`,
-                        transition: 'width 0.5s ease-out'
-                      }}
+                      {/* Progress Bar */}
+                      <div className="w-full bg-gray-100 rounded-full h-2 mb-4">
+                        <div 
+                          className="h-full bg-orange-500 rounded-full transition-all duration-500"
+                          style={{ width: `${processingStatus.progress}%` }}
                     />
                   </div>
 
-                  <div className="flex items-center justify-between w-full text-sm">
-                    <div className="flex items-center gap-2">
-                      <span className={`inline-block w-2 h-2 rounded-full ${
-                        processingStatus.stage === 'fetching_emails' ? 'bg-blue-500' : 'bg-gray-300'
-                      }`} />
-                      <span className={processingStatus.stage === 'fetching_emails' ? 'text-blue-600' : 'text-gray-400'}>
-                        Fetch Emails
-                      </span>
+                      {/* Progress Steps */}
+                      <div className="flex justify-between items-center max-w-sm mx-auto mb-8">
+                        <div className="flex flex-col items-center">
+                          <div className={`w-8 h-8 rounded-full flex items-center justify-center mb-2 ${
+                            processingStatus.stage === 'fetching_emails' 
+                              ? 'bg-orange-500 text-white'
+                              : processingStatus.stage === 'analyzing' || processingStatus.stage === 'complete'
+                              ? 'bg-green-500 text-white'
+                              : 'bg-gray-200'
+                          }`}>
+                            1
                     </div>
-                    <div className="h-px w-16 bg-gray-200" />
-                    <div className="flex items-center gap-2">
-                      <span className={`inline-block w-2 h-2 rounded-full ${
-                        processingStatus.stage === 'analyzing' ? 'bg-red-500' : 'bg-gray-300'
-                      }`} />
-                      <span className={processingStatus.stage === 'analyzing' ? 'text-red-600' : 'text-gray-400'}>
-                        Analyze Content
-                      </span>
+                          <span className="text-sm text-gray-600">Fetch</span>
                     </div>
+                        <div className="h-px w-20 bg-gray-200" />
+                        <div className="flex flex-col items-center">
+                          <div className={`w-8 h-8 rounded-full flex items-center justify-center mb-2 ${
+                            processingStatus.stage === 'analyzing'
+                              ? 'bg-orange-500 text-white'
+                              : processingStatus.stage === 'complete'
+                              ? 'bg-green-500 text-white'
+                              : 'bg-gray-200'
+                          }`}>
+                            2
                   </div>
-
-                  {estimatedTimeRemaining > 0 && (
-                    <p className="text-sm text-gray-500 mt-4">
-                      Estimated time remaining: {Math.ceil(estimatedTimeRemaining / 60)} min {estimatedTimeRemaining % 60} sec
-                    </p>
-                  )}
+                          <span className="text-sm text-gray-600">Analyze</span>
+                        </div>
+                        <div className="h-px w-20 bg-gray-200" />
+                        <div className="flex flex-col items-center">
+                          <div className={`w-8 h-8 rounded-full flex items-center justify-center mb-2 ${
+                            processingStatus.stage === 'complete'
+                              ? 'bg-green-500 text-white'
+                              : 'bg-gray-200'
+                          }`}>
+                            3
+                          </div>
+                          <span className="text-sm text-gray-600">Complete</span>
+                        </div>
                 </div>
 
                 {/* Stats */}
-                <div className="grid grid-cols-2 gap-4 text-center">
-                  <div className="bg-gray-50 rounded-lg p-4">
-                    <p className="text-2xl font-semibold text-gray-900">
+                      <div className="grid grid-cols-2 gap-6">
+                        <div className="bg-gray-50 rounded-xl p-4">
+                          <div className="text-4xl font-bold text-gray-900 mb-1">
                       {processingStatus.totalEmails || 0}
-                    </p>
-                    <p className="text-sm text-gray-600">Total Emails</p>
                   </div>
-                  <div className="bg-gray-50 rounded-lg p-4">
-                    <p className="text-2xl font-semibold text-gray-900">
+                          <div className="text-sm text-gray-600">Total Emails</div>
+                        </div>
+                        <div className="bg-gray-50 rounded-xl p-4">
+                          <div className="text-4xl font-bold text-gray-900 mb-1">
                       {supportEmailCount}
-                    </p>
-                    <p className="text-sm text-gray-600">Support Emails Found</p>
                   </div>
+                          <div className="text-sm text-gray-600">Support Emails</div>
+                        </div>
+                      </div>
+
+                      {/* Estimated Time */}
+                      {estimatedTimeRemaining > 0 && (
+                        <p className="text-sm text-gray-500 mt-6">
+                          Estimated time remaining: {Math.ceil(estimatedTimeRemaining / 60)} min {estimatedTimeRemaining % 60} sec
+                        </p>
+                      )}
                 </div>
               </div>
             </div>
           )}
 
           {/* Show initial modal by default */}
-          {(!latestAnalysis || !latestAnalysis.aiInsights || !latestAnalysis.emails?.length) && processingStatus.stage === 'idle' && (
-            <div className="bg-white rounded-2xl shadow-sm p-8 mb-8">
-              <div className="max-w-2xl mx-auto">
-                <div className="text-center mb-12">
-                  <div className="w-16 h-16 bg-orange-100 rounded-2xl flex items-center justify-center mx-auto mb-6">
-                    <BookOpen className="w-8 h-8 text-orange-600" />
-                  </div>
-                  <h2 className="text-2xl font-semibold text-gray-900 mb-3">
-                    Generate Knowledge Base
-                  </h2>
-                  <p className="text-gray-600">
-                    Analyze your emails to generate insights about customer support patterns.
-                  </p>
-                </div>
-
-                {/* Model selection */}
-                <div className="mb-12">
-                  <label className="block text-sm font-medium text-gray-700 mb-4 text-center">
-                    Select AI Model
-                  </label>
-                  <div className="grid grid-cols-2 gap-6">
-                    {MODEL_OPTIONS.map(model => (
-                      <div
-                        key={model.value}
-                        onClick={() => setSelectedModel(model.value)}
-                        className={`relative p-6 rounded-xl border-2 cursor-pointer transition-all duration-200 hover:scale-[1.02] ${
-                          selectedModel === model.value
-                            ? 'border-orange-500 bg-orange-50 shadow-lg'
-                            : 'border-gray-200 hover:border-orange-200 hover:bg-orange-50/50'
-                        }`}
-                      >
-                        <div className="flex items-start gap-4 mb-4">
-                          <div className="w-12 h-12 relative bg-white rounded-lg p-2 shadow-sm flex items-center justify-center">
-                            <Image
-                              src={model.logo}
-                              alt={model.label}
-                              width={32}
-                              height={32}
-                              className={`object-contain ${model.value === 'openai' ? 'dark' : ''}`}
-                              style={{ filter: model.value === 'openai' ? 'brightness(0.2)' : 'none' }}
-                            />
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <h3 className="font-medium text-gray-900 mb-1">{model.label}</h3>
-                            <p className="text-sm text-gray-500 line-clamp-2">{model.description}</p>
-                          </div>
-                        </div>
-                        <div className="flex gap-3">
-                          <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-orange-100 text-orange-800">
-                            Speed: {model.speed}
-                          </span>
-                          <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                            Reliability: {model.reliability}
-                          </span>
-                        </div>
-                        {selectedModel === model.value && (
-                          <div className="absolute top-3 right-3">
-                            <div className="w-6 h-6 bg-orange-500 rounded-full flex items-center justify-center shadow-sm">
-                              <CheckCircle2 className="w-4 h-4 text-white" />
-                            </div>
-                          </div>
-                        )}
+              {(!latestAnalysis || !latestAnalysis.aiInsights || !latestAnalysis.emails?.length) && processingStatus.stage === 'idle' && (
+                <div className="bg-white rounded-2xl shadow-sm p-8 mb-8">
+                  <div className="max-w-2xl mx-auto">
+                    <div className="text-center mb-12">
+                      <div className="w-16 h-16 bg-orange-100 rounded-2xl flex items-center justify-center mx-auto mb-6">
+                        <BookOpen className="w-8 h-8 text-orange-600" />
                       </div>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Email count selection */}
-                <div className="mb-12">
-                  <label className="block text-sm font-medium text-gray-700 mb-4 text-center">
-                    Number of emails to analyze
-                  </label>
-                  <div className="grid grid-cols-3 gap-4">
-                    {EMAIL_COUNT_OPTIONS.map(option => (
-                      <div
-                        key={option.value}
-                        onClick={() => setEmailCountToAnalyze(option.value)}
-                        className={`relative p-4 rounded-xl border-2 cursor-pointer transition-all duration-200 hover:scale-[1.02] ${
-                          emailCountToAnalyze === option.value
-                            ? 'border-orange-500 bg-orange-50 shadow-lg'
-                            : 'border-gray-200 hover:border-orange-200 hover:bg-orange-50/50'
-                        }`}
-                      >
-                        <div className="text-center">
-                          <span className="text-3xl mb-3 block">{option.icon}</span>
-                          <h3 className="font-medium text-gray-900 mb-1">{option.label}</h3>
-                          <p className="text-xs text-gray-500">{option.description}</p>
-                        </div>
-                        {emailCountToAnalyze === option.value && (
-                          <div className="absolute top-2 right-2">
-                            <div className="w-5 h-5 bg-orange-500 rounded-full flex items-center justify-center shadow-sm">
-                              <CheckCircle2 className="w-3 h-3 text-white" />
+                      <h2 className="text-2xl font-semibold text-gray-900 mb-3">
+                  Generate Knowledge Base
+                </h2>
+                      <p className="text-gray-600">
+                  Analyze your emails to generate insights about customer support patterns.
+                </p>
+                    </div>
+                
+                  {/* Model selection */}
+                    <div className="mb-12">
+                      <label className="block text-sm font-medium text-gray-700 mb-4 text-center">
+                      Select AI Model
+                    </label>
+                      <div className="grid grid-cols-2 gap-6">
+                        {MODEL_OPTIONS.map(model => (
+                          <div
+                            key={model.value}
+                            onClick={() => setSelectedModel(model.value)}
+                            className={`relative p-6 rounded-xl border-2 cursor-pointer transition-all duration-200 hover:scale-[1.02] ${
+                              selectedModel === model.value
+                                ? 'border-orange-500 bg-orange-50 shadow-lg'
+                                : 'border-gray-200 hover:border-orange-200 hover:bg-orange-50/50'
+                            }`}
+                          >
+                            <div className="flex items-start gap-4 mb-4">
+                              <div className="w-12 h-12 relative bg-white rounded-lg p-2 shadow-sm flex items-center justify-center">
+                                <Image
+                                  src={model.logo}
+                                  alt={model.label}
+                                  width={32}
+                                  height={32}
+                                  className={`object-contain ${model.value === 'openai' ? 'dark' : ''}`}
+                                  style={{ filter: model.value === 'openai' ? 'brightness(0.2)' : 'none' }}
+                                />
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <h3 className="font-medium text-gray-900 mb-1">{model.label}</h3>
+                                <p className="text-sm text-gray-500 line-clamp-2">{model.description}</p>
+                              </div>
                             </div>
+                            <div className="flex gap-3">
+                              <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-orange-100 text-orange-800">
+                                Speed: {model.speed}
+                              </span>
+                              <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                                Reliability: {model.reliability}
+                              </span>
+                            </div>
+                            {selectedModel === model.value && (
+                              <div className="absolute top-3 right-3">
+                                <div className="w-6 h-6 bg-orange-500 rounded-full flex items-center justify-center shadow-sm">
+                                  <CheckCircle2 className="w-4 h-4 text-white" />
+                                </div>
+                              </div>
+                            )}
                           </div>
-                        )}
+                        ))}
                       </div>
-                    ))}
                   </div>
-                </div>
 
-                <div className="text-center">
-                  <button
-                    onClick={() => handleStartAnalysis(selectedModel, emailCountToAnalyze)}
-                    disabled={loading || !user}
-                    className={`px-8 py-4 rounded-xl font-medium text-white text-lg transition-all duration-200 ${
-                      loading || !user 
-                        ? 'bg-gray-400 cursor-not-allowed' 
-                        : 'bg-orange-500 hover:bg-orange-600 shadow-lg hover:shadow-xl hover:-translate-y-0.5'
-                    }`}
-                  >
-                    {loading ? (
-                      <span className="flex items-center gap-2">
-                        <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                        Starting Analysis...
-                      </span>
-                    ) : (
-                      'Start New Analysis'
-                    )}
-                  </button>
+                  {/* Email count selection */}
+                    <div className="mb-12">
+                      <label className="block text-sm font-medium text-gray-700 mb-4 text-center">
+                      Number of emails to analyze
+                    </label>
+                      <div className="grid grid-cols-3 gap-4">
+                      {EMAIL_COUNT_OPTIONS.map(option => (
+                          <div
+                            key={option.value}
+                            onClick={() => setEmailCountToAnalyze(option.value)}
+                            className={`relative p-4 rounded-xl border-2 cursor-pointer transition-all duration-200 hover:scale-[1.02] ${
+                              emailCountToAnalyze === option.value
+                                ? 'border-orange-500 bg-orange-50 shadow-lg'
+                                : 'border-gray-200 hover:border-orange-200 hover:bg-orange-50/50'
+                            }`}
+                          >
+                            <div className="text-center">
+                              <span className="text-3xl mb-3 block">{option.icon}</span>
+                              <h3 className="font-medium text-gray-900 mb-1">{option.label}</h3>
+                              <p className="text-xs text-gray-500">{option.description}</p>
+                  </div>
+                            {emailCountToAnalyze === option.value && (
+                              <div className="absolute top-2 right-2">
+                                <div className="w-5 h-5 bg-orange-500 rounded-full flex items-center justify-center shadow-sm">
+                                  <CheckCircle2 className="w-3 h-3 text-white" />
                 </div>
               </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="text-center">
+              <button
+                        onClick={() => handleStartAnalysis(selectedModel, emailCountToAnalyze)}
+                disabled={loading || !user}
+                        className={`px-8 py-4 rounded-xl font-medium text-white text-lg transition-all duration-200 ${
+                          loading || !user 
+                    ? 'bg-gray-400 cursor-not-allowed' 
+                            : 'bg-orange-500 hover:bg-orange-600 shadow-lg hover:shadow-xl hover:-translate-y-0.5'
+                        }`}
+                      >
+                        {loading ? (
+                          <span className="flex items-center gap-2">
+                            <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                            Starting Analysis...
+                          </span>
+                        ) : (
+                          'Start New Analysis'
+                        )}
+              </button>
+                    </div>
+                  </div>
             </div>
           )}
 
-          {/* Only show analysis if it's complete with all required data */}
-          {latestAnalysis && latestAnalysis.aiInsights && latestAnalysis.emails?.length > 0 && (
+              {/* Only show analysis if it's complete with all required data */}
+              {latestAnalysis && latestAnalysis.aiInsights && latestAnalysis.emails?.length > 0 && (
             <div className="mb-8">
               <div className="bg-white rounded-lg shadow-sm">
                 <div className="p-6">
@@ -793,40 +1267,8 @@ export default function KnowledgePage() {
                         {new Date(latestAnalysis.timestamp).toLocaleDateString()}
                       </span>
                       <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">
-                        {latestAnalysis?.emails?.length || 0} support emails analyzed
+                            {latestAnalysis?.emails?.length || 0} support emails analyzed
                       </span>
-                    </div>
-                  </div>
-                  
-                  {/* Analyzed emails section */}
-                  <div className="mb-6">
-                    <h3 className="text-lg font-semibold mb-3">Analyzed Support Emails</h3>
-                    <div className="space-y-3">
-                      {latestAnalysis?.emails?.map((email, index) => (
-                        <div 
-                          key={index}
-                          className="p-3 rounded-lg bg-gray-50 hover:bg-gray-100 cursor-pointer transition-colors"
-                          onClick={() => {
-                            if (email.fullData) {
-                              console.log('Opening email:', email.fullData);
-                              setSelectedEmail({
-                                subject: email.fullData.subject,
-                                from: email.fullData.from,
-                                body: email.fullData.body,
-                                date: email.fullData.date
-                              });
-                            }
-                          }}
-                        >
-                          <div className="flex items-center justify-between mb-1">
-                            <h4 className="font-medium text-gray-900">{email.subject}</h4>
-                            <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">
-                              {Math.round(email.confidence * 100)}% confidence
-                            </span>
-                          </div>
-                          <p className="text-sm text-gray-600">{email.reason}</p>
-                        </div>
-                      ))}
                     </div>
                   </div>
 
@@ -839,7 +1281,7 @@ export default function KnowledgePage() {
                         <h3 className="text-lg font-semibold text-purple-900">Key Customer Points</h3>
                       </div>
                       <ul className="space-y-2">
-                        {latestAnalysis?.aiInsights?.keyCustomerPoints?.map((point, index) => (
+                            {latestAnalysis?.aiInsights?.keyCustomerPoints?.map((point, index) => (
                           <li key={index} className="text-purple-800">• {point}</li>
                         ))}
                       </ul>
@@ -848,15 +1290,15 @@ export default function KnowledgePage() {
                     {/* Customer Sentiment */}
                     <div className="bg-blue-50 rounded-lg p-4">
                       <h3 className="text-lg font-semibold text-blue-900 mb-2">Customer Sentiment</h3>
-                      <p className="text-blue-800 font-medium mb-2">{latestAnalysis?.aiInsights?.customerSentiment?.overall}</p>
-                      <p className="text-blue-700">{latestAnalysis?.aiInsights?.customerSentiment?.details}</p>
+                          <p className="text-blue-800 font-medium mb-2">{latestAnalysis?.aiInsights?.customerSentiment?.overall}</p>
+                          <p className="text-blue-700">{latestAnalysis?.aiInsights?.customerSentiment?.details}</p>
                     </div>
 
                     {/* Common Questions and Answers */}
                     <div className="bg-green-50 rounded-lg p-4">
                       <h3 className="text-lg font-semibold text-green-900 mb-3">Frequently Asked Questions</h3>
                       <div className="space-y-4">
-                        {latestAnalysis?.aiInsights?.commonQuestions?.map((qa, index) => (
+                            {latestAnalysis?.aiInsights?.commonQuestions?.map((qa, index) => (
                           <div key={index} className="border-b border-green-200 pb-3 last:border-0 last:pb-0">
                             <div className="flex items-center gap-2 mb-2">
                               <span className="text-green-700 font-medium">Q:</span>
@@ -878,7 +1320,7 @@ export default function KnowledgePage() {
                     <div className="bg-amber-50 rounded-lg p-4">
                       <h3 className="text-lg font-semibold text-amber-900 mb-2">Recommended Actions</h3>
                       <ul className="space-y-2">
-                        {latestAnalysis?.aiInsights?.recommendedActions?.map((action, index) => (
+                            {latestAnalysis?.aiInsights?.recommendedActions?.map((action, index) => (
                           <li key={index} className="text-amber-800">→ {action}</li>
                         ))}
                       </ul>
@@ -889,70 +1331,9 @@ export default function KnowledgePage() {
             </div>
           )}
           
-          {/* Analysis Results Section */}
+              {/* Analysis Results Section - Remove duplicate message */}
           {result && (
             <>
-              <div className="mb-6 bg-blue-50 border border-blue-200 rounded-lg p-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-blue-700 mb-1">
-                      Analysis complete! Found {result.supportEmails} support emails after analyzing {result.totalEmails} emails in {formatDuration(analysisStartTime)}.
-                    </p>
-                    <p className="text-sm text-blue-600">
-                      Token usage: {(tokenUsage?.totalTokens || 0).toLocaleString()} total tokens ({(tokenUsage?.promptTokens || 0).toLocaleString()} prompt, {(tokenUsage?.completionTokens || 0).toLocaleString()} completion)
-                    </p>
-                    <p className="text-xs text-blue-500 mt-1">
-                      Using batched processing: {Math.ceil(result.totalEmails / 5)} API calls for {result.totalEmails} emails
-                    </p>
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={downloadDebugLogs}
-                      className="px-4 py-2 bg-gray-600 text-white rounded-lg text-sm hover:bg-gray-700"
-                    >
-                      Download Debug Logs
-                    </button>
-                    <SaveAnalysisButton
-                      analysis={{
-                        isSupport: true,
-                        confidence: latestAnalysis?.emails[0]?.confidence || 0,
-                        reason: latestAnalysis?.emails[0]?.reason || ''
-                      }}
-                      email={{
-                        subject: latestAnalysis?.emails[0]?.subject || '',
-                        from: latestAnalysis?.emails[0]?.from || '',
-                        body: latestAnalysis?.emails[0]?.body || '',
-                        date: latestAnalysis?.emails[0]?.date || new Date().toISOString()
-                      }}
-                      tokenCounts={{
-                        input_tokens: tokenUsage.promptTokens,
-                        output_tokens: tokenUsage.completionTokens,
-                        total_tokens: tokenUsage.totalTokens
-                      }}
-                    />
-                    <button
-                      onClick={() => setShowRunTestModal(true)}
-                      className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700"
-                    >
-                      Run Test Again
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-                <FAQPieChart
-                  faqs={result.faqs}
-                  totalEmails={result.totalEmails}
-                  supportEmails={result.supportEmails}
-                />
-                <FAQList
-                  faqs={result.faqs}
-                  totalEmails={result.totalEmails}
-                  supportEmails={result.supportEmails}
-                />
-              </div>
-
               {/* Individual Emails Section */}
               {analyzedEmails.length > 0 && (
                 <div className="bg-white rounded-lg shadow-sm p-6 mt-8">
@@ -1054,12 +1435,13 @@ export default function KnowledgePage() {
           )}
 
           {/* Show saved analyses if available */}
-          {savedAnalyses.length > 0 && !processingStatus.stage && (
+              {savedAnalyses.length > 0 && !processingStatus.stage && (
             <div className="mb-8">
               <h2 className="text-xl font-semibold mb-4">Previous Analyses</h2>
               <div className="space-y-4">
-                {savedAnalyses.map((analysis) => (
-                  <div key={analysis.id} className="bg-white rounded-lg shadow-sm p-6">
+                {savedAnalyses.slice(0, visibleAnalysesCount).map((analysis) => (
+                  <div key={analysis.id} 
+                    className="bg-white rounded-lg shadow-sm p-6 hover:shadow-md transition-shadow duration-200">
                     <div className="flex items-center justify-between mb-4">
                       <div>
                         <h3 className="text-lg font-semibold">
@@ -1071,48 +1453,81 @@ export default function KnowledgePage() {
                       </div>
                       <div className="flex gap-2">
                         <button
-                          onClick={() => setLatestAnalysis(analysis)}
-                          className="px-3 py-1.5 text-sm bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100"
+                          onClick={() => handleViewDetails(analysis)}
+                          className="px-4 py-2 text-sm bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition-colors duration-200 flex items-center gap-2"
                         >
                           View Details
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                          </svg>
                         </button>
                       </div>
                     </div>
 
                     {/* Quick stats */}
                     <div className="grid grid-cols-3 gap-4">
-                      <div className="bg-gray-50 rounded-lg p-3">
-                        <p className="text-sm text-gray-600">Support Rate</p>
-                        <p className="text-xl font-semibold">
+                      <div className="bg-gray-50 rounded-lg p-4">
+                        <p className="text-sm text-gray-600 mb-1">Support Rate</p>
+                        <p className="text-xl font-semibold text-gray-900">
                           {Math.round((analysis.supportEmails / analysis.totalEmails) * 100)}%
                         </p>
                       </div>
-                      <div className="bg-gray-50 rounded-lg p-3">
-                        <p className="text-sm text-gray-600">Common Topics</p>
-                        <p className="text-xl font-semibold">
+                      <div className="bg-gray-50 rounded-lg p-4">
+                        <p className="text-sm text-gray-600 mb-1">Common Topics</p>
+                        <p className="text-xl font-semibold text-gray-900">
                           {analysis.aiInsights.commonQuestions.length}
                         </p>
                       </div>
-                      <div className="bg-gray-50 rounded-lg p-3">
-                        <p className="text-sm text-gray-600">Token Usage</p>
-                        <p className="text-xl font-semibold">
+                      <div className="bg-gray-50 rounded-lg p-4">
+                        <p className="text-sm text-gray-600 mb-1">Token Usage</p>
+                        <p className="text-xl font-semibold text-gray-900">
                           {analysis.tokenUsage.totalTokens.toLocaleString()}
                         </p>
                       </div>
                     </div>
                   </div>
                 ))}
+                
+                {/* Show More button */}
+                {savedAnalyses.length > visibleAnalysesCount && (
+                  <div className="text-center mt-6">
+                    <button
+                      onClick={() => setVisibleAnalysesCount(prev => prev + 3)}
+                      className="px-6 py-3 bg-white text-blue-600 border border-blue-200 rounded-lg hover:bg-blue-50 transition-colors duration-200 flex items-center gap-2 mx-auto"
+                    >
+                      Show More
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                      </svg>
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
+              )}
+            </>
           )}
         </main>
       </div>
 
+      {/* Only show login splash if we're not checking auth and it should be shown */}
       <LoginSplashScreen
-        isOpen={showLoginSplash}
+        isOpen={!isCheckingAuth && showLoginSplash}
         onClose={handleCloseLogin}
         message="Sign in to access the Knowledge Base Generator"
       />
+
+      {/* Show loading state while checking auth */}
+      {isCheckingAuth && (
+        <div className="fixed inset-0 bg-white flex items-center justify-center">
+          <div className="w-16 h-16">
+            <div className="relative">
+              <div className="w-16 h-16 border-4 border-orange-100 rounded-full" />
+              <div className="absolute top-0 left-0 w-16 h-16 border-4 border-orange-500 rounded-full border-t-transparent animate-spin" />
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Email Thread Modal */}
       {selectedEmail && (
