@@ -99,11 +99,20 @@ export default function KnowledgePage() {
     // ... implementation
   };
 
-  const renderLastAnalysis = () => {
-    return null; // Implement this later
-  };
-
   const supportEmailCount = result?.emails.filter(email => email.isSupport).length || 0;
+
+  if (isCheckingAuth) {
+    return (
+      <div className="fixed inset-0 bg-white flex items-center justify-center">
+        <div className="w-16 h-16">
+          <div className="relative">
+            <div className="w-16 h-16 border-4 border-orange-100 rounded-full" />
+            <div className="absolute top-0 left-0 w-16 h-16 border-4 border-orange-500 rounded-full border-t-transparent animate-spin" />
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -122,9 +131,7 @@ export default function KnowledgePage() {
             </div>
           </div>
 
-          {!latestAnalysis && processingStatus.stage === 'idle' && !loading && renderLastAnalysis()}
-
-          {latestAnalysis && (
+          {latestAnalysis ? (
             <div>
               <div className="flex items-center justify-between mb-6">
                 <button
@@ -141,10 +148,15 @@ export default function KnowledgePage() {
                 analysis={latestAnalysis}
               />
             </div>
-          )}
-
-          {!latestAnalysis && (
+          ) : (
             <>
+              {!loading && !result && !error && (
+                <div className="bg-white rounded-lg shadow-sm p-6 text-center">
+                  <h2 className="text-xl font-semibold text-gray-900 mb-4">Welcome to Knowledge Base Generator</h2>
+                  <p className="text-gray-600 mb-6">Click "Run New Analysis" to analyze your email data and generate insights.</p>
+                </div>
+              )}
+
               {result && (
                 <div className="bg-blue-50 border border-blue-100 rounded-xl p-6 mb-8">
                   <div className="flex flex-col gap-2">
@@ -272,17 +284,6 @@ export default function KnowledgePage() {
         onClose={handleCloseLogin}
         message="Sign in to access the Knowledge Base Generator"
       />
-
-      {isCheckingAuth && (
-        <div className="fixed inset-0 bg-white flex items-center justify-center">
-          <div className="w-16 h-16">
-            <div className="relative">
-              <div className="w-16 h-16 border-4 border-orange-100 rounded-full" />
-              <div className="absolute top-0 left-0 w-16 h-16 border-4 border-orange-500 rounded-full border-t-transparent animate-spin" />
-            </div>
-          </div>
-        </div>
-      )}
 
       {selectedEmail && (
         <EmailThread
