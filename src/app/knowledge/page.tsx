@@ -17,7 +17,8 @@ import { getFirebaseDB } from '@/lib/firebase/firebase';
 import Image from 'next/image';
 import AnalysisModal from '../components/AnalysisModal';
 import AnalysisSummary from '../components/AnalysisSummary';
-import { SavedEmailAnalysis, FAQ, EmailData, ThreadSummary, AIInsights, TokenUsage } from '@/types/analysis';
+import { SavedEmailAnalysis, FAQ, EmailData, ThreadSummary, AIInsights, TokenUsage, CustomerSentiment } from '@/types/analysis';
+import { toast } from 'react-hot-toast';
 
 interface EmailAnalysis {
   subject: string;
@@ -205,19 +206,9 @@ export default function KnowledgePage() {
     completionTokens: 0,
     totalTokens: 0
   });
-  const [selectedEmail, setSelectedEmail] = useState<{
-    subject: string;
-    from: string;
-    body: string;
-    date: string;
-  } | null>(null);
+  const [selectedEmail, setSelectedEmail] = useState<EmailData | null>(null);
   const [latestAnalysis, setLatestAnalysis] = useState<SavedEmailAnalysis | null>(null);
-  const [emailData, setEmailData] = useState<Array<{
-    subject: string;
-    from: string;
-    body: string;
-    date: string;
-  }>>([]);
+  const [emailData, setEmailData] = useState<EmailData[]>([]);
   const [currentEmailIndex, setCurrentEmailIndex] = useState<number>(0);
   const [estimatedTimeRemaining, setEstimatedTimeRemaining] = useState<number>(0);
   const [analysisStartTime, setAnalysisStartTime] = useState<number>(0);
@@ -434,19 +425,47 @@ export default function KnowledgePage() {
         const aiInsights = await aiInsightsResponse.json();
 
         // Create new analysis object and save
+        const emailsWithSummary: EmailData[] = analyzedEmails
+          .filter(email => email.isSupport)
+          .map(email => {
+            const originalEmail = emailData.find(e => 
+              normalizeSubject(e.subject) === normalizeSubject(email.subject)
+            );
+            return {
+              subject: email.subject || '',
+              from: originalEmail?.from || '',
+              body: originalEmail?.body || '',
+              date: originalEmail?.date || new Date().toISOString(),
+              isSupport: true,
+              confidence: email.confidence || 0,
+              reason: email.reason || '',
+              summary: {
+                subject: email.subject || '',
+                content: originalEmail?.body?.slice(0, 200) || '',
+                sentiment: 'neutral',
+                key_points: [email.reason || '']
+              }
+            };
+          });
+
         const newAnalysis: SavedEmailAnalysis = {
-          id: Date.now().toString(),
+          id: result.id,
           timestamp: Date.now(),
-          emails: supportEmails.map(email => ({
-            ...email,
-            fullData: emails.find(e => normalizeSubject(e.subject) === normalizeSubject(email.subject))
-          })),
-          totalEmailsAnalyzed: totalEmails,
+          totalEmails: result.totalEmails,
+          emails: emailsWithSummary,
+          totalEmailsAnalyzed: result.totalEmailsAnalyzed,
+          supportEmails: emailsWithSummary,
           tokenUsage: {
-            ...tokenUsage,
-            totalTokens: tokenUsage.totalTokens
+            totalTokens: result.tokenUsage.totalTokens,
+            promptTokens: result.tokenUsage.promptTokens,
+            completionTokens: result.tokenUsage.completionTokens
           },
-          aiInsights
+          aiInsights: {
+            keyCustomerPoints: result.aiInsights.keyCustomerPoints,
+            commonQuestions: result.aiInsights.commonQuestions,
+            customerSentiment: result.aiInsights.customerSentiment,
+            recommendedActions: result.aiInsights.recommendedActions
+          }
         };
 
         // Final save to Firebase
@@ -707,10 +726,7 @@ export default function KnowledgePage() {
 
   // Add this function before the return statement
   const handleSaveAnalysis = async () => {
-    if (!result || !user || !db) {
-      console.error('Missing required data for saving:', { result: !!result, user: !!user, db: !!db });
-      return;
-    }
+    if (!result) return;
 
     try {
       const emailsWithSummary: EmailData[] = analyzedEmails
@@ -736,53 +752,42 @@ export default function KnowledgePage() {
           };
         });
 
-      // Create complete analysis object with all required fields
-      const analysisToSave: SavedEmailAnalysis = {
-        id: Date.now().toString(),
+      const newAnalysis: SavedEmailAnalysis = {
+        id: result.id,
         timestamp: Date.now(),
-        totalEmails: processingStatus.totalEmails || 0,
-        totalEmailsAnalyzed: processingStatus.totalEmails || 0,
-        supportEmails: emailsWithSummary,
+        totalEmails: result.totalEmails,
         emails: emailsWithSummary,
+        totalEmailsAnalyzed: result.totalEmailsAnalyzed,
+        supportEmails: emailsWithSummary,
         tokenUsage: {
-          promptTokens: tokenUsage.promptTokens || 0,
-          completionTokens: tokenUsage.completionTokens || 0,
-          totalTokens: tokenUsage.totalTokens || 0
+          totalTokens: result.tokenUsage.totalTokens,
+          promptTokens: result.tokenUsage.promptTokens,
+          completionTokens: result.tokenUsage.completionTokens
         },
         aiInsights: {
-          keyPoints: result.aiInsights.keyPoints,
           keyCustomerPoints: result.aiInsights.keyCustomerPoints,
           commonQuestions: result.aiInsights.commonQuestions,
-          suggestedActions: result.aiInsights.suggestedActions,
-          recommendedActions: result.aiInsights.recommendedActions,
-          customerSentiment: {
-            overall: "Analysis complete",
-            details: `Analyzed ${processingStatus.totalEmails} emails and found ${emailsWithSummary.length} support-related emails.`
-          }
+          customerSentiment: result.aiInsights.customerSentiment,
+          recommendedActions: result.aiInsights.recommendedActions
         }
       };
 
-      console.log('Saving analysis:', analysisToSave);
-
-      // Save to Firebase
-      const analysesRef = collection(db, 'emailAnalyses');
-      const docRef = await addDoc(analysesRef, {
-        ...analysisToSave,
-        userId: user.email || ''
+      // Save to Firestore
+      const analysisRef = collection(db, 'analyses');
+      await addDoc(analysisRef, {
+        ...newAnalysis,
+        userId: user?.uid,
+        createdAt: new Date()
       });
-      
-      console.log('Successfully saved analysis with ID:', docRef.id);
-      
-      // Update local state
-      setLatestAnalysis(analysisToSave);
-      setSavedAnalyses(prev => [analysisToSave, ...prev].slice(0, 5));
+
+      setLatestSavedAnalysis(newAnalysis);
+      saveAnalysis(newAnalysis);
       
       // Show success message
-      setError(null);
-      
+      toast.success('Analysis saved successfully!');
     } catch (error) {
       console.error('Error saving analysis:', error);
-      setError('Failed to save analysis. Please try again.');
+      toast.error('Failed to save analysis');
     }
   };
 
@@ -1205,74 +1210,57 @@ export default function KnowledgePage() {
           )}
 
               {latestAnalysis && latestAnalysis.aiInsights && latestAnalysis.emails?.length > 0 && (
-            <div className="mb-8">
-              <div className="bg-white rounded-lg shadow-sm">
-                <div className="p-6">
-                  <div className="flex items-center justify-between mb-4">
-                    <h2 className="text-xl font-semibold">Latest Analysis Results</h2>
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm text-gray-500">
-                        {new Date(latestAnalysis.timestamp).toLocaleDateString()}
-                      </span>
-                      <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">
-                            {latestAnalysis?.emails?.length || 0} support emails analyzed
-                      </span>
-                    </div>
+                <div className="bg-white rounded-lg shadow-md p-6 mb-6">
+                  <h2 className="text-2xl font-semibold mb-4">Latest Analysis Results</h2>
+                  <div className="text-sm text-gray-600 mb-4">
+                    Analyzed on{' '}
+                    {new Date(latestAnalysis.timestamp).toLocaleDateString()}
                   </div>
-
-                  <div className="space-y-6">
-                    <div className="bg-purple-50 rounded-lg p-4">
-                      <div className="flex items-center gap-2 mb-3">
-                        <span className="text-2xl">🪄</span>
-                        <h3 className="text-lg font-semibold text-purple-900">Key Customer Points</h3>
-                      </div>
-                      <ul className="space-y-2">
-                            {latestAnalysis?.aiInsights?.keyCustomerPoints?.map((point, index) => (
-                          <li key={index} className="text-purple-800">• {point}</li>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="bg-blue-50 p-4 rounded-lg">
+                      <h3 className="text-lg font-medium mb-2">Analysis Overview</h3>
+                      <p className="text-gray-700 mb-2">
+                        {latestAnalysis.emails.length} support emails analyzed
+                      </p>
+                    </div>
+                    <div className="bg-blue-50 p-4 rounded-lg">
+                      <h3 className="text-lg font-medium mb-2">Key Customer Points</h3>
+                      <ul className="list-disc list-inside text-gray-700">
+                        {latestAnalysis.aiInsights.keyCustomerPoints?.map((point, index) => (
+                          <li key={index} className="mb-1">{point}</li>
                         ))}
                       </ul>
                     </div>
-
-                    <div className="bg-blue-50 rounded-lg p-4">
-                      <h3 className="text-lg font-semibold text-blue-900 mb-2">Customer Sentiment</h3>
-                          <p className="text-blue-800 font-medium mb-2">{latestAnalysis?.aiInsights?.customerSentiment?.overall}</p>
-                          <p className="text-blue-700">{latestAnalysis?.aiInsights?.customerSentiment?.details}</p>
+                    <div className="bg-blue-50 p-4 rounded-lg">
+                      <h3 className="text-lg font-medium mb-2">Customer Sentiment</h3>
+                      <p className="text-blue-800 font-medium mb-2">{latestAnalysis.aiInsights.customerSentiment.overall}</p>
+                      <p className="text-blue-700">{latestAnalysis.aiInsights.customerSentiment.details}</p>
                     </div>
-
-                    <div className="bg-green-50 rounded-lg p-4">
-                      <h3 className="text-lg font-semibold text-green-900 mb-3">Frequently Asked Questions</h3>
-                      <div className="space-y-4">
-                            {latestAnalysis?.aiInsights?.commonQuestions?.map((qa, index) => (
-                          <div key={index} className="border-b border-green-200 pb-3 last:border-0 last:pb-0">
-                            <div className="flex items-center gap-2 mb-2">
-                              <span className="text-green-700 font-medium">Q:</span>
-                              <p className="text-green-800 font-medium">{qa.question}</p>
-                              <span className="text-xs bg-green-200 text-green-800 px-2 py-0.5 rounded-full ml-auto">
-                                Asked {qa.frequency}x
-                              </span>
-                            </div>
-                            <div className="flex gap-2 pl-6">
-                              <span className="text-green-700 font-medium">A:</span>
-                              <p className="text-green-700">{qa.typicalAnswer}</p>
-                            </div>
-                          </div>
+                    <div className="bg-blue-50 p-4 rounded-lg">
+                      <h3 className="text-lg font-medium mb-2">Common Questions</h3>
+                      <ul className="list-disc list-inside text-gray-700">
+                        {latestAnalysis.aiInsights.commonQuestions?.map((qa, index) => (
+                          <li key={index} className="mb-1">
+                            <span className="font-medium">{qa.question}</span>
+                            <br />
+                            <span className="text-sm text-gray-600">
+                              Frequency: {qa.frequency}
+                            </span>
+                          </li>
                         ))}
-                      </div>
+                      </ul>
                     </div>
-
-                    <div className="bg-amber-50 rounded-lg p-4">
-                      <h3 className="text-lg font-semibold text-amber-900 mb-2">Recommended Actions</h3>
-                      <ul className="space-y-2">
-                            {latestAnalysis?.aiInsights?.recommendedActions?.map((action, index) => (
-                          <li key={index} className="text-amber-800">→ {action}</li>
+                    <div className="bg-blue-50 p-4 rounded-lg col-span-2">
+                      <h3 className="text-lg font-medium mb-2">Recommended Actions</h3>
+                      <ul className="list-disc list-inside text-gray-700">
+                        {latestAnalysis.aiInsights.recommendedActions?.map((action, index) => (
+                          <li key={index} className="mb-1">{action}</li>
                         ))}
                       </ul>
                     </div>
                   </div>
                 </div>
-              </div>
-            </div>
-          )}
+              )}
           
               {result && (
             <>
