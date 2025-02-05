@@ -726,7 +726,7 @@ export default function KnowledgePage() {
 
   // Add this function before the return statement
   const handleSaveAnalysis = async () => {
-    if (!result) return;
+    if (!result || !db) return;
 
     try {
       const emailsWithSummary: EmailData[] = analyzedEmails
@@ -774,9 +774,12 @@ export default function KnowledgePage() {
 
       // Save to Firestore
       const analysisRef = collection(db, 'analyses');
+      const userEmail = user?.email;
+      if (!userEmail) throw new Error('User email not found');
+
       await addDoc(analysisRef, {
         ...newAnalysis,
-        userId: user?.uid,
+        userId: userEmail,
         createdAt: new Date()
       });
 

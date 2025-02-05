@@ -1,40 +1,21 @@
 import { google } from 'googleapis';
 import { NextResponse } from 'next/server';
 import { OAuth2Client } from 'google-auth-library';
+import { GaxiosResponse } from 'gaxios';
+import { gmail_v1 } from 'googleapis';
 
-interface GmailMessage {
+type Schema$Message = gmail_v1.Schema$Message;
+type Schema$MessagePart = gmail_v1.Schema$MessagePart;
+type Schema$MessagePartHeader = gmail_v1.Schema$MessagePartHeader;
+
+interface EmailResponse {
   id: string;
   threadId: string;
-}
-
-interface GmailListResponse {
-  data: {
-    messages?: GmailMessage[];
-    nextPageToken?: string;
-  };
-}
-
-interface GmailMessageResponse {
-  data: {
-    id: string;
-    threadId: string;
-    snippet: string;
-    payload: {
-      headers: Array<{
-        name: string;
-        value: string;
-      }>;
-      parts?: Array<{
-        mimeType: string;
-        body: {
-          data?: string;
-        };
-      }>;
-      body?: {
-        data?: string;
-      };
-    };
-  };
+  subject: string;
+  from: string;
+  date: string;
+  body: string;
+  snippet?: string;
 }
 
 export async function POST(request: Request) {
@@ -50,7 +31,7 @@ export async function POST(request: Request) {
 
     const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
     
-    const gmailResponse: GmailListResponse = await gmail.users.messages.list({
+    const gmailResponse = await gmail.users.messages.list({
       userId: 'me',
       maxResults: count,
       q: query
@@ -62,37 +43,39 @@ export async function POST(request: Request) {
 
     const emails = await Promise.all(
       gmailResponse.data.messages.map(async (message) => {
-        const response: GmailMessageResponse = await gmail.users.messages.get({
+        const response = await gmail.users.messages.get({
           userId: 'me',
-          id: message.id,
+          id: message.id || '',
           format: 'full'
         });
 
-        const headers = response.data.payload.headers;
-        const subject = headers.find(h => h.name.toLowerCase() === 'subject')?.value || 'No Subject';
-        const from = headers.find(h => h.name.toLowerCase() === 'from')?.value || 'Unknown Sender';
-        const date = headers.find(h => h.name.toLowerCase() === 'date')?.value || new Date().toISOString();
+        const headers = response.data.payload?.headers || [];
+        const subject = headers.find(h => h.name?.toLowerCase() === 'subject')?.value || 'No Subject';
+        const from = headers.find(h => h.name?.toLowerCase() === 'from')?.value || 'Unknown Sender';
+        const date = headers.find(h => h.name?.toLowerCase() === 'date')?.value || new Date().toISOString();
 
         let body = '';
-        if (response.data.payload.parts) {
+        if (response.data.payload?.parts) {
           for (const part of response.data.payload.parts) {
-            if (part.mimeType === 'text/plain' && part.body.data) {
+            if (part.mimeType === 'text/plain' && part.body?.data) {
               body += Buffer.from(part.body.data, 'base64').toString();
             }
           }
-        } else if (response.data.payload.body?.data) {
+        } else if (response.data.payload?.body?.data) {
           body = Buffer.from(response.data.payload.body.data, 'base64').toString();
         }
 
-        return {
-          id: response.data.id,
-          threadId: response.data.threadId,
+        const email: EmailResponse = {
+          id: response.data.id || message.id || '',
+          threadId: response.data.threadId || message.threadId || '',
           subject,
           from,
           date,
           body: body || response.data.snippet || 'No content available',
-          snippet: response.data.snippet
+          snippet: response.data.snippet || undefined
         };
+
+        return email;
       })
     );
 

@@ -1,5 +1,5 @@
 {
-  "buildCommand": "npm install && npm install -D tailwindcss postcss autoprefixer @types/node @types/react typescript && npm run lint -- --max-warnings 0 || true && tsc --noEmit || true && NODE_ENV=production next build",
+  "buildCommand": "npm install && npm install -D tailwindcss@latest postcss@latest autoprefixer@latest @types/node @types/react typescript eslint eslint-config-next && npm run lint -- --max-warnings 0 || true && tsc --noEmit || true && NODE_ENV=production next build",
   "devCommand": "next dev",
   "installCommand": "npm install",
   "github": {
