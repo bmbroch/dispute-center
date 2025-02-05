@@ -439,10 +439,12 @@ export default function KnowledgePage() {
             completionTokens: result.tokenUsage.completionTokens
           },
           aiInsights: {
+            keyPoints: result.aiInsights.keyCustomerPoints,
             keyCustomerPoints: result.aiInsights.keyCustomerPoints,
             commonQuestions: result.aiInsights.commonQuestions,
             customerSentiment: result.aiInsights.customerSentiment,
-            recommendedActions: result.aiInsights.recommendedActions
+            recommendedActions: result.aiInsights.recommendedActions,
+            suggestedActions: result.aiInsights.recommendedActions
           }
         };
 
@@ -506,7 +508,7 @@ export default function KnowledgePage() {
     if (user?.email) {
       checkForActiveJob();
     }
-  }, [user]);
+  }, [user, checkForActiveJob]);
 
   const checkForActiveJob = async () => {
     try {
@@ -655,6 +657,7 @@ export default function KnowledgePage() {
               totalTokens: data.tokenUsage?.totalTokens || 0
             },
             aiInsights: {
+              keyPoints: data.aiInsights?.keyCustomerPoints || [],
               keyCustomerPoints: data.aiInsights?.keyCustomerPoints || [],
               commonQuestions: (data.aiInsights?.commonQuestions || []).map((q: any) => ({
                 question: q.question || '',
@@ -743,10 +746,12 @@ export default function KnowledgePage() {
           completionTokens: result.tokenUsage.completionTokens
         },
         aiInsights: {
+          keyPoints: result.aiInsights.keyCustomerPoints,
           keyCustomerPoints: result.aiInsights.keyCustomerPoints,
           commonQuestions: result.aiInsights.commonQuestions,
           customerSentiment: result.aiInsights.customerSentiment,
-          recommendedActions: result.aiInsights.recommendedActions
+          recommendedActions: result.aiInsights.recommendedActions,
+          suggestedActions: result.aiInsights.recommendedActions
         }
       };
 
@@ -802,6 +807,7 @@ export default function KnowledgePage() {
           totalTokens: 200
         },
         aiInsights: {
+          keyPoints: ['Test point'],
           keyCustomerPoints: ['Test point'],
           commonQuestions: [{
             question: 'Test question?',
@@ -993,7 +999,7 @@ export default function KnowledgePage() {
                       <div className="text-sm text-gray-500 bg-gray-100 rounded-lg p-3 mb-6 flex items-center gap-2">
                         <div className="min-w-0">
                           <p className="font-medium mb-1">Please keep this tab open</p>
-                          <p>You can switch to other tabs but don't close this one until the analysis is complete (max 10 minutes).</p>
+                          <p>Don&apos;t close this one until the analysis is complete (max 10 minutes).</p>
                         </div>
                       </div>
 
@@ -1356,7 +1362,7 @@ export default function KnowledgePage() {
                           Analysis from {new Date(analysis.timestamp).toLocaleDateString()}
                         </h3>
                         <p className="text-sm text-gray-600">
-                          {analysis.supportEmails} support emails found in {analysis.totalEmails} analyzed
+                          {analysis.supportEmails?.length || 0} support emails found in {analysis.totalEmails} analyzed
                         </p>
                       </div>
                       <div className="flex gap-2">
@@ -1376,7 +1382,7 @@ export default function KnowledgePage() {
                       <div className="bg-gray-50 rounded-lg p-4">
                         <p className="text-sm text-gray-600 mb-1">Support Rate</p>
                         <p className="text-xl font-semibold text-gray-900">
-                          {Math.round((analysis.supportEmails / analysis.totalEmails) * 100)}%
+                          {Math.round((analysis.supportEmails?.length || 0) / (analysis.totalEmails || 1) * 100)}%
                         </p>
                       </div>
                       <div className="bg-gray-50 rounded-lg p-4">
