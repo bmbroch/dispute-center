@@ -1,5 +1,5 @@
 {
-  "buildCommand": "npm install && npm install -D typescript @types/node @types/react tailwindcss postcss autoprefixer && NODE_ENV=production next build",
+  "buildCommand": "npm install tailwindcss postcss autoprefixer @types/node @types/react typescript && NODE_ENV=production next build",
   "devCommand": "next dev",
   "installCommand": "npm install",
   "github": {
