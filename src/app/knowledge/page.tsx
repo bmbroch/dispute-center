@@ -17,7 +17,7 @@ import { getFirebaseDB } from '@/lib/firebase/firebase';
 import Image from 'next/image';
 import AnalysisModal from '../components/AnalysisModal';
 import AnalysisSummary from '../components/AnalysisSummary';
-import { SavedEmailAnalysis, FAQ, EmailData, ThreadSummary, AIInsights, TokenUsage, CustomerSentiment } from '@/types/analysis';
+import { EmailData, AIInsights, CustomerSentiment } from '@/types/analysis';
 import { toast } from 'react-hot-toast';
 
 interface EmailAnalysis {
@@ -47,6 +47,30 @@ interface AnalysisJob {
   error?: string;
   createdAt: Date;
   updatedAt: Date;
+}
+
+interface TokenUsage {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+}
+
+interface ThreadSummary {
+  subject: string;
+  content: string;
+  sentiment: string;
+  key_points: string[];
+}
+
+interface SavedEmailAnalysis {
+  id: string;
+  timestamp: number;
+  totalEmails: number;
+  emails: EmailData[];
+  totalEmailsAnalyzed: number;
+  supportEmails: EmailData[];
+  tokenUsage: TokenUsage;
+  aiInsights: AIInsights;
 }
 
 // Add token tracking interface
