@@ -1,0 +1,9 @@
+{
+  "buildCommand": "npm run build:vercel",
+  "devCommand": "next dev",
+  "installCommand": "npm install",
+  "github": {
+    "silent": false,
+    "autoJobCancelation": false
+  }
+} 

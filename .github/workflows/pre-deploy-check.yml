@@ -1,0 +1,73 @@
+name: Pre-deployment Check
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Create Error Report Directory
+        run: mkdir -p reports
+
+      - name: Run Type Check
+        run: |
+          echo "=== TypeScript Errors ===" > reports/typescript-errors.txt
+          npm run type-check 2>> reports/typescript-errors.txt || echo "Type check completed with errors"
+
+      - name: Run Lint Check
+        run: |
+          echo "=== ESLint Errors ===" > reports/lint-errors.txt
+          npm run lint 2>> reports/lint-errors.txt || echo "Lint check completed with errors"
+
+      - name: Run Build Check
+        run: |
+          echo "=== Build Errors ===" > reports/build-errors.txt
+          npm run build 2>> reports/build-errors.txt || echo "Build completed with errors"
+
+      - name: Combine Reports
+        run: |
+          echo "# Deployment Check Report" > deployment_report.md
+          echo "## Generated on $(date)" >> deployment_report.md
+          echo "\n## TypeScript Errors" >> deployment_report.md
+          cat reports/typescript-errors.txt >> deployment_report.md
+          echo "\n## ESLint Errors" >> deployment_report.md
+          cat reports/lint-errors.txt >> deployment_report.md
+          echo "\n## Build Errors" >> deployment_report.md
+          cat reports/build-errors.txt >> deployment_report.md
+
+      - name: Upload Error Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-report
+          path: deployment_report.md
+
+      - name: Comment PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const report = fs.readFileSync('deployment_report.md', 'utf8');
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: report
+            }); 

@@ -1,0 +1,1 @@
+                                  Use <span>{"{{"}firstName{"}}"}</span> to insert the customer&apos;s first name.
