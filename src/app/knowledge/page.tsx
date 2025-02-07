@@ -1,12 +1,12 @@
 'use client';
 
-import React, { useEffect, useState, useMemo, useCallback } from 'react';
-import { useAuth } from '@/lib/hooks/useAuth';
+import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react';
+import { useAuth } from '@/lib/contexts/AuthContext';
 import { useRouter } from 'next/navigation';
 import FAQList from '../components/FAQList';
 import { Sidebar } from '../components/Sidebar';
 import LoginSplashScreen from '../components/LoginSplashScreen';
-import { BookOpen, Mail, CheckCircle2, XCircle, Loader2 } from 'lucide-react';
+import { BookOpen, Mail, CheckCircle2, XCircle, Loader2, Download, X } from 'lucide-react';
 import EmailThread from '../components/EmailThread';
 import SaveAnalysisButton from '../components/SaveAnalysisButton';
 import DebugPanel from '../components/DebugPanel';
@@ -20,6 +20,7 @@ import AnalysisSummary from '../components/AnalysisSummary';
 import { EmailData, AIInsights, CustomerSentiment, TokenUsage, SavedEmailAnalysis, AnalysisResult, CommonQuestion, EmailMessage } from '@/types/analysis';
 import { toast } from 'react-hot-toast';
 import AnalysisErrorModal from '../components/AnalysisErrorModal';
+import { AnalysisProgress } from '@/components/AnalysisProgress';
 
 // Add helper functions
 const STORAGE_KEY = 'savedEmailAnalyses';
@@ -403,6 +404,8 @@ const KnowledgePage: React.FC = () => {
   const processEmails = async () => {
     setLoading(true);
     setError(null);
+    setAnalysisStartTime(Date.now());
+    setEstimatedTimeRemaining((emailCountToAnalyze * 2)); // Initial rough estimate of 2 seconds per email
     setProcessingStatus(prev => ({
       ...prev,
       stage: 'fetching_emails',
@@ -590,6 +593,15 @@ const KnowledgePage: React.FC = () => {
 
           // Add delay between batches
           await wait(1000);
+
+          // Update time estimation
+          if (processedEmails > 0) {
+            const timeElapsed = (Date.now() - analysisStartTime) / 1000; // in seconds
+            const emailsRemaining = emailCountToAnalyze - processedEmails;
+            const timePerEmail = timeElapsed / processedEmails;
+            const estimatedTimeLeft = timePerEmail * emailsRemaining;
+            setEstimatedTimeRemaining(estimatedTimeLeft);
+          }
 
         } catch (error) {
           console.error(`Error processing batch ${batchIndex}:`, error);
@@ -1257,7 +1269,7 @@ const KnowledgePage: React.FC = () => {
               <label className="block text-sm font-medium text-gray-700 mb-4 text-center">
                 Select AI Model
               </label>
-              <div className="grid grid-cols-2 gap-6">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 lg:gap-6 max-w-4xl mx-auto">
                 {MODEL_OPTIONS.map(model => (
                   <div
                     key={model.value}
@@ -1317,7 +1329,7 @@ const KnowledgePage: React.FC = () => {
               <label className="block text-sm font-medium text-gray-700 mb-4 text-center">
                 Number of emails to analyze
               </label>
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 max-w-4xl mx-auto">
                 {EMAIL_COUNT_OPTIONS.map(option => (
                   <div
                     key={option.value}
@@ -2013,12 +2025,15 @@ const KnowledgePage: React.FC = () => {
         <main className="flex-1 p-8">
           <div className="max-w-7xl mx-auto">
             {loading ? (
-              <div className="flex items-center justify-center min-h-[60vh]">
-                <div className="text-center">
-                  <Loader2 className="w-12 h-12 animate-spin text-blue-600 mx-auto mb-4" />
-                  <h3 className="text-lg font-medium text-gray-900">Loading Analysis...</h3>
-                  <p className="text-sm text-gray-500 mt-2">Please wait while we fetch your data</p>
-                </div>
+              <div className="min-h-[60vh] flex flex-col items-center justify-center">
+                <AnalysisProgress
+                  stage={processingStatus.stage}
+                  progress={processingStatus.progress}
+                  currentEmail={processingStatus.currentEmail}
+                  totalEmails={processingStatus.totalEmails}
+                  model={selectedModel === 'openai' ? 'OpenAI GPT-3.5' : 'Meta Llama 3'}
+                  estimatedTimeRemaining={estimatedTimeRemaining}
+                />
               </div>
             ) : (
               <>
