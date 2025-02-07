@@ -79,84 +79,91 @@ export default function EmailComposer({
   const [subject, setSubject] = useState('');
   const [content, setContent] = useState('');
   const [isSending, setIsSending] = useState(false);
-  const [to, setTo] = useState(customerEmail || '');
+  const [to, setTo] = useState('');
   const [templates, setTemplates] = useState<EmailTemplate[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const editorRef = useRef<any>(null);
   const hasInitializedRef = useRef(false);
 
   useEffect(() => {
-    // Update 'to' field when customerEmail changes, ensuring it's never undefined
-    setTo(customerEmail || '');
-  }, [customerEmail]);
+    // Update 'to' field with authenticated user's email
+    if (user?.email) {
+      setTo(user.email);
+    }
+  }, [user?.email]);
 
   // Handle API templates
   useEffect(() => {
     async function fetchTemplates() {
-      if (!user?.email) return;
+      if (!user?.email) {
+        setTemplates(DEFAULT_TEMPLATES);
+        setIsLoading(false);
+        return;
+      }
 
       try {
         setIsLoading(true);
+        console.log('Fetching templates for user:', user.email);
+        
         const response = await fetch('/api/settings/email-templates', {
+          method: 'GET',
           headers: {
             'X-User-Email': user.email,
-          }
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+          },
+          cache: 'no-cache'
+        }).catch(error => {
+          console.error('Network error:', error);
+          throw error;
         });
+        
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error('API error:', {
+            status: response.status,
+            statusText: response.statusText,
+            body: errorText
+          });
+          throw new Error(`API error: ${response.status} ${response.statusText}`);
+        }
+
         const data = await response.json();
+        console.log('Templates received:', data);
         
         // Set templates, falling back to defaults if none found
         const templatesData = (data && data.length > 0) ? data : DEFAULT_TEMPLATES;
         setTemplates(templatesData);
-
-        // Initialize with initialTemplate if provided, otherwise use first template
-        if (!hasInitializedRef.current && !replyToMessage && customerEmail) {
-          const templateIndex = initialTemplate ? parseInt(initialTemplate) : 0;
-          const templateToUse = templatesData[templateIndex] || templatesData[0];
-          setSelectedTemplate(templateToUse);
-          setSubject(templateToUse.subject);
-          
-          const formattedFirstName = firstName || (() => {
-            const nameFromEmail = customerEmail.split('@')[0].split(/[^a-zA-Z]/)[0];
-            return nameFromEmail.charAt(0).toUpperCase() + nameFromEmail.slice(1).toLowerCase();
-          })();
-          
-          const processedBody = templateToUse.body.replace(/\{\{firstName\}\}/g, formattedFirstName);
-          setContent(processedBody);
-          
-          if (editorRef.current) {
-            editorRef.current.setContent(processedBody);
-          }
-          
-          hasInitializedRef.current = true;
-        }
+        handleInitialTemplate(templatesData);
       } catch (error) {
         console.error('Failed to fetch templates:', error);
-        // Fall back to default templates or initialTemplate
-        const templatesData = DEFAULT_TEMPLATES;
-        setTemplates(templatesData);
-        
-        if (!hasInitializedRef.current && !replyToMessage && customerEmail) {
-          const templateIndex = initialTemplate ? parseInt(initialTemplate) : 0;
-          const templateToUse = templatesData[templateIndex] || templatesData[0];
-          setSelectedTemplate(templateToUse);
-          setSubject(templateToUse.subject);
-          
-          const formattedFirstName = firstName || (() => {
-            const nameFromEmail = customerEmail.split('@')[0].split(/[^a-zA-Z]/)[0];
-            return nameFromEmail.charAt(0).toUpperCase() + nameFromEmail.slice(1).toLowerCase();
-          })();
-          
-          const processedBody = templateToUse.body.replace(/\{\{firstName\}\}/g, formattedFirstName);
-          setContent(processedBody);
-          
-          if (editorRef.current) {
-            editorRef.current.setContent(processedBody);
-          }
-          
-          hasInitializedRef.current = true;
-        }
+        setTemplates(DEFAULT_TEMPLATES);
+        handleInitialTemplate(DEFAULT_TEMPLATES);
       } finally {
         setIsLoading(false);
+      }
+    }
+
+    function handleInitialTemplate(templatesData: EmailTemplate[]) {
+      if (!hasInitializedRef.current && !replyToMessage && customerEmail) {
+        const templateIndex = initialTemplate ? parseInt(initialTemplate) : 0;
+        const templateToUse = templatesData[templateIndex] || templatesData[0];
+        setSelectedTemplate(templateToUse);
+        setSubject(templateToUse.subject);
+        
+        const formattedFirstName = firstName || (() => {
+          const nameFromEmail = customerEmail.split('@')[0].split(/[^a-zA-Z]/)[0];
+          return nameFromEmail.charAt(0).toUpperCase() + nameFromEmail.slice(1).toLowerCase();
+        })();
+        
+        const processedBody = templateToUse.body.replace(/\{\{firstName\}\}/g, formattedFirstName);
+        setContent(processedBody);
+        
+        if (editorRef.current) {
+          editorRef.current.setContent(processedBody);
+        }
+        
+        hasInitializedRef.current = true;
       }
     }
 

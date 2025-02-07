@@ -40,38 +40,44 @@ export async function GET(request: NextRequest) {
   try {
     const userEmail = request.headers.get('x-user-email');
     if (!userEmail) {
+      console.log('No user email provided, returning default templates');
       return NextResponse.json(DEFAULT_TEMPLATES);
     }
 
-    const db = getFirebaseDB();
-    if (!db) {
-      console.error('Failed to initialize Firebase');
+    try {
+      const db = getFirebaseDB();
+      if (!db) {
+        console.warn('Failed to initialize Firebase, returning default templates');
+        return NextResponse.json(DEFAULT_TEMPLATES);
+      }
+
+      // Create collection reference
+      const templatesRef = collection(db, 'emailTemplates');
+      const q = query(templatesRef, where('userEmail', '==', userEmail));
+      
+      const querySnapshot = await getDocs(q);
+
+      if (querySnapshot.empty) {
+        console.log('No custom templates found for user, returning defaults');
+        return NextResponse.json(DEFAULT_TEMPLATES);
+      }
+
+      const templates = querySnapshot.docs.map(doc => {
+        const data = doc.data() as EmailTemplate;
+        return {
+          id: data.id,
+          name: data.name,
+          subject: data.subject,
+          body: data.body,
+          order: data.order
+        };
+      }).sort((a, b) => a.order - b.order);
+
+      return NextResponse.json(templates.length > 0 ? templates : DEFAULT_TEMPLATES);
+    } catch (dbError) {
+      console.error('Database error:', dbError);
       return NextResponse.json(DEFAULT_TEMPLATES);
     }
-
-    // Create collection reference
-    const templatesRef = collection(db, 'emailTemplates');
-    const q = query(templatesRef, where('userEmail', '==', userEmail));
-    
-    const querySnapshot = await getDocs(q);
-
-    if (querySnapshot.empty) {
-      return NextResponse.json(DEFAULT_TEMPLATES);
-    }
-
-    const templates = querySnapshot.docs.map(doc => {
-      const data = doc.data() as EmailTemplate;
-      return {
-        id: data.id,
-        name: data.name,
-        subject: data.subject,
-        body: data.body,
-        order: data.order
-      };
-    }).sort((a, b) => a.order - b.order);
-
-    return NextResponse.json(templates.length > 0 ? templates : DEFAULT_TEMPLATES);
-
   } catch (error) {
     console.error('Error in GET handler:', error);
     return NextResponse.json(DEFAULT_TEMPLATES);
