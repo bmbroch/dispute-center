@@ -27,7 +27,7 @@ async function retryOperation<T>(
 export async function GET() {
   try {
     // Get authorization header
-    const headersList = headers();
+    const headersList = await headers();
     const authHeader = headersList.get('Authorization');
     if (!authHeader) {
       return NextResponse.json(
