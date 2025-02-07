@@ -20,7 +20,7 @@ import AnalysisSummary from '../components/AnalysisSummary';
 import { EmailData, AIInsights, CustomerSentiment, TokenUsage, SavedEmailAnalysis, AnalysisResult, CommonQuestion, EmailMessage } from '@/types/analysis';
 import { toast } from 'react-hot-toast';
 import AnalysisErrorModal from '../components/AnalysisErrorModal';
-import { AnalysisProgress } from '@/components/AnalysisProgress';
+import AnalysisProgress from '../components/AnalysisProgress';
 
 // Add helper functions
 const STORAGE_KEY = 'savedEmailAnalyses';
