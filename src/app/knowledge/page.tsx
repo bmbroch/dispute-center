@@ -255,12 +255,12 @@ const KnowledgePage: React.FC = () => {
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const [emailCountToAnalyze, setEmailCountToAnalyze] = useState(20);
   const [processingStatus, setProcessingStatus] = useState<{
-    stage: 'idle' | 'fetching_emails' | 'filtering' | 'analyzing' | 'complete';
+    stage: 'fetching_emails' | 'analyzing' | 'complete';
     progress: number;
     currentEmail?: number;
     totalEmails?: number;
     originalCount?: number;
-  }>({ stage: 'idle', progress: 0 });
+  }>({ stage: 'fetching_emails', progress: 0 });
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [analyzedThreads, setAnalyzedThreads] = useState<EmailData[]>([]);
   const [supportEmailCount, setSupportEmailCount] = useState(0);

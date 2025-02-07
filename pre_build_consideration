@@ -1,0 +1,296 @@
+Github pushes 
+
+Now for your question about catching TypeScript issues earlier - here's how to improve the workflow:
+Add a pre-commit hook that runs TypeScript checks:
+
+Checkpoint created.
+Restore
+
+package.json
++11
+-2
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    "type-check": "tsc --noEmit",
+    "pre-deploy-check": "npm run type-check && npm run lint && npm run build",
+    "validate": "node scripts/validate-deployment.js",
+    "predeploy": "npm run validate"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "^0.0.48",
+    "@types/uuid": "^10.0.0",
+    "eslint": "^8.57.0",
+    "eslint-config-next": "^15.1.3",
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    "predeploy": "npm run validate"
+    "type-check": "tsc --noEmit",
+    "pre-deploy-check": "npm run type-check && npm run lint && npm run build",
+    "validate": "node scripts/validate-deployment.js",
+    "predeploy": "npm run validate",
+    "prepare": "husky install"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "^0.0.48",
+    "@types/uuid": "^10.0.0",
+    "eslint": "^8.57.0",
+    "eslint-config-next": "^15.1.3",
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Create a pre-push hook:
+$
+
+
+
+
+
+
+
+
+
+
+mkdir -p .husky && npx husky add .husky/pre-push 
+"npm run type-check"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+benbroch@Bens-MacBook-Pro dispute-center-225266343b053934b8bcd59e0a678dcc540031b2 % mkdir -p .husky && npx h
+usky add .husky/pre-push "npm run type-check"                                       mkdir -p .husky && npx h
+usky add .husky/pre-push "npm run type-check"
+Need to install the following packages:
+husky@9.1.7
+Ok to proceed? (y) y
+
+husky - add command is DEPRECATED
+benbroch@Bens-MacBook-Pro dispute-center-225266343b053934b8bcd59e0a678dcc540031b2 %
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Add a GitHub Action to run type checks on pull requests:
+
+Checkpoint created.
+Restore
+
+type-check.yml
+1/1
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+name: Type Check
+
+on:
+  pull_request:
+    branches: [ main ]
+  push:
+    branches: [ main ]
+
+jobs:
+  type-check:
+    runs-on: ubuntu-latest
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+This setup will help you catch TypeScript errors at different stages:
+Pre-commit: Checks files you're about to commit
+Pre-push: Checks entire project before pushing to GitHub
+Pull Request: GitHub Action runs type checks on all PRs
