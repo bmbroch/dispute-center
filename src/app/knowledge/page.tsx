@@ -1484,8 +1484,8 @@ const KnowledgePage: React.FC = () => {
     if (!analyzedThreads.length) return null;
 
     return (
-      <div className="bg-white rounded-2xl p-8 shadow-sm">
-        <div className="max-w-3xl mx-auto">
+      <div className="bg-white rounded-2xl p-4 md:p-8 shadow-sm overflow-hidden">
+        <div className="max-w-3xl mx-auto w-full">
           <div className="text-center mb-8">
             <span className="text-4xl mb-4 block">📨</span>
             <h2 className="text-2xl font-semibold mb-4">Email Threads</h2>
@@ -1644,7 +1644,7 @@ const KnowledgePage: React.FC = () => {
     const overallSentiment = parseSentiment(result.aiInsights.customerSentiment.overall);
 
     return (
-      <div className="space-y-8 relative">
+      <div className="space-y-8 relative max-w-full overflow-x-hidden">
         {/* Back Button */}
         <div className="mb-4">
           <button
@@ -2022,8 +2022,8 @@ const KnowledgePage: React.FC = () => {
       <div className="flex">
         <Sidebar />
         
-        <main className="flex-1 p-8">
-          <div className="max-w-7xl mx-auto">
+        <main className="flex-1 p-4 md:p-8 overflow-x-hidden">
+          <div className="max-w-7xl mx-auto md:pl-64">
             {loading ? (
               <div className="min-h-[60vh] flex flex-col items-center justify-center">
                 <AnalysisProgress
