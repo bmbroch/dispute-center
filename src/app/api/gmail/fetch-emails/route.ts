@@ -129,10 +129,11 @@ export async function POST(request: NextRequest) {
     let processingErrors: any[] = [];
 
     // Process messages with better error handling
+    const messages = gmailResponse.data.messages || [];
     const processedMessages = await Promise.all(
-      gmailResponse.data.messages.map(async (message, index) => {
+      messages.map(async (message, index) => {
         try {
-          console.log(`\nProcessing message ${index + 1}/${gmailResponse.data.messages.length} (ID: ${message.id})`);
+          console.log(`\nProcessing message ${index + 1}/${messages.length} (ID: ${message.id})`);
           
           if (!message.id) {
             console.error('Message missing ID:', message);
