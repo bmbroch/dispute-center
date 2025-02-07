@@ -287,6 +287,14 @@ const KnowledgePage: React.FC = () => {
   const [hasReanalyzed, setHasReanalyzed] = useState(false);
   const [selectedModel, setSelectedModel] = useState<string>('openai');
   const [showErrorModal, setShowErrorModal] = useState(false);
+  const [showAnalysisModal, setShowAnalysisModal] = useState(false);
+  const [showAnalysisError, setShowAnalysisError] = useState(false);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [showDebugPanel, setShowDebugPanel] = useState(false);
+  const [selectedAnalysis, setSelectedAnalysis] = useState<SavedEmailAnalysis | null>(null);
+
+  // Calculate changed emails count at component level
+  const changedEmailsCount = Object.keys(emailOverrides).length;
 
   const db = useMemo(() => getFirebaseDB(), []);
 
@@ -379,26 +387,16 @@ const KnowledgePage: React.FC = () => {
     onRetry?: (attempt: number, error: Error) => void
   ): Promise<T> => {
     let lastError: Error;
-    
     for (let attempt = 1; attempt <= retries; attempt++) {
       try {
         return await operation();
       } catch (error) {
-        lastError = error instanceof Error ? error : new Error(String(error));
-        
-        if (attempt === retries) {
-          throw lastError;
-        }
-        
-        if (onRetry) {
-          onRetry(attempt, lastError);
-        }
-        
-        // Exponential backoff
-        await wait(delay * Math.pow(2, attempt - 1));
+        lastError = error as Error;
+        if (onRetry) onRetry(attempt, lastError);
+        if (attempt === retries) throw lastError;
+        await wait(delay * attempt);
       }
     }
-    
     throw lastError!;
   };
 
@@ -1627,10 +1625,21 @@ const KnowledgePage: React.FC = () => {
     const sentimentData = parseSentiment(result.aiInsights.customerSentiment.details);
     const overallSentiment = parseSentiment(result.aiInsights.customerSentiment.overall);
 
-    const changedEmailsCount = Object.keys(emailOverrides).length;
-
     return (
       <div className="space-y-8 relative">
+        {/* Back Button */}
+        <div className="mb-4">
+          <button
+            onClick={() => setCurrentView('config')}
+            className="flex items-center gap-2 text-gray-600 hover:text-gray-900 transition-colors"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+            </svg>
+            Back to Configuration
+          </button>
+        </div>
+
         {hasOverrides && changedEmailsCount > 0 && !hasReanalyzed && (
           <ReanalysisActionGroup 
             onReanalyze={reanalyzeWithOverrides}
@@ -1987,173 +1996,72 @@ const KnowledgePage: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <Sidebar />
-      <div className="pl-64">
-        <main className="max-w-4xl mx-auto px-8 py-8">
-          {/* Header Section */}
-          <div className="border-b border-gray-200 pb-6 mb-8">
-            <div className="flex items-center justify-between mb-6">
-              <h1 className="text-3xl font-bold text-gray-900">Knowledge Base Generator</h1>
-              {currentView === 'config' && !loading && (
-                <button
-                  onClick={handleDebugGmail}
-                  className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-                >
-                  Debug Gmail API
-                </button>
-              )}
-                      </div>
-            {currentView === 'analysis' && (
-                        <button
-                onClick={() => {
-                  setResult(null);
-                  setCurrentView('config');
-                }}
-                className="flex items-center gap-2 text-gray-600 hover:text-gray-900 transition-colors"
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                          </svg>
-                Back to Configuration
-                        </button>
-            )}
-                    </div>
-
-          {(loading || isTransitioning) && (
-            <div className="bg-white rounded-2xl shadow-sm p-8 mb-8 transition-opacity duration-300 ease-in-out opacity-100">
-              <div className="max-w-2xl mx-auto">
-                <div className="flex flex-col items-center justify-center text-center">
-                  <div className="w-16 h-16 mb-6">
-                    <div className="relative">
-                      <div className="w-16 h-16 border-4 border-orange-100 rounded-full" />
-                      <div className="absolute top-0 left-0 w-16 h-16 border-4 border-orange-500 rounded-full border-t-transparent animate-spin" />
-                      </div>
-                      </div>
-                  <h2 className="text-2xl font-semibold text-gray-900 mb-3">
-                    {processingStatus.stage === 'fetching_emails' 
-                      ? 'Fetching Emails 📥' 
-                      : processingStatus.stage === 'filtering'
-                      ? 'Processing Emails 🔍'
-                      : processingStatus.stage === 'analyzing'
-                      ? 'Analyzing Content 📧'
-                      : 'Processing...'}
-                  </h2>
-                  <p className="text-gray-600 mb-6">
-                    {processingStatus.stage === 'fetching_emails'
-                      ? 'Retrieving your recent emails...'
-                      : processingStatus.stage === 'filtering'
-                      ? 'Filtering and preparing emails for analysis...'
-                      : processingStatus.stage === 'analyzing'
-                      ? (
-                        <span className="flex flex-col items-center gap-2">
-                          <span className="flex items-center gap-2">
-                            <span className="text-2xl">📧</span>
-                            Analyzing email {processingStatus.currentEmail || 1} of {processingStatus.totalEmails || 0}
-                          </span>
-                          {processingStatus.originalCount !== undefined && processingStatus.totalEmails !== undefined && (
-                            <span className="text-sm text-gray-500">
-                              {processingStatus.originalCount - processingStatus.totalEmails} emails were filtered out as they were empty or invalid
-                            </span>
-                          )}
-                          <span className="text-sm text-gray-500">
-                            Processing in batches of {emailCountToAnalyze} emails
-                          </span>
-                        </span>
-                      )
-                      : 'Please wait while we process your request...'}
-                  </p>
-                  <div className="w-full max-w-md bg-gray-100 rounded-lg p-4 mb-8">
-                    <div className="flex items-center justify-center gap-3 text-gray-600">
-                      <span className="text-xl">⚠️</span>
-                      <div className="text-left">
-                        <p className="font-medium mb-1">Please keep this tab open</p>
-                        <p className="text-sm">Don&apos;t close this one until the analysis is complete (max 10 minutes).</p>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="w-full max-w-md bg-gray-100 rounded-full h-3 mb-4">
-                    <div 
-                      className="h-full bg-orange-500 rounded-full transition-all duration-500"
-                      style={{ width: `${processingStatus.progress}%` }}
-                    />
-                  </div>
-
-                  <div className="flex items-center justify-center">
-                    <div className="text-center">
-                      <span className="text-4xl font-bold text-orange-500">{processingStatus.progress}%</span>
-                      <span className="block text-sm text-gray-500 mt-1">Completed</span>
-                    </div>
-                  </div>
+      {!user && <LoginSplashScreen onClose={handleCloseLogin} />}
+      
+      <div className="flex">
+        <Sidebar />
+        
+        <main className="flex-1 p-8">
+          <div className="max-w-7xl mx-auto">
+            {loading ? (
+              <div className="flex items-center justify-center min-h-[60vh]">
+                <div className="text-center">
+                  <Loader2 className="w-12 h-12 animate-spin text-blue-600 mx-auto mb-4" />
+                  <h3 className="text-lg font-medium text-gray-900">Loading Analysis...</h3>
+                  <p className="text-sm text-gray-500 mt-2">Please wait while we fetch your data</p>
                 </div>
               </div>
-            </div>
-              )}
-
-          {!loading && currentView === 'config' && renderConfigurationView()}
-          {!loading && currentView === 'analysis' && result && renderAnalysisView()}
+            ) : (
+              <>
+                {currentView === 'config' && renderConfigurationView()}
+                {currentView === 'analysis' && (
+                  <>
+                    {renderAnalysisView()}
+                    {renderEmailSection()}
+                  </>
+                )}
+              </>
+            )}
+          </div>
         </main>
       </div>
 
-      <LoginSplashScreen
-        isOpen={!isCheckingAuth && showLoginSplash}
-        onClose={handleCloseLogin}
-        message="Sign in to access the Knowledge Base Generator"
-      />
-
-      {isCheckingAuth && (
-        <div className="fixed inset-0 bg-white flex items-center justify-center">
-          <div className="w-16 h-16">
-            <div className="relative">
-              <div className="w-16 h-16 border-4 border-orange-100 rounded-full" />
-              <div className="absolute top-0 left-0 w-16 h-16 border-4 border-orange-500 rounded-full border-t-transparent animate-spin" />
-            </div>
-          </div>
-        </div>
-      )}
-
-      {selectedEmail && (
-        <EmailThread
-          email={{
-            subject: selectedEmail.subject || selectedEmail.messages?.[0]?.subject || 'No Subject',
-            from: selectedEmail.from || selectedEmail.messages?.[0]?.from || 'Unknown Sender',
-            body: selectedEmail.body || selectedEmail.messages?.[0]?.body || '',
-            date: selectedEmail.date || selectedEmail.messages?.[0]?.date || new Date().toISOString(),
-            messages: selectedEmail.messages?.map(msg => ({
-              subject: msg.subject || selectedEmail.subject || 'No Subject',
-              from: msg.from || 'Unknown Sender',
-              body: msg.body || '',
-              date: msg.date || new Date().toISOString()
-            })) || [
-              {
-                subject: selectedEmail.subject || 'No Subject',
-                from: selectedEmail.from || 'Unknown Sender',
-                body: selectedEmail.body || '',
-                date: selectedEmail.date || new Date().toISOString()
-              }
-            ]
-          }}
-          onClose={() => setSelectedEmail(null)}
+      {showRunTestModal && (
+        <RunTestModal 
+          onClose={() => setShowRunTestModal(false)}
+          onRunTest={handleStartAnalysis}
         />
       )}
 
-      <RunTestModal
-        isOpen={showRunTestModal}
-        onClose={() => setShowRunTestModal(false)}
-        onRunTest={(model, count) => {
-          handleStartAnalysis(model, count);
-          setShowRunTestModal(false);
-        }}
-        currentModel={selectedModel}
-        currentEmailCount={emailCountToAnalyze}
-      />
+      {showAnalysisModal && selectedAnalysis && (
+        <AnalysisModal
+          analysis={selectedAnalysis}
+          onClose={() => setShowAnalysisModal(false)}
+        />
+      )}
 
-      <AnalysisErrorModal
-        isOpen={showErrorModal}
-        onClose={() => setShowErrorModal(false)}
-        error={error || 'An unknown error occurred'}
-        onRetry={handleRetryAnalysis}
-      />
+      {showAnalysisError && (
+        <AnalysisErrorModal
+          error={analysisError}
+          onClose={() => setShowAnalysisError(false)}
+          onRetry={handleRetryAnalysis}
+        />
+      )}
+
+      {showDebugPanel && (
+        <DebugPanel
+          logs={DEBUG_LOG}
+          onClose={() => setShowDebugPanel(false)}
+          onDownload={downloadDebugLogs}
+        />
+      )}
+
+      {changedEmailsCount > 0 && (
+        <ReanalysisActionGroup
+          onReanalyze={reanalyzeWithOverrides}
+          changedEmailsCount={changedEmailsCount}
+        />
+      )}
     </div>
   );
 };

@@ -250,114 +250,64 @@ export async function GET(request: NextRequest) {
             .trim();
         }
 
-        console.log('Cleanup results:', {
+        console.log('Content cleanup results:', {
           messageId: message.id,
           originalLength,
-          cleanedLength: body.length,
+          newLength: body.length,
           contentType
         });
 
         return {
           id: message.id || '',
           threadId: thread.id || '',
-          messageId: headers.get('message-id') || '',
-          references: headers.get('references') || '',
-          inReplyTo: headers.get('in-reply-to') || '',
-          historyId: message.historyId || '',
-          internalDate: message.internalDate || '',
-          snippet: message.snippet || '',
-          subject: finalSubject || threadSubject || 'No Subject',
-          from: finalFrom || threadFrom || 'Unknown Sender',
-          to: headers.get('to') || '',
+          subject: finalSubject,
+          from: finalFrom,
+          to: messageTo,
           date: finalDate,
           body,
           contentType,
-          rawHeaders: {
-            subject: messageSubject || rawSubject,
-            from: messageFrom || threadFrom,
-            date: headers.get('date')
-          }
+          messageId,
+          references,
+          inReplyTo
         };
-      })
-      .filter((message): message is NonNullable<typeof message> => message !== null)
-      // Filter messages to only include those actually involving the dispute email
-      .filter(message => {
-        const fromEmail = message.from.toLowerCase();
-        const toEmail = message.to.toLowerCase();
-        const disputeEmailLower = disputeEmail.toLowerCase();
-        return fromEmail.includes(disputeEmailLower) || toEmail.includes(disputeEmailLower);
-      });
+      }).filter((msg): msg is NonNullable<typeof msg> => msg !== null);
 
-    if (messages.length === 0) return null;
+      return {
+        id: thread.id || '',
+        subject: threadSubject,
+        from: threadFrom,
+        messages,
+        messageCount: messages.length
+      };
+    }).filter((thread): thread is NonNullable<typeof thread> => thread !== null);
 
-    return {
-      id: thread.id || '',
-      historyId: thread.historyId || '',
-      subject: threadSubject || rawSubject || messages[0].subject || 'No Subject',
-      from: threadFrom || messages[0].from || 'Unknown Sender',
-      messages: messages,
-      rawHeaders: {
-        subject: rawSubject || messages[0].rawHeaders.subject,
-        from: threadFrom || messages[0].rawHeaders.from
-      },
-      hasUserReply: messages.some(message => {
-        const fromEmail = message.from?.toLowerCase() || '';
-        return fromEmail.includes('@gmail.com'); // Or whatever logic determines user replies
-      })
-    };
-  })
-  .filter((thread): thread is NonNullable<typeof thread> => thread !== null);
+    // Sort threads by the date of their most recent message
+    formattedThreads.sort((a, b) => {
+      const aDate = parseInt(a.messages[a.messages.length - 1].internalDate);
+      const bDate = parseInt(b.messages[b.messages.length - 1].internalDate);
+      return bDate - aDate;
+    });
 
-  // Sort threads by the date of their most recent message
-  formattedThreads.sort((a, b) => {
-    const aDate = parseInt(a.messages[a.messages.length - 1].internalDate);
-    const bDate = parseInt(b.messages[b.messages.length - 1].internalDate);
-    return bDate - aDate;
-  });
+    return NextResponse.json({
+      threads: formattedThreads,
+      count: formattedThreads.length
+    });
+  } catch (error: any) {
+    console.error('Error fetching emails:', error);
 
-  return NextResponse.json({ 
-    threads: formattedThreads,
-    count: formattedThreads.length 
-  });
-} catch (error: unknown) {
-  console.error('Error fetching email threads:', error);
-  
-  if (!isGmailError(error)) {
+    // Handle Gmail API errors
+    if (isGmailError(error)) {
+      return NextResponse.json({
+        error: 'Gmail API error',
+        details: error.message || 'An error occurred while fetching emails',
+        code: error.code
+      }, { status: error.status || 500 });
+    }
+
+    // Network or other errors
     return NextResponse.json({ 
       error: 'Failed to fetch email threads',
-      details: error instanceof Error ? error.message : 'An unexpected error occurred'
+      details: error.message || 'An unexpected error occurred'
     }, { status: 500 });
   }
-  
-  // Check if error is due to invalid credentials
-  if (error.response?.status === 401) {
-    return NextResponse.json({ 
-      error: 'Authentication failed',
-      details: 'Your session has expired. Please sign in again.'
-    }, { status: 401 });
-  }
-
-  // Check for rate limiting
-  if (error.response?.status === 429) {
-    return NextResponse.json({
-      error: 'Rate limit exceeded',
-      details: 'Too many requests. Please try again in a few minutes.'
-    }, { status: 429 });
-  }
-
-  // Check for Gmail API specific errors
-  if (error.response?.data?.error) {
-    const apiError = error.response.data.error;
-    return NextResponse.json({
-      error: 'Gmail API error',
-      details: apiError.message || 'An error occurred while fetching emails',
-      code: apiError.code
-    }, { status: error.response.status || 500 });
-  }
-
-  // Network or other errors
-  return NextResponse.json({ 
-    error: 'Failed to fetch email threads',
-    details: error.message || 'An unexpected error occurred while fetching emails'
-  }, { status: 500 });
 } 
