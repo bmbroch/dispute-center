@@ -6,23 +6,19 @@ export interface ThreadSummary {
 }
 
 export interface EmailData {
+  threadId: string;
   subject: string;
   from: string;
   body: string;
   date: string;
-  threadId?: string;
-  messages?: Array<{
-    subject: string;
-    from: string;
-    body: string;
-    date: string;
-  }>;
   isCustomer?: boolean;
   confidence?: number;
   reason?: string;
   category?: string;
-  priority?: number;
   hasUserReply?: boolean;
+  messages?: EmailMessage[];
+  contentType?: string;
+  snippet?: string;
 }
 
 export interface FAQ {
@@ -56,15 +52,10 @@ export interface AIInsights {
   recommendedActions: string[];
 }
 
-export interface SavedEmailAnalysis {
-  id: string;
-  timestamp: number;
-  totalEmails: number;
-  totalEmailsAnalyzed: number;
-  supportEmails: any[];
-  emails: EmailData[];
-  tokenUsage: TokenUsage;
-  aiInsights: AIInsights;
+export interface ReplyMetrics {
+  totalCustomerThreads: number;
+  threadsWithReplies: number;
+  responseRate: number;
 }
 
 export interface AnalysisResult {
@@ -72,10 +63,26 @@ export interface AnalysisResult {
   timestamp: number;
   totalEmails: number;
   totalEmailsAnalyzed: number;
-  emails: any[];
-  supportEmails: any[];
+  emails: EmailData[];
+  supportEmails: EmailData[];
   tokenUsage: TokenUsage;
   aiInsights: AIInsights;
+  responseRate?: number;
+  replyMetrics?: ReplyMetrics;
+}
+
+export interface SavedEmailAnalysis extends AnalysisResult {
+  responseRate: number;
+  replyMetrics: ReplyMetrics;
+}
+
+export interface EmailMessage {
+  subject: string;
+  from: string;
+  body: string;
+  date: string;
+  contentType?: string;
+  snippet?: string;
 }
 
 export interface ModelOption {

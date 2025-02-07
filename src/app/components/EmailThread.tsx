@@ -1,7 +1,7 @@
 import { X, Bug } from 'lucide-react';
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 
 interface EmailMessage {
   subject: string;
@@ -44,7 +44,7 @@ function formatDate(dateString: string): string {
   }).format(date);
 }
 
-function parseEmailBody(body: string): string {
+async function parseEmailBody(body: string): Promise<string> {
   // Check if content is HTML
   const isHTML = /<[a-z][\s\S]*>/i.test(body);
   
@@ -76,10 +76,11 @@ function parseEmailBody(body: string): string {
   }
 
   // If not HTML, convert plain text to HTML preserving newlines and adding some basic styling
-  return marked(body, {
+  const markedHtml = await marked(body, {
     breaks: true,
     gfm: true
-  }).replace(/<p>/g, '<p style="margin: 0.5em 0;">');
+  });
+  return markedHtml.replace(/<p>/g, '<p style="margin: 0.5em 0;">');
 }
 
 function parseEmailAddress(from: string): { name: string; email: string } {
@@ -95,6 +96,63 @@ function parseEmailAddress(from: string): { name: string; email: string } {
     name: name?.trim() || email.split('@')[0],
     email: email.trim()
   };
+}
+
+interface EmailMessageProps {
+  message: EmailMessage;
+  showDebug?: boolean;
+}
+
+function EmailMessageContent({ message, showDebug }: EmailMessageProps) {
+  const [formattedBody, setFormattedBody] = useState<string>('');
+  const isHtml = message.contentType?.toLowerCase().includes('html');
+  
+  useEffect(() => {
+    const formatBody = async () => {
+      const sanitizedBody = isHtml ? DOMPurify.sanitize(message.body, {
+        USE_PROFILES: { html: true },
+        ALLOWED_TAGS: ['p', 'br', 'b', 'i', 'em', 'strong', 'a', 'ul', 'ol', 'li', 'blockquote'],
+        ALLOWED_ATTR: ['href', 'target']
+      }) : message.body;
+      
+      const formatted = await parseEmailBody(sanitizedBody || '');
+      setFormattedBody(formatted);
+    };
+    
+    formatBody();
+  }, [message.body, isHtml]);
+
+  return (
+    <div className="mb-4 p-4 bg-white rounded-lg shadow">
+      <div 
+        className="pl-11 text-sm text-gray-700 space-y-2 email-content"
+        dangerouslySetInnerHTML={{ __html: formattedBody }}
+      />
+      {showDebug && renderDebugInfo(message)}
+    </div>
+  );
+}
+
+function renderDebugInfo(message: EmailMessage) {
+  const debugData = {
+    stage: 'Raw Email Data',
+    subject: message.subject,
+    from: message.from,
+    date: message.date,
+    contentType: message.contentType || 'text/plain',
+    bodyLength: message.body?.length,
+    bodyPreview: message.body?.substring(0, 100) + '...',
+    snippet: message.snippet,
+  };
+
+  return (
+    <div className="mt-4 p-3 bg-gray-50 rounded-lg text-xs font-mono">
+      <div className="font-medium text-gray-700 mb-2">Debug Information:</div>
+      <pre className="whitespace-pre-wrap break-all bg-white p-2 rounded border border-gray-200">
+        {JSON.stringify(debugData, null, 2)}
+      </pre>
+    </div>
+  );
 }
 
 export default function EmailThread({ email, onClose }: EmailThreadProps) {
@@ -114,43 +172,8 @@ export default function EmailThread({ email, onClose }: EmailThreadProps) {
     } as EmailMessage];
   }, [email]);
 
-  const renderDebugInfo = (message: EmailMessage) => {
-    if (!showDebug) return null;
-    
-    const debugData = {
-      stage: 'Raw Email Data',
-      subject: message.subject,
-      from: message.from,
-      date: message.date,
-      contentType: message.contentType || 'text/plain',
-      bodyLength: message.body?.length,
-      bodyPreview: message.body?.substring(0, 100) + '...',
-      snippet: message.snippet,
-    };
-
-    return (
-      <div className="mt-4 p-3 bg-gray-50 rounded-lg text-xs font-mono">
-        <div className="font-medium text-gray-700 mb-2">Debug Information:</div>
-        <pre className="whitespace-pre-wrap break-all bg-white p-2 rounded border border-gray-200">
-          {JSON.stringify(debugData, null, 2)}
-        </pre>
-      </div>
-    );
-  };
-
   const renderMessage = (message: EmailMessage, index: number) => {
-    const isHtml = message.contentType?.toLowerCase().includes('html');
-    const sanitizedBody = isHtml ? DOMPurify.sanitize(message.body, {
-      USE_PROFILES: { html: true },
-      ALLOWED_TAGS: ['p', 'br', 'b', 'i', 'em', 'strong', 'a', 'ul', 'ol', 'li', 'blockquote'],
-      ALLOWED_ATTR: ['href', 'target']
-    }) : message.body;
-
-    return (
-      <div key={index} className="mb-4 p-4 bg-white rounded-lg shadow">
-        {/* ... rest of the render code ... */}
-      </div>
-    );
+    return <EmailMessageContent message={message} showDebug={showDebug} />;
   };
 
   return (
@@ -188,7 +211,6 @@ export default function EmailThread({ email, onClose }: EmailThreadProps) {
           <div className="divide-y divide-gray-100">
             {sortedMessages.map((message, index) => {
               const { name, email: emailAddress } = parseEmailAddress(message.from);
-              const formattedBody = parseEmailBody(message.body);
 
               return (
                 <div key={`${message.date}-${index}`} className="p-4 hover:bg-gray-50">
@@ -220,11 +242,7 @@ export default function EmailThread({ email, onClose }: EmailThreadProps) {
                       </div>
                     </div>
                   </div>
-                  <div 
-                    className="pl-11 text-sm text-gray-700 space-y-2 email-content"
-                    dangerouslySetInnerHTML={{ __html: formattedBody }}
-                  />
-                  {renderDebugInfo(message)}
+                  {renderMessage(message, index)}
                 </div>
               );
             })}

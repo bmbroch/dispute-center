@@ -2,11 +2,11 @@ import { useState } from 'react';
 import { X } from 'lucide-react';
 
 interface RunTestModalProps {
-  isOpen: boolean;
   onClose: () => void;
-  onRunTest: (model: string, emailCount: number) => void;
-  currentModel: string;
-  currentEmailCount: number;
+  onRunTest: (model?: string, count?: number) => void;
+  isOpen?: boolean;
+  currentModel?: string;
+  currentEmailCount?: number;
 }
 
 const EMAIL_COUNT_OPTIONS = [
@@ -41,7 +41,13 @@ const MODEL_OPTIONS = [
   }
 ];
 
-export default function RunTestModal({ isOpen, onClose, onRunTest, currentModel, currentEmailCount }: RunTestModalProps) {
+export default function RunTestModal({ 
+  onClose, 
+  onRunTest, 
+  isOpen = true, 
+  currentModel = 'openai', 
+  currentEmailCount = 20 
+}: RunTestModalProps) {
   const [selectedModel, setSelectedModel] = useState(currentModel);
   const [emailCount, setEmailCount] = useState(currentEmailCount);
 

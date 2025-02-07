@@ -4,9 +4,9 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useAuth } from '@/lib/hooks/useAuth';
 
 interface LoginSplashScreenProps {
-  isOpen: boolean;
   onClose: () => void;
-  message: string;
+  isOpen?: boolean;
+  message?: string;
 }
 
 interface ValuePropType {
@@ -25,7 +25,7 @@ const ValueProp = ({ icon, title, description }: ValuePropType) => (
   </div>
 );
 
-export default function LoginSplashScreen({ isOpen, onClose, message }: LoginSplashScreenProps) {
+export default function LoginSplashScreen({ onClose, isOpen = true, message = 'Please sign in to continue' }: LoginSplashScreenProps) {
   const { signIn } = useAuth();
 
   const handleSignIn = async () => {

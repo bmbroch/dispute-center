@@ -17,7 +17,7 @@ import { getFirebaseDB } from '@/lib/firebase/firebase';
 import Image from 'next/image';
 import AnalysisModal from '../components/AnalysisModal';
 import AnalysisSummary from '../components/AnalysisSummary';
-import { EmailData, AIInsights, CustomerSentiment, TokenUsage, SavedEmailAnalysis, AnalysisResult, CommonQuestion } from '@/types/analysis';
+import { EmailData, AIInsights, CustomerSentiment, TokenUsage, SavedEmailAnalysis, AnalysisResult, CommonQuestion, EmailMessage } from '@/types/analysis';
 import { toast } from 'react-hot-toast';
 import AnalysisErrorModal from '../components/AnalysisErrorModal';
 
@@ -496,7 +496,7 @@ const KnowledgePage: React.FC = () => {
           // Check for user replies in each thread before analysis
           const threadsWithReplyInfo = threads.map(thread => {
             const userEmail = user?.email?.toLowerCase();
-            const hasUserReply = thread.messages?.some(message => {
+            const hasUserReply = thread.messages?.some((message: EmailMessage) => {
               if (!userEmail) return false;
               
               // Check if message is from the user
@@ -645,7 +645,7 @@ const KnowledgePage: React.FC = () => {
             body: messages[0].body || '',
             date: messages[0].date || thread.date || new Date().toISOString(),
             threadId: thread.threadId || `thread-${Date.now()}-${Math.random()}`,
-            messages: messages.map(message => ({
+            messages: messages.map((message: EmailMessage) => ({
               subject: message.subject || thread.subject || 'No Subject',
               from: message.from || 'Unknown Sender',
               body: message.body || '',
@@ -1052,7 +1052,13 @@ const KnowledgePage: React.FC = () => {
       supportEmails: result.supportEmails,
       emails: result.emails,
       tokenUsage: result.tokenUsage,
-        aiInsights: {
+      responseRate: result.replyMetrics?.responseRate || 0,
+      replyMetrics: result.replyMetrics || {
+        totalCustomerThreads: 0,
+        threadsWithReplies: 0,
+        responseRate: 0
+      },
+      aiInsights: {
         keyPoints: result.aiInsights.keyPoints,
         keyCustomerPoints: result.aiInsights.keyCustomerPoints,
         commonQuestions: result.aiInsights.commonQuestions,
@@ -1062,11 +1068,6 @@ const KnowledgePage: React.FC = () => {
     };
 
     try {
-      if (!db) {
-        console.error('Firestore not initialized');
-        throw new Error('Database connection not available');
-      }
-
       const analysisRef = collection(db, 'analyses');
       const userEmail = user.email;
       if (!userEmail) throw new Error('User email not found');
@@ -1388,7 +1389,7 @@ const KnowledgePage: React.FC = () => {
     const updatedThreads = analyzedThreads.map(thread => {
       const emailId = thread.threadId;
       if (emailId && emailId in emailOverrides) {
-        return {
+    return {
           ...thread,
           isCustomer: emailOverrides[emailId],
           confidence: emailOverrides[emailId] ? 0.95 : 0.05,
@@ -1854,6 +1855,9 @@ const KnowledgePage: React.FC = () => {
       setError(null);
       
       // Create new analysis job
+      if (!db) {
+        throw new Error('Firestore not initialized');
+      }
       const jobsRef = collection(db, 'analysisJobs');
       const newJob = await addDoc(jobsRef, {
         userId: user?.email,
@@ -2047,7 +2051,8 @@ const KnowledgePage: React.FC = () => {
 
       {showAnalysisError && (
         <AnalysisErrorModal
-          error={analysisError}
+          isOpen={showAnalysisError}
+          error={analysisError || 'An unknown error occurred'}
           onClose={() => setShowAnalysisError(false)}
           onRetry={handleRetryAnalysis}
         />
@@ -2056,8 +2061,8 @@ const KnowledgePage: React.FC = () => {
       {showDebugPanel && (
         <DebugPanel
           logs={DEBUG_LOG}
-          onClose={() => setShowDebugPanel(false)}
-          onDownload={downloadDebugLogs}
+          downloadLogs={downloadDebugLogs}
+          closePanel={() => setShowDebugPanel(false)}
         />
       )}
 
