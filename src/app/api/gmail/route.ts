@@ -103,6 +103,10 @@ export async function GET(request: NextRequest) {
 
       // Get thread metadata from first message headers
       const getHeader = (name: string): string => {
+        if (!firstMessage?.payload?.headers) {
+          console.log('Missing payload or headers:', { firstMessage });
+          return '';
+        }
         const header = firstMessage.payload.headers.find(
           h => h.name?.toLowerCase() === name.toLowerCase()
         );

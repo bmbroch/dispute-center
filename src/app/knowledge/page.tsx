@@ -1062,6 +1062,11 @@ const KnowledgePage: React.FC = () => {
     };
 
     try {
+      if (!db) {
+        console.error('Firestore not initialized');
+        throw new Error('Database connection not available');
+      }
+
       const analysisRef = collection(db, 'analyses');
       const userEmail = user.email;
       if (!userEmail) throw new Error('User email not found');

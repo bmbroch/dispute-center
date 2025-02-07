@@ -115,7 +115,9 @@ export default function EmailThread({ email, onClose }: EmailThreadProps) {
   }, [email]);
 
   const renderDebugInfo = (message: EmailMessage) => {
-    return {
+    if (!showDebug) return null;
+    
+    const debugData = {
       stage: 'Raw Email Data',
       subject: message.subject,
       from: message.from,
@@ -125,6 +127,15 @@ export default function EmailThread({ email, onClose }: EmailThreadProps) {
       bodyPreview: message.body?.substring(0, 100) + '...',
       snippet: message.snippet,
     };
+
+    return (
+      <div className="mt-4 p-3 bg-gray-50 rounded-lg text-xs font-mono">
+        <div className="font-medium text-gray-700 mb-2">Debug Information:</div>
+        <pre className="whitespace-pre-wrap break-all bg-white p-2 rounded border border-gray-200">
+          {JSON.stringify(debugData, null, 2)}
+        </pre>
+      </div>
+    );
   };
 
   const renderMessage = (message: EmailMessage, index: number) => {
