@@ -120,7 +120,7 @@ export default function AnalysisProgress({
         </div>
         <div>
           <p className="text-sm text-blue-800">
-            Please keep this tab open while we process your emails. You can switch to other tabs, and we'll notify you when the analysis is complete.
+            Please keep this tab open while we process your emails. You can switch to other tabs, and we&apos;ll notify you when the analysis is complete.
           </p>
         </div>
       </div>
