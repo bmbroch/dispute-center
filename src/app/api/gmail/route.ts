@@ -283,8 +283,8 @@ export async function GET(request: NextRequest) {
 
     // Sort threads by the date of their most recent message
     formattedThreads.sort((a, b) => {
-      const aDate = parseInt(a.messages[a.messages.length - 1].internalDate);
-      const bDate = parseInt(b.messages[b.messages.length - 1].internalDate);
+      const aDate = new Date(a.messages[a.messages.length - 1].date).getTime();
+      const bDate = new Date(b.messages[b.messages.length - 1].date).getTime();
       return bDate - aDate;
     });
 
@@ -300,8 +300,8 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({
         error: 'Gmail API error',
         details: error.message || 'An error occurred while fetching emails',
-        code: error.code
-      }, { status: error.status || 500 });
+        code: error.response?.status || 500
+      }, { status: error.response?.status || 500 });
     }
 
     // Network or other errors

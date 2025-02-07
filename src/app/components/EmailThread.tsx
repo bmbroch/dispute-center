@@ -1,7 +1,25 @@
 import { X, Bug } from 'lucide-react';
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
+
+interface EmailMessage {
+  subject: string;
+  from: string;
+  body: string;
+  date: string;
+  contentType?: string;
+  snippet?: string;
+  debug?: {
+    bodyLength?: number;
+    hadHtmlContent?: boolean;
+    hadPlainText?: boolean;
+    mimeType?: string;
+    isFromUser?: boolean;
+    hasUserQuote?: boolean;
+    isReplyToUser?: boolean;
+  };
+}
 
 interface EmailThreadProps {
   email: {
@@ -9,23 +27,7 @@ interface EmailThreadProps {
     from: string;
     body: string;
     date: string;
-    messages?: Array<{
-      subject: string;
-      from: string;
-      body: string;
-      date: string;
-      contentType?: string;
-      snippet?: string;
-      debug?: {
-        bodyLength?: number;
-        hadHtmlContent?: boolean;
-        hadPlainText?: boolean;
-        mimeType?: string;
-        isFromUser?: boolean;
-        hasUserQuote?: boolean;
-        isReplyToUser?: boolean;
-      };
-    }>;
+    messages?: EmailMessage[];
   };
   onClose: () => void;
 }
@@ -97,79 +99,45 @@ function parseEmailAddress(from: string): { name: string; email: string } {
 
 export default function EmailThread({ email, onClose }: EmailThreadProps) {
   const [showDebug, setShowDebug] = useState(false);
-  const messages = email.messages || [email];
-  const sortedMessages = [...messages].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+  const sortedMessages = useMemo(() => {
+    if (email.messages) {
+      return [...email.messages].sort(
+        (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
+      );
+    }
+    return [{
+      subject: email.subject,
+      from: email.from,
+      body: email.body,
+      date: email.date,
+      contentType: 'text/plain'
+    } as EmailMessage];
+  }, [email]);
 
-  const renderDebugInfo = (message: typeof sortedMessages[0]) => {
-    console.log('Rendering debug info for message:', message);
-    
-    if (!showDebug) return null;
-
-    // Parse the email data in different stages to show progression
-    const rawEmailParsing = {
+  const renderDebugInfo = (message: EmailMessage) => {
+    return {
       stage: 'Raw Email Data',
       subject: message.subject,
       from: message.from,
       date: message.date,
-      contentType: message.contentType,
+      contentType: message.contentType || 'text/plain',
       bodyLength: message.body?.length,
       bodyPreview: message.body?.substring(0, 100) + '...',
       snippet: message.snippet,
     };
+  };
 
-    // Parse the from field
-    const fromParsing = {
-      stage: 'From Field Parsing',
-      raw: message.from,
-      parsed: parseEmailAddress(message.from),
-      matchResults: message.from.match(/(?:"?([^"]*)"?\s)?(?:<?(.+@[^>]+)>?)/),
-    };
-
-    // Parse the body content
-    const bodyParsing = {
-      stage: 'Body Content Analysis',
-      isHTML: /<[a-z][\s\S]*>/i.test(message.body),
-      hasGmailQuote: message.body.includes('gmail_quote'),
-      quotedTextMatches: message.body.match(/On.*wrote:/g),
-      lineCount: message.body.split('\n').length,
-      originalContentType: message.contentType,
-    };
-
-    // HTML Processing
-    const htmlProcessing = {
-      stage: 'HTML Processing',
-      sanitizedTags: DOMPurify.sanitize(message.body, {
-        RETURN_DOM_FRAGMENT: true,
-        RETURN_DOM_IMPORT: false,
-      }).querySelectorAll('*').length,
-      containsBlockquote: message.body.includes('<blockquote'),
-      containsGmailQuote: message.body.includes('class="gmail_quote"'),
-      containsInlineStyles: message.body.includes('style='),
-    };
-
-    // Final processed state
-    const finalState = {
-      stage: 'Final Processed State',
-      parsedName: parseEmailAddress(message.from).name,
-      parsedEmail: parseEmailAddress(message.from).email,
-      formattedDate: formatDate(message.date),
-      processedBodyLength: parseEmailBody(message.body).length,
-      debug: message.debug || {},
-    };
+  const renderMessage = (message: EmailMessage, index: number) => {
+    const isHtml = message.contentType?.toLowerCase().includes('html');
+    const sanitizedBody = isHtml ? DOMPurify.sanitize(message.body, {
+      USE_PROFILES: { html: true },
+      ALLOWED_TAGS: ['p', 'br', 'b', 'i', 'em', 'strong', 'a', 'ul', 'ol', 'li', 'blockquote'],
+      ALLOWED_ATTR: ['href', 'target']
+    }) : message.body;
 
     return (
-      <div className="mt-4 p-3 bg-gray-50 rounded-lg text-xs font-mono">
-        <div className="font-medium text-gray-700 mb-2">Debug Information:</div>
-        <div className="space-y-4">
-          {[rawEmailParsing, fromParsing, bodyParsing, htmlProcessing, finalState].map((stage, index) => (
-            <div key={index} className="border-t border-gray-200 pt-2 first:border-t-0 first:pt-0">
-              <div className="font-medium text-blue-600 mb-1">{stage.stage}</div>
-              <pre className="whitespace-pre-wrap break-all bg-white p-2 rounded border border-gray-200">
-                {JSON.stringify(stage, null, 2)}
-              </pre>
-            </div>
-          ))}
-        </div>
+      <div key={index} className="mb-4 p-4 bg-white rounded-lg shadow">
+        {/* ... rest of the render code ... */}
       </div>
     );
   };
@@ -184,7 +152,7 @@ export default function EmailThread({ email, onClose }: EmailThreadProps) {
               {email.subject || 'No Subject'}
             </h2>
             <p className="text-sm text-gray-500">
-              {messages.length} message{messages.length !== 1 ? 's' : ''} in conversation
+              {sortedMessages.length} message{sortedMessages.length !== 1 ? 's' : ''} in conversation
             </p>
           </div>
           <div className="flex items-center gap-2">

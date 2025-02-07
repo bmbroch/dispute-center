@@ -400,7 +400,7 @@ export async function POST(request: NextRequest) {
           failedCount++;
           processingErrors.push({
             messageId: message.id,
-            error: error.message,
+            error: error instanceof Error ? error.message : 'Unknown error occurred',
             stage: 'message_processing'
           });
           return null;
