@@ -380,7 +380,7 @@ const KnowledgePage: React.FC = () => {
 
   const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-  const retryOperation = async <T>(
+  const retryOperation = async <T,>(
     operation: () => Promise<T>,
     retries = 3,
     delay = 1000,
@@ -1202,20 +1202,20 @@ const KnowledgePage: React.FC = () => {
               <div className="flex items-center gap-4">
                 <div className="bg-white/80 backdrop-blur-sm rounded-lg p-3 shadow-sm">
                   <BookOpen className="w-6 h-6 text-blue-600" />
-                    </div>
+                </div>
                 <div>
                   <div className="flex items-center gap-3">
                     <h2 className="text-lg font-semibold text-gray-900">Last Analysis</h2>
                     <span className="text-sm text-blue-600">
                       {latestSavedAnalysis.totalEmailsAnalyzed || latestSavedAnalysis.totalEmails} emails analyzed
                     </span>
-                    </div>
+                  </div>
                   <p className="text-sm text-gray-600">
                     {new Date(latestSavedAnalysis.timestamp).toLocaleDateString()} at {new Date(latestSavedAnalysis.timestamp).toLocaleTimeString()}
                   </p>
-                    </div>
-                  </div>
-                    <button
+                </div>
+              </div>
+              <button
                 onClick={() => handleViewDetails(latestSavedAnalysis)}
                 className="group px-4 py-2 bg-white/80 backdrop-blur-sm text-blue-600 rounded-lg hover:bg-blue-600 hover:text-white transition-all duration-300 flex items-center gap-2 shadow-sm hover:shadow"
               >
@@ -1228,139 +1228,139 @@ const KnowledgePage: React.FC = () => {
                 >
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                 </svg>
-                    </button>
-                  </div>
-                </div>
-              )}
+              </button>
+            </div>
+          </div>
+        )}
 
         <div className="bg-white rounded-2xl shadow-sm p-8">
-                  <div className="max-w-2xl mx-auto">
-                    <div className="text-center mb-12">
-                      <div className="w-16 h-16 bg-orange-100 rounded-2xl flex items-center justify-center mx-auto mb-6">
-                        <BookOpen className="w-8 h-8 text-orange-600" />
-                      </div>
-                      <h2 className="text-2xl font-semibold text-gray-900 mb-3">
-                  Generate Knowledge Base
-                </h2>
-                      <p className="text-gray-600">
-                  Analyze your emails to generate insights about customer support patterns.
-                </p>
-                    </div>
-                
-                    <div className="mb-12">
-                      <label className="block text-sm font-medium text-gray-700 mb-4 text-center">
-                      Select AI Model
-                    </label>
-                      <div className="grid grid-cols-2 gap-6">
-                        {MODEL_OPTIONS.map(model => (
-                          <div
-                            key={model.value}
-                            onClick={() => !model.disabled && setSelectedModel(model.value)}
-                            className={`relative p-6 rounded-xl border-2 cursor-pointer transition-all duration-200 ${
-                              model.disabled 
-                                ? 'border-gray-200 opacity-80 cursor-not-allowed'
-                                : selectedModel === model.value
-                                ? 'border-orange-500 bg-orange-50 shadow-lg hover:scale-[1.02]'
-                                : 'border-gray-200 hover:border-orange-200 hover:bg-orange-50/50 hover:scale-[1.02]'
-                            }`}
-                          >
-                            <div className="flex items-start gap-4 mb-4">
-                              <div className="w-12 h-12 relative bg-white rounded-lg p-2 shadow-sm flex items-center justify-center">
-                                <Image
-                                  src={model.logo}
-                                  alt={model.label}
-                                  width={32}
-                                  height={32}
-                                  className={`object-contain ${model.value === 'openai' ? 'dark' : ''}`}
-                                  style={{ filter: model.value === 'openai' ? 'brightness(0.2)' : 'none' }}
-                                />
-                              </div>
-                              <div className="flex-1 min-w-0">
-                                <h3 className="font-medium text-gray-900 mb-1">{model.label}</h3>
-                                <p className="text-sm text-gray-500 line-clamp-2">{model.description}</p>
-                              </div>
-                            </div>
-                            <div className="flex gap-3">
-                              <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-orange-100 text-orange-800">
-                                Speed: {model.speed}
-                              </span>
-                              <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                                Reliability: {model.reliability}
-                              </span>
-                            </div>
-                            {model.disabled && (
-                              <div className="absolute -top-3 right-3 z-10">
-                                <span className="px-3 py-1.5 bg-purple-100 text-purple-800 text-sm font-medium rounded-full shadow-sm">
-                                  Coming Soon
-                                </span>
-                              </div>
-                            )}
-                            {selectedModel === model.value && (
-                              <div className="absolute top-3 right-3">
-                                <div className="w-6 h-6 bg-orange-500 rounded-full flex items-center justify-center shadow-sm">
-                                  <CheckCircle2 className="w-4 h-4 text-white" />
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                  </div>
-
-                    <div className="mb-12">
-                      <label className="block text-sm font-medium text-gray-700 mb-4 text-center">
-                      Number of emails to analyze
-                    </label>
-                      <div className="grid grid-cols-3 gap-4">
-                      {EMAIL_COUNT_OPTIONS.map(option => (
-                          <div
-                            key={option.value}
-                            onClick={() => setEmailCountToAnalyze(option.value)}
-                            className={`relative p-4 rounded-xl border-2 cursor-pointer transition-all duration-200 hover:scale-[1.02] ${
-                              emailCountToAnalyze === option.value
-                                ? 'border-orange-500 bg-orange-50 shadow-lg'
-                                : 'border-gray-200 hover:border-orange-200 hover:bg-orange-50/50'
-                            }`}
-                          >
-                            <div className="text-center">
-                              <span className="text-3xl mb-3 block">{option.icon}</span>
-                              <h3 className="font-medium text-gray-900 mb-1">{option.label}</h3>
-                              <p className="text-xs text-gray-500">{option.description}</p>
-                  </div>
-                            {emailCountToAnalyze === option.value && (
-                              <div className="absolute top-2 right-2">
-                                <div className="w-5 h-5 bg-orange-500 rounded-full flex items-center justify-center shadow-sm">
-                                  <CheckCircle2 className="w-3 h-3 text-white" />
-                </div>
+          <div className="max-w-2xl mx-auto">
+            <div className="text-center mb-12">
+              <div className="w-16 h-16 bg-orange-100 rounded-2xl flex items-center justify-center mx-auto mb-6">
+                <BookOpen className="w-8 h-8 text-orange-600" />
               </div>
-                            )}
-                          </div>
-                        ))}
+              <h2 className="text-2xl font-semibold text-gray-900 mb-3">
+                Generate Knowledge Base
+              </h2>
+              <p className="text-gray-600">
+                Analyze your emails to generate insights about customer support patterns.
+              </p>
+            </div>
+            
+            <div className="mb-12">
+              <label className="block text-sm font-medium text-gray-700 mb-4 text-center">
+                Select AI Model
+              </label>
+              <div className="grid grid-cols-2 gap-6">
+                {MODEL_OPTIONS.map(model => (
+                  <div
+                    key={model.value}
+                    onClick={() => !model.disabled && setSelectedModel(model.value)}
+                    className={`relative p-6 rounded-xl border-2 cursor-pointer transition-all duration-200 ${
+                      model.disabled 
+                        ? 'border-gray-200 opacity-80 cursor-not-allowed'
+                        : selectedModel === model.value
+                        ? 'border-orange-500 bg-orange-50 shadow-lg hover:scale-[1.02]'
+                        : 'border-gray-200 hover:border-orange-200 hover:bg-orange-50/50 hover:scale-[1.02]'
+                    }`}
+                  >
+                    <div className="flex items-start gap-4 mb-4">
+                      <div className="w-12 h-12 relative bg-white rounded-lg p-2 shadow-sm flex items-center justify-center">
+                        <Image
+                          src={model.logo}
+                          alt={model.label}
+                          width={32}
+                          height={32}
+                          className={`object-contain ${model.value === 'openai' ? 'dark' : ''}`}
+                          style={{ filter: model.value === 'openai' ? 'brightness(0.2)' : 'none' }}
+                        />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <h3 className="font-medium text-gray-900 mb-1">{model.label}</h3>
+                        <p className="text-sm text-gray-500 line-clamp-2">{model.description}</p>
                       </div>
                     </div>
-
-                    <div className="text-center">
-              <button
-                        onClick={() => handleStartAnalysis(selectedModel, emailCountToAnalyze)}
-                disabled={loading || !user}
-                        className={`px-8 py-4 rounded-xl font-medium text-white text-lg transition-all duration-200 ${
-                          loading || !user 
-                    ? 'bg-gray-400 cursor-not-allowed' 
-                            : 'bg-orange-500 hover:bg-orange-600 shadow-lg hover:shadow-xl hover:-translate-y-0.5'
-                        }`}
-                      >
-                        {loading ? (
-                          <span className="flex items-center gap-2">
-                            <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                            Starting Analysis...
-                          </span>
-                        ) : (
-                          'Start New Analysis'
-                        )}
-              </button>
+                    <div className="flex gap-3">
+                      <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-orange-100 text-orange-800">
+                        Speed: {model.speed}
+                      </span>
+                      <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                        Reliability: {model.reliability}
+                      </span>
                     </div>
+                    {model.disabled && (
+                      <div className="absolute -top-3 right-3 z-10">
+                        <span className="px-3 py-1.5 bg-purple-100 text-purple-800 text-sm font-medium rounded-full shadow-sm">
+                          Coming Soon
+                        </span>
+                      </div>
+                    )}
+                    {selectedModel === model.value && (
+                      <div className="absolute top-3 right-3">
+                        <div className="w-6 h-6 bg-orange-500 rounded-full flex items-center justify-center shadow-sm">
+                          <CheckCircle2 className="w-4 h-4 text-white" />
+                        </div>
+                      </div>
+                    )}
                   </div>
+                ))}
+              </div>
             </div>
+
+            <div className="mb-12">
+              <label className="block text-sm font-medium text-gray-700 mb-4 text-center">
+                Number of emails to analyze
+              </label>
+              <div className="grid grid-cols-3 gap-4">
+                {EMAIL_COUNT_OPTIONS.map(option => (
+                  <div
+                    key={option.value}
+                    onClick={() => setEmailCountToAnalyze(option.value)}
+                    className={`relative p-4 rounded-xl border-2 cursor-pointer transition-all duration-200 hover:scale-[1.02] ${
+                      emailCountToAnalyze === option.value
+                        ? 'border-orange-500 bg-orange-50 shadow-lg'
+                        : 'border-gray-200 hover:border-orange-200 hover:bg-orange-50/50'
+                    }`}
+                  >
+                    <div className="text-center">
+                      <span className="text-3xl mb-3 block">{option.icon}</span>
+                      <h3 className="font-medium text-gray-900 mb-1">{option.label}</h3>
+                      <p className="text-xs text-gray-500">{option.description}</p>
+                    </div>
+                    {emailCountToAnalyze === option.value && (
+                      <div className="absolute top-2 right-2">
+                        <div className="w-5 h-5 bg-orange-500 rounded-full flex items-center justify-center shadow-sm">
+                          <CheckCircle2 className="w-3 h-3 text-white" />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="text-center">
+              <button
+                onClick={() => handleStartAnalysis(selectedModel, emailCountToAnalyze)}
+                disabled={loading || !user}
+                className={`px-8 py-4 rounded-xl font-medium text-white text-lg transition-all duration-200 ${
+                  loading || !user 
+                    ? 'bg-gray-400 cursor-not-allowed' 
+                    : 'bg-orange-500 hover:bg-orange-600 shadow-lg hover:shadow-xl hover:-translate-y-0.5'
+                }`}
+              >
+                {loading ? (
+                  <span className="flex items-center gap-2">
+                    <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    Starting Analysis...
+                  </span>
+                ) : (
+                  'Start New Analysis'
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
     );
   };
@@ -1668,16 +1668,16 @@ const KnowledgePage: React.FC = () => {
             <div className="flex items-center gap-3 mb-2">
               <span className="text-2xl">📧</span>
               <h3 className="text-lg font-medium text-gray-900">Total Emails</h3>
-                    </div>
+            </div>
             <p className="text-3xl font-semibold text-blue-600">{result.totalEmails || 0}</p>
-                    </div>
+          </div>
           <div className="bg-white rounded-xl p-6 shadow-sm hover:shadow-md transition-shadow">
             <div className="flex items-center gap-3 mb-2">
               <span className="text-2xl">🎯</span>
               <h3 className="text-lg font-medium text-gray-900">Support Emails</h3>
-                    </div>
+            </div>
             <p className="text-3xl font-semibold text-blue-600">{result.supportEmails?.length || 0}</p>
-                    </div>
+          </div>
           <div className="bg-white rounded-xl p-6 shadow-sm hover:shadow-md transition-shadow">
             <div className="flex items-center gap-3 mb-2">
               <span className="text-2xl">⚡️</span>
