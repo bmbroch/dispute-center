@@ -1,5 +1,5 @@
 import { OpenAI } from "openai";
-import { StreamingTextResponse, OpenAIStream } from 'ai';
+import { StreamingTextResponse } from 'ai';
 
 export const runtime = "edge";
 
@@ -17,7 +17,25 @@ export async function POST(req: Request) {
       stream: true,
     });
 
-    const stream = OpenAIStream(response);
+    // Convert the OpenAI response into a text-encoder stream
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      async start(controller) {
+        try {
+          for await (const part of response) {
+            const text = part.choices[0]?.delta?.content || '';
+            if (text) {
+              controller.enqueue(encoder.encode(text));
+            }
+          }
+        } catch (error) {
+          controller.error(error);
+        } finally {
+          controller.close();
+        }
+      },
+    });
+
     return new StreamingTextResponse(stream);
   } catch (error) {
     console.error('Error in chat:', error);
