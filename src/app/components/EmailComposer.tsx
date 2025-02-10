@@ -86,11 +86,9 @@ export default function EmailComposer({
   const hasInitializedRef = useRef(false);
 
   useEffect(() => {
-    // Update 'to' field with authenticated user's email
-    if (user?.email) {
-      setTo(user.email);
-    }
-  }, [user?.email]);
+    // Set the recipient to the customer's email
+    setTo(customerEmail);
+  }, [customerEmail]);
 
   // Handle API templates
   useEffect(() => {
