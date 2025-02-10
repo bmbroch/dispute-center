@@ -6,6 +6,55 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY || '',
 });
 
+// Key concepts that should be distinguished
+const DISTINCT_CONCEPTS = {
+  username: ['username', 'user name', 'login name', 'account name'],
+  password: ['password', 'pwd', 'pass', 'reset password'],
+  email: ['email', 'e-mail', 'mail'],
+  account: ['account', 'profile'],
+  payment: ['payment', 'billing', 'charge', 'subscription'],
+  // Add more concepts as needed
+};
+
+function findMatchingConcepts(text: string): string[] {
+  const lowercaseText = text.toLowerCase();
+  return Object.entries(DISTINCT_CONCEPTS).reduce((matches: string[], [concept, terms]) => {
+    if (terms.some(term => lowercaseText.includes(term))) {
+      matches.push(concept);
+    }
+    return matches;
+  }, []);
+}
+
+function calculateConfidence(
+  userQuestion: string,
+  faqQuestion: string,
+  userConcepts: string[],
+  faqConcepts: string[]
+): number {
+  // If the concepts don't match, significantly reduce confidence
+  const conceptsMatch = userConcepts.some(concept => faqConcepts.includes(concept));
+  if (!conceptsMatch) {
+    return 30; // Very low confidence if core concepts don't match
+  }
+
+  // Calculate basic similarity (you might want to use a more sophisticated algorithm)
+  const userWords = new Set(userQuestion.toLowerCase().split(/\s+/));
+  const faqWords = new Set(faqQuestion.toLowerCase().split(/\s+/));
+  const commonWords = new Set([...userWords].filter(x => faqWords.has(x)));
+  
+  const similarity = (commonWords.size * 2) / (userWords.size + faqWords.size);
+  
+  // Weight the confidence score
+  const baseConfidence = similarity * 100;
+  
+  // Adjust confidence based on concept matching
+  const conceptMatchScore = conceptsMatch ? 100 : 30;
+  
+  // Final confidence is weighted average
+  return Math.round((baseConfidence * 0.7 + conceptMatchScore * 0.3));
+}
+
 export async function POST(req: Request) {
   try {
     if (!process.env.OPENAI_API_KEY) {
@@ -24,48 +73,26 @@ export async function POST(req: Request) {
       );
     }
 
+    // Analyze the question with GPT to understand intent and generate response
     const systemPrompt = `You are a helpful customer support agent for Interview Sidekick, a platform that helps with interview preparation.
-    Your task is to analyze the incoming customer email and generate a professional, helpful response.
-    
-    Guidelines for responses:
-    1. Be friendly and professional while maintaining a modern, approachable tone
-    2. Address the customer's specific concerns directly and clearly
-    3. Provide actionable solutions or clear next steps
-    4. Use proper spacing with line breaks between paragraphs for better readability
-    5. Keep responses concise but thorough
-    6. Include a friendly greeting and sign-off
-    7. Use 1-2 appropriate emojis where they add value (e.g., in greeting or sign-off)
-    8. Format the response with clear spacing, for example:
-
-    Hi [Name], 👋
-
-    [First paragraph with main response]
-
-    [Second paragraph with additional details if needed]
-
-    [Final paragraph with next steps or invitation for further questions]
-
-    Best regards,
-    The Interview Sidekick Team ✨
-
-    Note: Use HTML <br> tags for line breaks in the response.
-    
-    Also provide a confidence score (0-100) indicating how confident you are that this response fully addresses the user's question:
-    - 100: Perfect response, covers everything clearly
-    - 80-99: Very good response, covers most aspects well
-    - 60-79: Adequate response but might need human review
-    - Below 60: Complex issue, needs human attention
+    Analyze the incoming customer email to:
+    1. Identify the main topic and intent
+    2. Determine customer sentiment
+    3. Extract key points
+    4. Generate a professional, helpful response
     
     Respond with ONLY a JSON object in this format (no other text):
     {
       "analysis": {
-        "confidence": number,
         "sentiment": string,
-        "keyPoints": string[]
+        "keyPoints": string[],
+        "topic": string
       },
       "response": {
-        "subject": string,
-        "body": string
+        "suggestedReply": string,
+        "confidence": number,
+        "requiresHumanResponse": boolean,
+        "reason": string
       }
     }`;
 
@@ -73,15 +100,9 @@ export async function POST(req: Request) {
       model: "gpt-4",
       messages: [
         { role: "system", content: systemPrompt },
-        {
-          role: "user",
-          content: JSON.stringify({
-            email: {
-              from: email,
-              subject: "Customer Inquiry",
-              body: emailContent
-            }
-          })
+        { 
+          role: "user", 
+          content: `Subject: Customer Inquiry\n\nFrom: ${email}\n\nBody: ${emailContent}`
         }
       ],
       temperature: 0.7
@@ -92,34 +113,29 @@ export async function POST(req: Request) {
     }
 
     const result = JSON.parse(response.choices[0].message.content);
-    
-    // Determine if human response is needed based on confidence score
-    const requiresHumanResponse = result.analysis.confidence < 80;
-    const reason = requiresHumanResponse 
-      ? "AI confidence below threshold - needs human review"
-      : "";
 
     // Transform the response to match our expected format
     const transformedResult: EmailSimulationResult = {
       matches: [{
         faq: {
           id: 'ai-generated',
-          question: 'AI Generated Response',
-          replyTemplate: result.response.body,
+          question: emailContent,
+          replyTemplate: result.response.suggestedReply,
           instructions: '',
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
-          confidence: result.analysis.confidence,
+          confidence: result.response.confidence,
           useCount: 0
         },
-        confidence: result.analysis.confidence,
-        suggestedReply: result.response.body
+        confidence: result.response.confidence,
+        suggestedReply: result.response.suggestedReply
       }],
-      requiresHumanResponse,
-      reason,
+      requiresHumanResponse: result.response.requiresHumanResponse,
+      reason: result.response.reason,
       analysis: {
         sentiment: result.analysis.sentiment,
-        keyPoints: result.analysis.keyPoints
+        keyPoints: result.analysis.keyPoints,
+        concepts: [result.analysis.topic]
       }
     };
 

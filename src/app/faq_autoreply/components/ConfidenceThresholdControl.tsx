@@ -9,69 +9,56 @@ export const ConfidenceThresholdControl: React.FC<ConfidenceThresholdControlProp
   value,
   onChange,
 }) => {
-  const getConfidenceColor = (threshold: number) => {
-    if (threshold >= 95) return 'text-green-600';
-    if (threshold >= 85) return 'text-yellow-600';
-    return 'text-red-600';
-  };
-
-  const getConfidenceMessage = (threshold: number) => {
-    if (threshold >= 95) {
-      return 'Recommended: High confidence ensures accurate auto-replies';
-    }
-    if (threshold >= 85) {
-      return 'Caution: Medium confidence may lead to some inaccurate replies';
-    }
-    return 'Warning: Low confidence is not recommended for auto-replies';
-  };
-
-  const getConfidenceBackground = (threshold: number) => {
-    if (threshold >= 95) return 'bg-green-100';
-    if (threshold >= 85) return 'bg-yellow-100';
-    return 'bg-red-100';
-  };
-
   return (
-    <div className="p-6 bg-white rounded-lg shadow">
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="text-lg font-semibold">Confidence Threshold</h3>
-        <span className={`text-lg font-medium ${getConfidenceColor(value)}`}>
-          {value}%
-        </span>
+    <div className="bg-white rounded-lg shadow p-6">
+      <div className="mb-4">
+        <h3 className="text-lg font-semibold text-gray-900">Confidence Threshold</h3>
+        <p className="text-sm text-gray-600 mt-1">
+          Set the minimum confidence level required for automatic responses
+        </p>
       </div>
 
-      <div className="relative">
+      <div className="relative pt-1">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-sm font-medium text-gray-700">0%</span>
+          <span className="text-sm font-medium text-gray-700">{value}%</span>
+        </div>
+        <div className="h-2 bg-gray-200 rounded-full">
+          <div
+            style={{ width: `${value}%` }}
+            className={`h-full rounded-full ${
+              value >= 95
+                ? 'bg-green-500'
+                : value >= 85
+                ? 'bg-yellow-500'
+                : 'bg-red-500'
+            }`}
+          ></div>
+        </div>
         <input
           type="range"
           min="0"
           max="100"
           value={value}
-          onChange={(e) => onChange(Number(e.target.value))}
-          className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-          style={{
-            background: `linear-gradient(to right, 
-              #ef4444 0%, 
-              #ef4444 85%, 
-              #eab308 85%, 
-              #eab308 95%, 
-              #22c55e 95%, 
-              #22c55e 100%
-            )`,
-          }}
+          onChange={(e) => onChange(parseInt(e.target.value))}
+          className="absolute top-0 w-full h-8 opacity-0 cursor-pointer"
         />
-        
-        <div className="flex justify-between text-xs text-gray-500 mt-1">
-          <span>0%</span>
-          <span>85%</span>
-          <span>95%</span>
-          <span>100%</span>
-        </div>
       </div>
 
-      <div className={`mt-4 p-3 rounded-md ${getConfidenceBackground(value)}`}>
-        <p className={`text-sm ${getConfidenceColor(value)}`}>
-          {getConfidenceMessage(value)}
-        </p>
+      <div className="mt-4">
+        <div className={`p-3 rounded-lg ${
+          value >= 95
+            ? 'bg-green-50 text-green-800'
+            : value >= 85
+            ? 'bg-yellow-50 text-yellow-800'
+            : 'bg-red-50 text-red-800'
+        }`}>
+          {value >= 95
+            ? 'Recommended: High confidence ensures accurate auto-replies'
+            : value >= 85
+            ? 'Moderate confidence: Some responses may need review'
+            : 'Low confidence: Most responses will need human review'}
+        </div>
       </div>
     </div>
   );
