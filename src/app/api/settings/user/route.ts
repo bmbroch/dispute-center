@@ -2,22 +2,17 @@ import { NextResponse } from 'next/server';
 import { collection, doc, getDoc, setDoc } from 'firebase/firestore';
 import { getFirebaseDB } from '@/lib/firebase/firebase';
 
-interface UserSettings {
-  confidenceThreshold: number;
-  emailTemplates?: any[];
-  // Add other settings as needed
-}
-
 export async function GET(req: Request) {
-  try {
-    const userEmail = req.headers.get('x-user-email');
-    if (!userEmail) {
-      return NextResponse.json(
-        { error: 'User email is required' },
-        { status: 400 }
-      );
-    }
+  const userEmail = req.headers.get('x-user-email');
 
+  if (!userEmail) {
+    return NextResponse.json(
+      { error: 'User email is required' },
+      { status: 400 }
+    );
+  }
+
+  try {
     const db = getFirebaseDB();
     if (!db) {
       throw new Error('Failed to initialize Firebase');
@@ -28,10 +23,16 @@ export async function GET(req: Request) {
 
     if (!docSnap.exists()) {
       // Return default settings if none exist
-      const defaultSettings: UserSettings = {
+      return NextResponse.json({
         confidenceThreshold: 80,
-      };
-      return NextResponse.json(defaultSettings);
+        emailFormatting: {
+          greeting: "Hi [Name]!",
+          listStyle: 'numbered',
+          spacing: 'normal',
+          signatureStyle: "Best,\n[Name]",
+          customPrompt: "Please keep responses friendly but professional. Use proper spacing between paragraphs and lists."
+        }
+      });
     }
 
     return NextResponse.json(docSnap.data());
@@ -45,19 +46,28 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
-  try {
-    const userEmail = req.headers.get('x-user-email');
-    if (!userEmail) {
-      return NextResponse.json(
-        { error: 'User email is required' },
-        { status: 400 }
-      );
-    }
+  const userEmail = req.headers.get('x-user-email');
 
+  if (!userEmail) {
+    return NextResponse.json(
+      { error: 'User email is required' },
+      { status: 400 }
+    );
+  }
+
+  try {
     const settings = await req.json();
     const db = getFirebaseDB();
     if (!db) {
       throw new Error('Failed to initialize Firebase');
+    }
+
+    // Validate settings object
+    if (!settings || typeof settings !== 'object') {
+      return NextResponse.json(
+        { error: 'Invalid settings format' },
+        { status: 400 }
+      );
     }
 
     const userSettingsRef = doc(db, 'userSettings', userEmail);
