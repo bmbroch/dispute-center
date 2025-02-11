@@ -19,12 +19,15 @@ const mockFaqs: FAQ[] = [
   {
     id: '1',
     question: 'How do I reset my password?',
+    answer: 'To reset your password, please follow these steps:\n1. Click on the "Forgot Password" link\n2. Enter your email address\n3. Follow the instructions in the email we send you',
     replyTemplate: 'To reset your password, please follow these steps:\n1. Click on the "Forgot Password" link\n2. Enter your email address\n3. Follow the instructions in the email we send you',
-    instructions: 'Make sure to maintain a friendly tone and offer additional help if needed.',
-    createdAt: '2024-02-07T00:00:00.000Z',
-    updatedAt: '2024-02-07T00:00:00.000Z',
-    confidence: 0,
-    useCount: 0
+    category: 'account',
+    confidence: 1,
+    useCount: 0,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    emailIds: [],
+    requiresCustomerSpecificInfo: false
   },
   // Add more mock FAQs as needed
 ];
@@ -205,12 +208,15 @@ export default function FAQAutoReplyPage() {
     const newFaqEntry: FAQ = {
       id: uuidv4(),
       question: faq.question.trim(),
+      answer: faq.answer.trim(),
       replyTemplate: faq.answer.trim(),
       instructions: 'Maintain a professional and helpful tone.',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-      confidence: 0,
-      useCount: 0
+      confidence: 1,
+      useCount: 0,
+      requiresCustomerSpecificInfo: false,
+      category: 'general'
     };
 
     setFaqs(prev => [...prev, newFaqEntry]);
@@ -248,12 +254,15 @@ export default function FAQAutoReplyPage() {
       const newFaqEntry: FAQ = {
         id: uuidv4(),
         question: newFAQ.question.replace(/<[^>]*>/g, ''),
+        answer: newFAQ.replyTemplate.replace(/<[^>]*>/g, ''),
         replyTemplate: newFAQ.replyTemplate.replace(/<[^>]*>/g, ''),
         instructions: 'Maintain a professional and helpful tone.',
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
-        confidence: 0,
-        useCount: 0
+        confidence: 1,
+        useCount: 0,
+        requiresCustomerSpecificInfo: false,
+        category: 'general'
       };
       setFaqs(prev => [...prev, newFaqEntry]);
       toast.success('New FAQ template added successfully! 📝', {
@@ -272,15 +281,24 @@ export default function FAQAutoReplyPage() {
   };
 
   const handleEditFAQ = (faq: FAQ) => {
-    setNewFAQ({
-      question: faq.question.replace(/<[^>]*>/g, ''),
-      replyTemplate: faq.replyTemplate.replace(/<[^>]*>/g, ''),
-    });
-    setEditingFaqId(faq.id);
+    if (faq.replyTemplate) {
+      setNewFAQ({
+        question: faq.question,
+        replyTemplate: faq.replyTemplate
+      });
+    }
+    if (faq.id) {
+      setEditingFaqId(faq.id);
+    }
     setShowAddFAQModal(true);
   };
 
-  const handleDeleteFAQ = (id: string) => {
+  const handleDeleteFAQ = async (id?: string) => {
+    if (!id) {
+      toast.error('Invalid FAQ ID');
+      return;
+    }
+
     const shouldDelete = window.confirm('Are you sure you want to delete this FAQ?');
     if (shouldDelete) {
       setFaqs(prev => prev.filter(f => f.id !== id));
@@ -355,12 +373,15 @@ export default function FAQAutoReplyPage() {
     const newFaqEntry: FAQ = {
       id: uuidv4(),
       question: qa.question,
+      answer: qa.answer,
       replyTemplate: qa.answer,
       instructions: 'Maintain a professional and helpful tone.',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-      confidence: 0,
-      useCount: 0
+      confidence: 1,
+      useCount: 0,
+      requiresCustomerSpecificInfo: false,
+      category: 'general'
     };
 
     setFaqs(prev => [...prev, newFaqEntry]);
