@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getOAuth2Client } from '@/lib/google/auth';
 import { google, gmail_v1 } from 'googleapis';
-import { getFirestore } from 'firebase-admin/firestore';
+import { getFirestore, Firestore } from 'firebase-admin/firestore';
 import { getFirebaseAdmin } from '@/lib/firebase/firebase-admin';
 import OpenAI from 'openai';
-import type { Firestore } from 'firebase-admin/firestore';
 
 // Add OpenAI initialization after imports
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
@@ -361,47 +360,6 @@ function isCustomerSupportEmail(subject: string, content: string): boolean {
   );
 }
 
-// Add this helper function to safely extract email body
-function extractEmailBody(message: gmail_v1.Schema$Message): string | null {
-  try {
-    if (!message.payload) return null;
-
-    // Try to get body from parts first
-    if (message.payload.parts) {
-      const textPart = message.payload.parts.find(part => 
-        part.mimeType === 'text/plain' || part.mimeType === 'text/html'
-      );
-      if (textPart?.body?.data) {
-        return Buffer.from(textPart.body.data, 'base64').toString();
-      }
-    }
-
-    // If no parts or no text part, try body directly
-    if (message.payload.body?.data) {
-      return Buffer.from(message.payload.body.data, 'base64').toString();
-    }
-
-    return null;
-  } catch (error) {
-    console.error('Error extracting email body:', error);
-    return null;
-  }
-}
-
-// Add this helper function to safely parse dates
-function parseGmailDate(dateStr: string): string {
-  try {
-    const date = new Date(dateStr);
-    if (isNaN(date.getTime())) {
-      return new Date().toISOString(); // Fallback to current date if invalid
-    }
-    return date.toISOString();
-  } catch (error) {
-    console.error('Error parsing date:', error);
-    return new Date().toISOString();
-  }
-}
-
 // Add this helper function to get cached questions for an email
 async function getCachedEmailQuestions(threadId: string, db: FirebaseFirestore.Firestore) {
   try {
@@ -449,7 +407,7 @@ async function processThreadsWithRateLimit(
         }
       })
     );
-    
+
     results.push(...batchResults.filter(Boolean));
     
     // Add delay between batches to respect rate limits
@@ -461,6 +419,45 @@ async function processThreadsWithRateLimit(
   return results;
 }
 
+// Add this helper function before the GET function
+async function isEmailNotRelevant(threadId: string, db: Firestore): Promise<boolean> {
+  try {
+    const notRelevantRef = db.collection('not_relevant_reasons').where('emailId', '==', threadId);
+    const snapshot = await notRelevantRef.get();
+    return !snapshot.empty;
+  } catch (error) {
+    console.error(`Error checking not relevant status for thread ${threadId}:`, error);
+    return false;
+  }
+}
+
+// Add Gmail client initialization function
+async function getGmailClient(accessToken: string): Promise<gmail_v1.Gmail | null> {
+  try {
+    const oauth2Client = await getOAuth2Client({
+      access_token: accessToken,
+      token_type: 'Bearer'
+    });
+    
+    if (!oauth2Client) {
+      console.error('Failed to initialize OAuth2 client');
+      return null;
+    }
+
+    const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+    const firebaseApp = getFirebaseAdmin();
+    if (!firebaseApp) {
+      throw new Error('Failed to initialize Firebase Admin');
+    }
+    const db = firebaseApp.firestore();
+
+    return gmail;
+  } catch (error) {
+    console.error('Error initializing Gmail client:', error);
+    return null;
+  }
+}
+
 // Update the GET function to handle pagination better
 export async function GET(request: NextRequest) {
   try {
@@ -468,72 +465,37 @@ export async function GET(request: NextRequest) {
     const now = Date.now();
     const timeSinceLastRequest = now - lastRequestTime;
     
-    // Check if we're within the consecutive requests window
-    if (timeSinceLastRequest < CONSECUTIVE_REQUESTS_WINDOW) {
-      consecutiveRequests++;
-      
-      // If too many requests in the window, enforce a longer cooldown
-      if (consecutiveRequests > MAX_CONSECUTIVE_REQUESTS) {
-        const retryAfter = RATE_LIMITS.RETRY_AFTER_DEFAULT;
-        return NextResponse.json(
-          { 
-            error: 'Rate limit exceeded',
-            retryAfter,
-            message: `Too many requests. Please wait ${Math.ceil(retryAfter / 1000)} seconds.`
-          },
-          { 
-            status: 429,
-            headers: {
-              'Retry-After': String(Math.ceil(retryAfter / 1000))
-            }
-          }
-        );
-      }
-    } else {
-      // Reset consecutive requests counter if outside window
-      consecutiveRequests = 1;
+    if (timeSinceLastRequest < RATE_LIMITS.MIN_TIME_BETWEEN_FETCHES) {
+      return NextResponse.json(
+        { error: 'Rate limit exceeded', retryAfter: RATE_LIMITS.MIN_TIME_BETWEEN_FETCHES - timeSinceLastRequest },
+        { status: 429 }
+      );
     }
-    
-    // Update last request time
+
     lastRequestTime = now;
 
-    // Check minimum time between fetches
-    const lastFetchTime = request.headers.get('x-last-fetch');
-    if (lastFetchTime) {
-      const timeSinceLastFetch = now - parseInt(lastFetchTime);
-      if (timeSinceLastFetch < RATE_LIMITS.MIN_TIME_BETWEEN_FETCHES) {
-        const retryAfter = RATE_LIMITS.MIN_TIME_BETWEEN_FETCHES - timeSinceLastFetch;
-        return NextResponse.json(
-          { 
-            error: 'Rate limit exceeded',
-            retryAfter,
-            message: `Please wait ${Math.ceil(retryAfter / 1000)} seconds between fetches.`
-          },
-          { 
-            status: 429,
-            headers: {
-              'Retry-After': String(Math.ceil(retryAfter / 1000))
-            }
-          }
-        );
-      }
-    }
-
-    // Get the access token from the Authorization header
+    // Get the access token from the Authorization header first
     const authHeader = request.headers.get('Authorization');
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return NextResponse.json({ error: 'No access token provided' }, { status: 401 });
     }
     const accessToken = authHeader.split(' ')[1];
 
-    console.log('Initializing Google OAuth2 client...');
-    const oauth2Client = await getOAuth2Client({
-      access_token: accessToken,
-      token_type: 'Bearer'
-    });
+    // Initialize Firebase Admin and Firestore
+    const app = getFirebaseAdmin();
+    if (!app) {
+      throw new Error('Failed to initialize Firebase Admin');
+    }
+    const db = getFirestore(app);
 
-    const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
-    const db = getFirebaseAdmin().firestore();
+    // Get Gmail client with access token
+    const gmail = await getGmailClient(accessToken);
+    if (!gmail) {
+      return NextResponse.json(
+        { error: 'Failed to initialize Gmail client' },
+        { status: 500 }
+      );
+    }
 
     // Get pagination parameters from headers correctly
     const page = parseInt(request.headers.get('x-page') || '1');
@@ -576,16 +538,20 @@ export async function GET(request: NextRequest) {
       threadsResponse.data.threads
     );
 
-    // Process the thread details into emails
-    const emails = threadDetails
+    // Process the thread details into emails and filter out not relevant ones
+    const emailPromises = threadDetails
       .filter(Boolean)
-      .map((thread) => {
+      .map(async (thread) => {
         if (!thread?.data.messages || thread.data.messages.length === 0) return null;
 
         const message = thread.data.messages[0];
         const headers = message.payload?.headers || [];
         const getHeader = (name: string) =>
           headers.find((h) => h.name?.toLowerCase() === name.toLowerCase())?.value || '';
+
+        // Check if this email is marked as not relevant
+        const isNotRelevant = await isEmailNotRelevant(thread.data.id || '', db);
+        if (isNotRelevant) return null;
 
         return {
           id: thread.data.id || '',
@@ -595,8 +561,9 @@ export async function GET(request: NextRequest) {
           receivedAt: parseGmailDate(getHeader('date')),
           content: extractEmailBody(message),
         };
-      })
-      .filter(Boolean);
+      });
+
+    const emails = (await Promise.all(emailPromises)).filter(Boolean);
 
     // Check for more pages
     const hasMore = threadsResponse.data.nextPageToken !== undefined;
@@ -640,4 +607,44 @@ function calculateConfidence(subject: string, content: string, faqQuestion: stri
   const confidence = (subjectScore * 0.6) + (contentScore * 0.4);
 
   return confidence;
+}
+
+// Add helper functions for email parsing
+function extractEmailBody(message: gmail_v1.Schema$Message): string | null {
+  try {
+    if (!message.payload) return null;
+
+    // Try to get body from parts first
+    if (message.payload.parts) {
+      const textPart = message.payload.parts.find(part => 
+        part.mimeType === 'text/plain' || part.mimeType === 'text/html'
+      );
+      if (textPart?.body?.data) {
+        return Buffer.from(textPart.body.data, 'base64').toString();
+      }
+    }
+
+    // If no parts or no text part, try body directly
+    if (message.payload.body?.data) {
+      return Buffer.from(message.payload.body.data, 'base64').toString();
+    }
+
+    return null;
+  } catch (error) {
+    console.error('Error extracting email body:', error);
+    return null;
+  }
+}
+
+function parseGmailDate(dateStr: string): string {
+  try {
+    const date = new Date(dateStr);
+    if (isNaN(date.getTime())) {
+      return new Date().toISOString(); // Fallback to current date if invalid
+    }
+    return date.toISOString();
+  } catch (error) {
+    console.error('Error parsing date:', error);
+    return new Date().toISOString();
+  }
 } 

@@ -559,7 +559,6 @@ export default function FAQAutoReplyV2() {
     user?.accessToken,
     calculatePatternSimilarity,
     groupSimilarPatterns,
-    checkEmailAnsweredStatus,
     loading,
     loadingMore,
     refreshAccessToken,
@@ -1751,7 +1750,7 @@ Support Team`
   };
 
   // Update the email handling in handleEmailProcessing
-  const handleEmailProcessing = (emailId: string) => {
+  const handleEmailProcessing = useCallback((emailId: string) => {
     const currentEmail = emails.find(e => e.id === emailId);
     if (!currentEmail) return;
 
@@ -1768,24 +1767,7 @@ Support Team`
         // Handle matched email
       }
     }
-  };
-
-  const handleEmailClick = (emailId: string) => {
-    if (!selectedFAQ) return;
-    
-    const emailIds = selectedFAQ.emailIds || [];
-    emailIds.forEach((id: string) => {
-        const relatedEmail = emails.find(e => e.id === id);
-        if (relatedEmail) {
-            // ... existing code ...
-        }
-    });
-
-    const currentEmail = emails.find(e => e.id === emailId);
-    if (currentEmail && emailIds.includes(currentEmail.id)) {
-        // ... existing code ...
-    }
-  };
+  }, [emails, selectedFAQ]);
 
   // Add debug logging for state changes
   useEffect(() => {
