@@ -12,6 +12,96 @@ const openai = new OpenAI({
   apiKey: OPENAI_API_KEY || '',
 });
 
+// Constants for token management - much more conservative limits
+const MAX_TOTAL_TOKENS = 2000; // Very conservative limit to ensure we stay under 8k
+const MAX_SUBJECT_CHARS = 100;
+const MAX_CONTENT_CHARS = 4000; // Approximately 1000 tokens for content
+
+// Helper function to truncate content to stay within token limits
+function truncateContent(subject: string, content: string): { subject: string, content: string } {
+  // Truncate subject
+  const truncatedSubject = subject.length > MAX_SUBJECT_CHARS 
+    ? subject.slice(0, MAX_SUBJECT_CHARS) + '...'
+    : subject;
+
+  // Aggressively truncate content
+  let truncatedContent = content;
+  if (content.length > MAX_CONTENT_CHARS) {
+    const startLength = Math.floor(MAX_CONTENT_CHARS * 0.6); // 60% from start
+    const endLength = Math.floor(MAX_CONTENT_CHARS * 0.4);   // 40% from end
+    const start = content.slice(0, startLength);
+    const end = content.slice(-endLength);
+    truncatedContent = `${start}\n\n[... ${content.length - MAX_CONTENT_CHARS} characters truncated ...]\n\n${end}`;
+  }
+
+  // Debug logging
+  console.log('Content lengths:', {
+    originalSubject: subject.length,
+    truncatedSubject: truncatedSubject.length,
+    originalContent: content.length,
+    truncatedContent: truncatedContent.length,
+    totalChars: truncatedSubject.length + truncatedContent.length
+  });
+
+  return {
+    subject: truncatedSubject,
+    content: truncatedContent
+  };
+}
+
+// Helper function to check if email matches any existing FAQs
+async function checkAgainstFAQLibrary(subject: string, content: string, db: FirebaseFirestore.Firestore): Promise<boolean> {
+  try {
+    // Get existing FAQs
+    const faqSnapshot = await db.collection('faqs').get();
+    const faqs = faqSnapshot.docs.map(doc => doc.data());
+    
+    if (faqs.length === 0) {
+      console.log('No FAQs found in library');
+      return false;
+    }
+
+    // Check for matches using OpenAI
+    const response = await openai.chat.completions.create({
+      model: "gpt-4",
+      messages: [
+        {
+          role: "system",
+          content: `You are an expert at matching customer inquiries to FAQs. Compare the email to the FAQ library and determine if it matches any existing FAQ. Return a JSON object with:
+          {
+            "matches": boolean,
+            "matchedFAQ": string | null,
+            "confidence": number (0-1),
+            "explanation": string
+          }`
+        },
+        {
+          role: "user",
+          content: JSON.stringify({
+            email: {
+              subject,
+              content
+            },
+            faqs: faqs
+          })
+        }
+      ],
+      temperature: 0.1,
+      max_tokens: 500
+    });
+
+    if (!response.choices[0].message?.content) {
+      return false;
+    }
+
+    const analysis = JSON.parse(response.choices[0].message.content);
+    return analysis.matches && analysis.confidence > 0.7; // Return true if we have a high confidence match
+  } catch (error) {
+    console.error('Error checking against FAQ library:', error);
+    return false;
+  }
+}
+
 export async function POST(req: Request) {
   try {
     if (!OPENAI_API_KEY) {
@@ -28,6 +118,32 @@ export async function POST(req: Request) {
         { status: 400 }
       );
     }
+
+    // Initialize Firebase Admin
+    const app = getFirebaseAdmin();
+    if (!app) {
+      throw new Error('Failed to initialize Firebase Admin');
+    }
+    const db = getFirestore(app);
+
+    // Truncate content to stay within token limits
+    const { subject, content } = truncateContent(email.subject, email.content);
+
+    // First check if the email matches any existing FAQs
+    const matchesExistingFAQ = await checkAgainstFAQLibrary(subject, content, db);
+    if (matchesExistingFAQ) {
+      return NextResponse.json({
+        error: 'Email matches existing FAQ',
+        shouldNotMarkIrrelevant: true
+      }, { status: 400 });
+    }
+
+    // Debug log the final input size
+    console.log('Final input size:', {
+      subject: subject.length,
+      content: content.length,
+      total: subject.length + content.length
+    });
 
     try {
       // Analyze the email with OpenAI
@@ -55,12 +171,13 @@ export async function POST(req: Request) {
           {
             role: "user",
             content: JSON.stringify({
-              subject: email.subject,
-              content: email.content
+              subject: subject,
+              content: content
             })
           }
         ],
-        temperature: 0.1
+        temperature: 0.1,
+        max_tokens: MAX_TOTAL_TOKENS
       });
 
       if (!response.choices[0].message?.content) {
@@ -88,25 +205,16 @@ export async function POST(req: Request) {
         }
 
         // Store in Firestore
-        const app = getFirebaseAdmin();
-        if (app) {
-          try {
-            const db = getFirestore(app);
-            const notRelevantRef = db.collection('not_relevant_reasons');
-            
-            await notRelevantRef.add({
-              emailId: email.id,
-              reason: analysis.reason,
-              category: analysis.category,
-              confidence: analysis.confidence,
-              details: analysis.details,
-              createdAt: new Date().toISOString()
-            });
-          } catch (dbError) {
-            // Log but don't fail if storage fails
-            console.error('Error storing analysis in Firestore:', dbError);
-          }
-        }
+        const notRelevantRef = db.collection('not_relevant_reasons');
+        
+        await notRelevantRef.add({
+          emailId: email.id,
+          reason: analysis.reason,
+          category: analysis.category,
+          confidence: analysis.confidence,
+          details: analysis.details,
+          createdAt: new Date().toISOString()
+        });
 
         return NextResponse.json(analysis);
       } catch (parseError) {
