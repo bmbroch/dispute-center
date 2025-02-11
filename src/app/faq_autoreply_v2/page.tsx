@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Layout } from '../components/Layout';
 import { useAuth } from '@/lib/hooks/useAuth';
 import { toast } from 'sonner';
@@ -50,6 +50,30 @@ interface FAQ {
     // ... other properties ...
 }
 
+interface CacheData {
+  suggestedReply?: string;
+  questions?: Array<{ question: string }>;
+  timestamp?: number;
+  emails?: Email[];
+  genericFAQs?: GenericFAQ[];
+  answeredFAQs?: AnsweredFAQ[];
+}
+
+interface MatchedFAQ {
+  question: string;
+  answer: string;
+  confidence: number;
+}
+
+interface ExtendedEmail extends Omit<Email, 'status' | 'matchedFAQ'> {
+  questions?: GenericFAQ[];
+  suggestedReply?: string;
+  showFullContent?: boolean;
+  isGeneratingReply?: boolean;
+  matchedFAQ?: MatchedFAQ;
+  status?: 'pending' | 'processed' | 'replied';
+}
+
 // Add cache helper functions at the top of the file
 const CACHE_KEYS = {
   EMAILS: 'faq_emails_cache',
@@ -63,7 +87,7 @@ const CACHE_KEYS = {
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes in milliseconds
 const ANSWERED_FAQS_CACHE_DURATION = 30 * 60 * 1000; // 30 minutes for answered FAQs
 
-const loadFromCache = (key: string) => {
+const loadFromCache = (key: string): CacheData | null => {
   try {
     const cached = localStorage.getItem(key);
     if (!cached) return null;
@@ -78,7 +102,7 @@ const loadFromCache = (key: string) => {
       return null;
     }
 
-    return data;
+    return data as CacheData;
   } catch (error) {
     console.error('Error loading from cache:', error);
     return null;
@@ -150,13 +174,67 @@ const loadingState = {
   retryTimeout: null as NodeJS.Timeout | null,
 };
 
+const FIREBASE_CACHE_COLLECTION = 'email_cache';
+const FIREBASE_CACHE_DURATION = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
+
+const loadEmailsFromFirebase = async () => {
+  try {
+    const db = getFirebaseDB();
+    if (!db) return null;
+
+    const cacheRef = doc(db, FIREBASE_CACHE_COLLECTION, 'latest');
+    const cacheDoc = await getDoc(cacheRef);
+    
+    if (cacheDoc.exists()) {
+      const { emails, timestamp } = cacheDoc.data();
+      
+      // Check if cache is still valid
+      if (Date.now() - timestamp < FIREBASE_CACHE_DURATION) {
+        return emails;
+      }
+    }
+    return null;
+  } catch (error) {
+    console.error('Error loading emails from Firebase:', error);
+    return null;
+  }
+};
+
+const saveEmailsToFirebase = async (emails: Email[]) => {
+  try {
+    const db = getFirebaseDB();
+    if (!db) return;
+
+    const cacheRef = doc(db, FIREBASE_CACHE_COLLECTION, 'latest');
+    await setDoc(cacheRef, {
+      emails,
+      timestamp: Date.now()
+    });
+  } catch (error) {
+    console.error('Error saving emails to Firebase:', error);
+  }
+};
+
+// Add this helper function near the top of the component
+const formatTimeRemaining = (milliseconds: number): string => {
+  const seconds = Math.ceil(milliseconds / 1000);
+  if (seconds < 60) {
+    return `${seconds} second${seconds !== 1 ? 's' : ''}`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  return `${minutes} minute${minutes !== 1 ? 's' : ''} ${remainingSeconds} second${remainingSeconds !== 1 ? 's' : ''}`;
+};
+
 export default function FAQAutoReplyV2() {
+  console.log('=== Component Render Start ===');
   const { user, checkGmailAccess, refreshAccessToken } = useAuth();
-  const [emails, setEmails] = useState<Email[]>([]);
+  const [emails, setEmails] = useState<ExtendedEmail[]>([]);
   const [potentialFAQs, setPotentialFAQs] = useState<PotentialFAQ[]>([]);
   const [genericFAQs, setGenericFAQs] = useState<GenericFAQ[]>([]);
   const [activeTab, setActiveTab] = useState<'unanswered' | 'suggested' | 'faq_expansion' | 'faq_library'>('unanswered');
   const [loading, setLoading] = useState(true);
+  const [loadingFAQs, setLoadingFAQs] = useState(true);
   const [initialized, setInitialized] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [isAnalysisEnabled, setIsAnalysisEnabled] = useState(false);
@@ -173,9 +251,8 @@ export default function FAQAutoReplyV2() {
   const [lastFetchTimestamp, setLastFetchTimestamp] = useState<number>(0);
   const MIN_FETCH_INTERVAL = 30000; // 30 seconds
 
-  // Add this near the top of the component with other state declarations
-  const isSubscribed = React.useRef(true);
-  const lastFetchTime = React.useRef(0);
+  // Move isSubscribed ref before the useEffect
+  const isSubscribed = useRef(true);
 
   // Helper function to calculate pattern similarity
   const calculatePatternSimilarity = useCallback((pattern1: string, pattern2: string): number => {
@@ -260,7 +337,7 @@ export default function FAQAutoReplyV2() {
   }, [answeredFAQs, calculatePatternSimilarity]);
 
   // Add this helper function to check if all email questions have been answered
-  const checkEmailAnsweredStatus = useCallback((email: Email) => {
+  const checkEmailAnsweredStatus = useCallback((email: ExtendedEmail) => {
     const questions = emailQuestions.get(email.id) || [];
     if (questions.length === 0) return false;
 
@@ -290,7 +367,7 @@ export default function FAQAutoReplyV2() {
     return null;
   }, [emailQuestions, findMatchingAnsweredFAQ]);
 
-  // Modify the loadEmails function
+  // Update the loadEmails function to use Firebase cache
   const loadEmails = useCallback(async (forceRefresh = false, nextPage = 1) => {
     if (!user?.accessToken) {
       toast.error('Please sign in to access emails');
@@ -302,16 +379,6 @@ export default function FAQAutoReplyV2() {
       return;
     }
 
-    // Check if enough time has passed since last fetch
-    const now = Date.now();
-    const timeSinceLastFetch = now - lastFetchTimestamp;
-    
-    if (!forceRefresh && timeSinceLastFetch < MIN_FETCH_INTERVAL) {
-      const waitTime = Math.ceil((MIN_FETCH_INTERVAL - timeSinceLastFetch) / 1000);
-      toast.info(`Please wait ${waitTime} seconds before refreshing again`);
-      return;
-    }
-
     const isLoadingMore = nextPage > 1;
     if (!isLoadingMore) {
       setLoading(true);
@@ -320,6 +387,27 @@ export default function FAQAutoReplyV2() {
     }
 
     try {
+      // Try to load from Firebase cache first
+      if (nextPage === 1) {
+        const cachedEmails = await loadEmailsFromFirebase();
+        if (cachedEmails) {
+          console.log('Using cached emails from Firebase');
+          setEmails(cachedEmails);
+          setLoading(false); // Set loading to false since we have cached data to show
+        }
+      }
+
+      // Check if enough time has passed since last fetch
+      const now = Date.now();
+      const timeSinceLastFetch = now - lastFetchTimestamp;
+      
+      if (!forceRefresh && timeSinceLastFetch < MIN_FETCH_INTERVAL) {
+        const waitTime = Math.ceil((MIN_FETCH_INTERVAL - timeSinceLastFetch) / 1000);
+        const nextRefreshTime = new Date(now + (MIN_FETCH_INTERVAL - timeSinceLastFetch));
+        toast.info(`Using cached data. Next refresh available at ${nextRefreshTime.toLocaleTimeString()}`);
+        return;
+      }
+
       let response = await fetch(`/api/emails/inbox`, {
         headers: {
           'Authorization': `Bearer ${user.accessToken}`,
@@ -348,8 +436,8 @@ export default function FAQAutoReplyV2() {
       if (response.status === 429) {
         const data = await response.json();
         const retryAfter = data.retryAfter || MIN_FETCH_INTERVAL;
-        const waitSeconds = Math.ceil(retryAfter / 1000);
-        toast.info(`Rate limit reached. Please wait ${waitSeconds} seconds before trying again.`);
+        const nextRefreshTime = new Date(now + retryAfter);
+        toast.info(`Rate limit reached. Using cached data. Next refresh available at ${nextRefreshTime.toLocaleTimeString()}`);
         return;
       }
 
@@ -363,67 +451,44 @@ export default function FAQAutoReplyV2() {
       setLastFetchTimestamp(now);
 
       // Process emails and merge with cached data
-      const processedEmails = data.emails.map((email: Email) => {
-        const cached = emailQuestions.get(email.id) || {};
-        
-        // First check if we have this email analyzed in the current session
-        const existingEmail = emails.find(e => e.id === email.id);
-        if (existingEmail?.aiAnalysis || existingEmail?.analysis) {
-          return {
-            ...email,
-            aiAnalysis: existingEmail.aiAnalysis,
-            analysis: existingEmail.analysis,
-            matchedFAQ: existingEmail.matchedFAQ,
-            suggestedReply: existingEmail.suggestedReply || cached.suggestedReply
-          };
-        }
-
-        // If not in current session, use cached data
-        if (cached.questions) {
-          const aiAnalysis = {
-            questions: cached.questions,
-            timestamp: cached.timestamp
-          };
-          
-          return {
-            ...email,
-            aiAnalysis,
-            analysis: {
-              analysis: {
-                suggestedQuestions: cached.questions.map((q: { question: string }) => q.question)
-              }
-            },
-            suggestedReply: cached.suggestedReply,
-            matchedFAQ: checkEmailAnsweredStatus(email)
-          };
-        }
-
-        return email;
+      const processedEmails = data.emails.map((email: ExtendedEmail) => {
+        const cached = loadFromCache(`${CACHE_KEYS.AI_ANALYSIS}_${email.id}`) || {};
+        return {
+          ...email,
+          suggestedReply: email.suggestedReply || (cached as CacheData).suggestedReply || '',
+          questions: cached.questions || [],
+          timestamp: cached.timestamp || Date.now()
+        };
       });
 
       // Update emails state
       setEmails(prev => {
-        if (isLoadingMore) {
-          const newEmails = processedEmails.filter(
-            (email: Email) => !prev.some((e: Email) => e.id === email.id)
-          );
-          return [...prev, ...newEmails];
+        const newEmails = isLoadingMore
+          ? [...prev, ...processedEmails.filter(
+              (email: ExtendedEmail) => !prev.some((e: ExtendedEmail) => e.id === email.id)
+            )]
+          : processedEmails;
+
+        // Save to Firebase cache if this is a fresh load
+        if (!isLoadingMore) {
+          saveEmailsToFirebase(newEmails);
         }
-        return processedEmails;
+
+        return newEmails;
       });
 
       // Update questions map after processing emails
       const questionsMap = new Map<string, GenericFAQ[]>();
-      processedEmails.forEach(email => {
-        if (email.aiAnalysis?.questions) {
-          questionsMap.set(email.id, email.aiAnalysis.questions);
+      processedEmails.forEach((email: ExtendedEmail) => {
+        if (email.questions) {
+          questionsMap.set(email.id, email.questions);
         }
       });
       setEmailQuestions(questionsMap);
 
       // Process AI analysis results and update genericFAQs
       const newGenericFAQs: GenericFAQ[] = [];
-      processedEmails.forEach((email: Email) => {
+      processedEmails.forEach((email: ExtendedEmail) => {
         const questions = questionsMap.get(email.id) || [];
         if (questions.length > 0) {
           questions.forEach((question: GenericFAQ) => {
@@ -484,7 +549,10 @@ export default function FAQAutoReplyV2() {
         toast.error(error instanceof Error ? error.message : 'Failed to load emails');
       }
     } finally {
-      setLoading(false);
+      // Only set loading to false if we have emails or if there was an error
+      if (!isLoadingMore) {
+        setLoading(false);
+      }
       setLoadingMore(false);
     }
   }, [
@@ -542,14 +610,36 @@ export default function FAQAutoReplyV2() {
             const cachedQuestions = loadFromCache(CACHE_KEYS.QUESTIONS);
             const cachedGenericFAQs = loadFromCache(CACHE_KEYS.GENERIC_FAQS);
 
-            if (cachedEmails && cachedQuestions && cachedGenericFAQs) {
-              setEmails(cachedEmails);
+            if (cachedEmails?.emails && cachedQuestions && cachedGenericFAQs?.genericFAQs) {
+              const transformedEmails: ExtendedEmail[] = cachedEmails.emails.map((email: Email) => {
+                const { matchedFAQ, ...rest } = email;
+                const transformed: ExtendedEmail = {
+                  ...rest,
+                  questions: [],
+                  suggestedReply: '',
+                  showFullContent: false,
+                  isGeneratingReply: false,
+                  status: email.status || 'pending'
+                };
+                
+                if (matchedFAQ) {
+                  transformed.matchedFAQ = {
+                    question: matchedFAQ.question,
+                    answer: matchedFAQ.answer,
+                    confidence: matchedFAQ.confidence || 1
+                  };
+                }
+                
+                return transformed;
+              });
+              
+              setEmails(transformedEmails);
               const questionsMap = new Map<string, GenericFAQ[]>();
               Object.entries(cachedQuestions).forEach(([emailId, questions]) => {
                 questionsMap.set(emailId, questions as GenericFAQ[]);
               });
               setEmailQuestions(questionsMap);
-              setGenericFAQs(cachedGenericFAQs);
+              setGenericFAQs(cachedGenericFAQs.genericFAQs);
               setInitialized(true);
               setLoading(false);
               return;
@@ -577,52 +667,71 @@ export default function FAQAutoReplyV2() {
     };
   }, [user?.accessToken, checkGmailAccess, loadEmails, lastFetchTimestamp, initialized]);
 
-  // Update the loadAnsweredFAQs function
-  const loadAnsweredFAQs = useCallback(async () => {
-    // Check if enough time has passed since last fetch
-    const now = Date.now();
-    if (now - lastFetchTime.current < 30000) { // 30 seconds
-      return;
-    }
+  // Update the FAQ loading effect
+  useEffect(() => {
+    console.log('=== FAQ Loading Debug - Start ===');
+    console.log('isSubscribed.current:', isSubscribed.current);
+    console.log('Current answeredFAQs state:', answeredFAQs);
+    isSubscribed.current = true;
+    
+    const loadFAQs = async () => {
+      console.log('=== Loading FAQs ===');
+      try {
+        setLoadingFAQs(true);
+        
+        // Check cache first
+        const cachedFAQs = loadFromCache(CACHE_KEYS.GENERIC_FAQS);
+        console.log('Cached FAQs:', cachedFAQs);
+        
+        if (cachedFAQs?.genericFAQs) {
+          console.log('Using cached FAQs');
+          setGenericFAQs(cachedFAQs.genericFAQs);
+          setLoadingFAQs(false);
+          return;
+        }
 
-    try {
-      // Try to load from cache first
-      const cachedFAQs = loadFromCache(CACHE_KEYS.ANSWERED_FAQS);
-      if (cachedFAQs) {
-        setAnsweredFAQs(cachedFAQs);
-        return;
-      }
+        // If no cache, fetch from API
+        console.log('Fetching FAQs from API');
+        const response = await fetch('/api/faq/list');
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(`API Error: ${errorData.error || response.statusText}`);
+        }
+        const data = await response.json();
+        console.log('API Response:', data);
 
-      // If no valid cache or cache expired, fetch from API
-      lastFetchTime.current = now;
-      const response = await fetch('/api/faq/list');
-      if (!response.ok) {
-        throw new Error('Failed to load FAQs');
+        if (data.faqs) {
+          console.log(`Loaded ${data.faqs.length} FAQs from API`);
+          setGenericFAQs(data.faqs);
+          saveToCache(CACHE_KEYS.GENERIC_FAQS, { genericFAQs: data.faqs });
+        } else {
+          console.warn('No FAQs found in API response');
+        }
+      } catch (error) {
+        console.error('Error loading FAQs:', error);
+        toast.error(`Failed to load FAQs: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      } finally {
+        setLoadingFAQs(false);
       }
-      const data = await response.json();
-      if (!data.faqs || !Array.isArray(data.faqs)) {
-        throw new Error('Invalid FAQ data format');
-      }
-      
-      // Process loaded FAQs
-      const loadedFAQs = data.faqs.map((faq: any) => ({
-        question: faq.question,
-        answer: faq.answer,
-        category: faq.category || 'support',
-        confidence: faq.confidence || 1
-      }));
-      
-      if (isSubscribed.current) {
-        setAnsweredFAQs(loadedFAQs);
-        saveToCache(CACHE_KEYS.ANSWERED_FAQS, loadedFAQs);
-      }
-    } catch (error) {
-      console.error('Error loading answered FAQs:', error);
-      if (isSubscribed.current) {
-        toast.error('Failed to load FAQ library. Please try refreshing the page.');
-      }
-    }
-  }, []); // No dependencies needed since we're using refs
+    };
+
+    // Initial load
+    console.log('Starting initial FAQ load');
+    loadFAQs();
+    
+    // Set up periodic refresh every 30 seconds
+    const refreshInterval = setInterval(() => {
+      console.log('Running periodic FAQ refresh');
+      loadFAQs();
+    }, 30000);
+    
+    // Cleanup function
+    return () => {
+      console.log('Cleaning up FAQ loading effect');
+      isSubscribed.current = false;
+      clearInterval(refreshInterval);
+    };
+  }, []); // Empty dependency array since we're using isSubscribed.current
 
   // Add a separate effect for updating email statuses
   useEffect(() => {
@@ -641,34 +750,13 @@ export default function FAQAutoReplyV2() {
     }));
   }, [answeredFAQs, checkEmailAnsweredStatus]);
 
-  // Update the FAQ loading effect
-  useEffect(() => {
-    isSubscribed.current = true;
-    
-    // Initial load
-    loadAnsweredFAQs();
-    
-    // Set up periodic refresh
-    const refreshInterval = setInterval(() => {
-      if (isSubscribed.current) {
-        loadAnsweredFAQs();
-      }
-    }, 30000);
-    
-    // Cleanup
-    return () => {
-      isSubscribed.current = false;
-      clearInterval(refreshInterval);
-    };
-  }, [loadAnsweredFAQs]);
-
   const handleLoadMore = () => {
     if (!loadingMore && hasMore) {
       loadEmails(false, page + 1);
     }
   };
 
-  const handleAutoReply = async (email: Email) => {
+  const handleAutoReply = async (email: ExtendedEmail) => {
     try {
       const response = await fetch('/api/emails/auto-reply', {
         method: 'POST',
@@ -809,10 +897,9 @@ export default function FAQAutoReplyV2() {
       setEmailQuestions(prev => {
         const updated = new Map(prev);
         const emailIds = selectedFAQ?.emailIds || [];
-        emailIds.forEach((emailId: string) => {
+        emailIds.forEach(emailId => {
           const emailQuestions = updated.get(emailId) || [];
-          const updatedQuestions = emailQuestions.map((q: GenericFAQ) => {
-            // Check if this question matches the main question or any similar patterns
+          const updatedQuestions = emailQuestions.map(q => {
             if (q.question === selectedFAQ?.question || 
                 (selectedFAQ?.similarPatterns && selectedFAQ.similarPatterns.includes(q.question))) {
               return {
@@ -872,7 +959,7 @@ export default function FAQAutoReplyV2() {
 
       // Save updated state to cache
       saveToCache(CACHE_KEYS.QUESTIONS, Object.fromEntries(emailQuestions));
-      saveToCache(CACHE_KEYS.ANSWERED_FAQS, answeredFAQs);
+      saveToCache(CACHE_KEYS.ANSWERED_FAQS, { answeredFAQs: answeredFAQs });
 
       toast.success('FAQ saved successfully');
       setShowAnswerModal(false);
@@ -887,7 +974,7 @@ export default function FAQAutoReplyV2() {
     toast.success('FAQ ignored');
   };
 
-  const handleMarkNotRelevant = async (email: Email) => {
+  const handleMarkNotRelevant = async (email: ExtendedEmail) => {
     try {
       // Immediately remove the email from the list for better UX
       setEmails(prev => prev.filter(e => e.id !== email.id));
@@ -929,7 +1016,7 @@ export default function FAQAutoReplyV2() {
     }
   };
 
-  const handleCreateFAQ = async (email: Email) => {
+  const handleCreateFAQ = async (email: ExtendedEmail) => {
     if (!email.content) return;
     
     setAnalyzing(true);
@@ -968,14 +1055,15 @@ export default function FAQAutoReplyV2() {
         return updated;
       });
 
-      // Update genericFAQs state with proper relationships
-      setGenericFAQs(prevFAQs => {
+      // Add questions directly to answeredFAQs instead of genericFAQs
+      setAnsweredFAQs(prevFAQs => {
         const newFAQs = questionObjects.map(q => ({
-          ...q,
-          emailIds: [email.id]
+          question: q.question,
+          answer: '', // Empty answer that needs to be filled
+          category: q.category,
+          confidence: q.confidence
         }));
-        const combined = [...prevFAQs, ...newFAQs];
-        return groupSimilarPatterns(combined);
+        return [...prevFAQs, ...newFAQs];
       });
 
       toast.success(`Found ${questions.length} question${questions.length === 1 ? '' : 's'} in email`);
@@ -987,7 +1075,7 @@ export default function FAQAutoReplyV2() {
     }
   };
 
-  const generateContextualReply = async (email: Email) => {
+  const generateContextualReply = async (email: ExtendedEmail) => {
     try {
       // Set loading state
       setEmails(prev => prev.map(e => 
@@ -1051,7 +1139,7 @@ export default function FAQAutoReplyV2() {
     }
   };
 
-  const handleEditReply = (email: Email) => {
+  const handleEditReply = (email: ExtendedEmail) => {
     setEditingReply({
       emailId: email.id,
       reply: email.suggestedReply || `Dear ${email.sender.split('<')[0].trim()},
@@ -1100,9 +1188,9 @@ Support Team`
             id: 'faq_expansion', 
             label: 'Questions to Answer', 
             icon: LightbulbIcon, 
-            count: genericFAQs.length,
+            count: answeredFAQs.filter(faq => !faq.answer).length,
             description: 'Step 2: Answer extracted questions',
-            highlight: genericFAQs.length > 0
+            highlight: answeredFAQs.filter(faq => !faq.answer).length > 0
           },
           { 
             id: 'suggested', 
@@ -1115,7 +1203,7 @@ Support Team`
             id: 'faq_library',
             label: 'FAQ Library',
             icon: BookOpenIcon,
-            count: answeredFAQs.length,
+            count: answeredFAQs.filter(faq => faq.answer).length,
             description: 'Browse all answered FAQs'
           }
         ].map(({ id, label, icon: Icon, count, description, highlight }) => (
@@ -1123,38 +1211,77 @@ Support Team`
             key={id}
             onClick={() => setActiveTab(id as any)}
             className={`
-              group inline-flex flex-col items-center px-1 py-4 border-b-2 font-medium text-sm
-              ${activeTab === id 
-                ? 'border-indigo-500 text-indigo-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}
-              ${highlight ? 'animate-pulse' : ''}
+              group relative min-w-0 flex-1 overflow-hidden py-4 px-4 text-center text-sm font-medium hover:bg-gray-50 focus:z-10
+              ${activeTab === id ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}
+              ${highlight ? 'bg-yellow-50' : ''}
             `}
           >
-            <div className="flex items-center">
-              <Icon className={`h-5 w-5 mr-2 ${highlight ? 'text-yellow-500' : ''}`} />
-            {label}
-            <span className={`ml-2 py-0.5 px-2.5 rounded-full text-xs font-medium ${
-                activeTab === id 
-                  ? 'bg-indigo-100 text-indigo-600' 
-                  : highlight 
-                    ? 'bg-yellow-100 text-yellow-800'
-                    : 'bg-gray-100 text-gray-900'
-            }`}>
-              {count}
-            </span>
+            <div className="flex items-center justify-center space-x-2">
+              <Icon className="h-5 w-5" />
+              <span>{label}</span>
+              {count > 0 && (
+                <span className="ml-2 rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-600">
+                  {count}
+                </span>
+              )}
             </div>
-            <span className="text-xs text-gray-500 mt-1">{description}</span>
+            <span className="mt-1 block text-xs text-gray-500">{description}</span>
           </button>
         ))}
       </nav>
     </div>
   );
 
-  const renderUnansweredEmails = () => (
-    <div className="space-y-4">
-      {emails
-        .filter(email => !email.isReplied && !email.isNotRelevant && !email.matchedFAQ)
-        .map(email => {
+  const renderUnansweredEmails = () => {
+    // Show skeleton during initial load, refresh, or when we have no emails yet
+    if (loading && !emails.length) {  // Only show loading skeleton if we have no emails to display
+      return (
+        <div className="space-y-4">
+          {[1, 2, 3].map((i) => (
+            <div key={i} className="bg-white rounded-xl shadow-sm p-6 animate-pulse">
+              <div className="flex justify-between items-start mb-4">
+                <div className="w-3/4">
+                  <div className="h-5 bg-gray-200 rounded w-2/3 mb-2"></div>
+                  <div className="h-4 bg-gray-200 rounded w-1/2"></div>
+                </div>
+                <div className="h-8 w-24 bg-gray-200 rounded"></div>
+              </div>
+              <div className="space-y-3">
+                <div className="h-4 bg-gray-200 rounded w-full"></div>
+                <div className="h-4 bg-gray-200 rounded w-5/6"></div>
+                <div className="h-4 bg-gray-200 rounded w-4/6"></div>
+              </div>
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    const unansweredEmails = emails.filter(email => !email.isReplied && !email.isNotRelevant && !email.matchedFAQ);
+    
+    // Calculate time until next refresh
+    const now = Date.now();
+    const timeSinceLastFetch = now - lastFetchTimestamp;
+    const timeUntilNextRefresh = Math.max(0, MIN_FETCH_INTERVAL - timeSinceLastFetch);
+    const showRefreshTime = timeUntilNextRefresh > 0;
+
+    return (
+      <div className="space-y-4">
+        {/* Status banner for rate limits */}
+        {showRefreshTime && (
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+            <div className="flex items-center">
+              <ClockIcon className="h-5 w-5 text-blue-400 mr-2" />
+              <div className="flex-1">
+                <p className="text-sm text-blue-700">
+                  Showing cached emails. Next refresh available in {formatTimeRemaining(timeUntilNextRefresh)}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {unansweredEmails.map(email => {
           const questions = emailQuestions.get(email.id) || [];
           const hasQuestions = questions.length > 0;
           const answeredQuestions = questions.filter(q => findMatchingAnsweredFAQ(q.question));
@@ -1287,8 +1414,17 @@ Support Team`
             </div>
           );
         })}
-    </div>
-  );
+
+        {/* Loading more indicator */}
+        {loadingMore && (
+          <div className="bg-white rounded-xl shadow-sm p-6 animate-pulse">
+            <div className="h-4 bg-gray-200 rounded w-3/4 mb-4"></div>
+            <div className="h-4 bg-gray-200 rounded w-1/2"></div>
+          </div>
+        )}
+      </div>
+    );
+  };
 
   const renderAnswerModal = () => (
     <Transition.Root show={showAnswerModal} as={Fragment}>
@@ -1317,6 +1453,15 @@ Support Team`
               leaveTo="opacity-0 scale-95"
             >
               <Dialog.Panel className="w-full max-w-2xl transform overflow-hidden rounded-2xl bg-white p-8 text-left align-middle shadow-xl transition-all">
+                <div className="mb-6">
+                  <label className="flex items-center text-lg font-medium text-gray-900 mb-2">
+                    ❓ Question
+                  </label>
+                  <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
+                    <p className="text-gray-800">{selectedFAQ?.question}</p>
+                  </div>
+                </div>
+
                 <div>
                   <label htmlFor="answer" className="flex items-center text-lg font-medium text-gray-900 mb-3">
                     🙏 Answer
@@ -1324,7 +1469,7 @@ Support Team`
                   <textarea
                     id="answer"
                     rows={8}
-                    className="w-full rounded-lg border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 px-4 py-3 text-gray-900"
+                    className="w-full rounded-lg border-2 border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 px-4 py-3 text-gray-900"
                     value={answer}
                     onChange={(e) => setAnswer(e.target.value)}
                     placeholder="Write a detailed answer that will help future similar questions..."
@@ -1334,7 +1479,7 @@ Support Team`
                   </p>
                 </div>
 
-                <div className="bg-yellow-50 rounded-lg p-6">
+                <div className="bg-yellow-50 rounded-lg p-6 mt-6">
                   <h4 className="text-sm font-medium text-yellow-800 mb-2">AI Learning Note</h4>
                   <p className="text-sm text-yellow-700">
                     This FAQ pattern will help the AI identify and respond to similar questions in the future. 
@@ -1377,58 +1522,34 @@ Support Team`
     loadEmails(true);
   };
 
-  // Update the main render logic to handle auth state better
-  const renderContent = () => {
-    if (!initialized && loading) {
-      return (
-        <div className="text-center py-12">
-          <div className="inline-flex items-center px-4 py-2 font-semibold leading-6 text-sm shadow rounded-md text-white bg-indigo-500">
-            <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-            </svg>
-            Loading emails...
-          </div>
-        </div>
-      );
+  // Main render function debug
+  const renderMainContent = () => {
+    console.log('=== Rendering Main Content ===');
+    console.log('Current activeTab:', activeTab);
+    console.log('Current answeredFAQs:', answeredFAQs);
+    
+    if (loading) {
+      console.log('Showing loading state');
+      return <div>Loading...</div>;
     }
 
-    if (!user?.accessToken) {
-      return (
-        <div className="text-center py-12">
-          <div className="text-gray-500 mb-4">Please sign in with Gmail to view emails</div>
-          <button
-            onClick={() => window.location.href = '/api/auth/signin'}
-            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700"
-          >
-            Sign in with Gmail
-          </button>
-        </div>
-      );
+    switch (activeTab) {
+      case 'unanswered':
+        console.log('Rendering unanswered tab');
+        return renderUnansweredEmails();
+      case 'suggested':
+        console.log('Rendering suggested tab');
+        return renderSuggestedReplies();
+      case 'faq_expansion':
+        console.log('Rendering FAQ expansion tab');
+        return renderFAQExpansion();
+      case 'faq_library':
+        console.log('Rendering FAQ library tab');
+        return renderFAQLibrary();
+      default:
+        console.log('Unknown tab:', activeTab);
+        return null;
     }
-
-    if (initialized && emails.length === 0 && !loading) {
-      return (
-        <div className="text-center py-12">
-          <div className="text-gray-500 mb-4">No emails found</div>
-          <button
-            onClick={handleTryAgain}
-            className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
-          >
-            Try Again
-          </button>
-        </div>
-      );
-    }
-
-    return (
-      <div>
-        {activeTab === 'unanswered' && renderUnansweredEmails()}
-        {activeTab === 'suggested' && renderSuggestedReplies()}
-        {activeTab === 'faq_expansion' && renderFAQExpansion()}
-        {activeTab === 'faq_library' && renderFAQLibrary()}
-      </div>
-    );
   };
 
   // Add the missing render functions
@@ -1475,7 +1596,9 @@ Support Team`
   };
 
   const renderFAQExpansion = () => {
-    if (genericFAQs.length === 0) {
+    const unansweredFAQs = answeredFAQs.filter(faq => !faq.answer);
+    
+    if (unansweredFAQs.length === 0) {
       return (
         <div className="text-center py-8 text-gray-500">
           No questions to answer yet
@@ -1485,7 +1608,7 @@ Support Team`
 
     return (
       <div className="space-y-4">
-        {genericFAQs.map(faq => (
+        {unansweredFAQs.map(faq => (
           <div key={faq.question} className="bg-white rounded-lg shadow p-6">
             <div className="flex justify-between items-start mb-4">
               <div>
@@ -1496,76 +1619,131 @@ Support Team`
               </div>
               <div className="flex items-center space-x-2">
                 <button
-                  onClick={() => handleAddToFAQLibrary(faq)}
+                  onClick={() => handleAddToFAQLibrary({
+                    ...faq,
+                    emailIds: [],
+                    requiresCustomerSpecificInfo: false
+                  })}
                   className="inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700"
                 >
-                  Add to Library
+                  Add Answer
                 </button>
                 <button
-                  onClick={() => handleIgnoreFAQ(faq)}
+                  onClick={() => handleIgnoreFAQ({
+                    ...faq,
+                    emailIds: [],
+                    requiresCustomerSpecificInfo: false
+                  })}
                   className="inline-flex items-center px-3 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
                 >
                   Ignore
                 </button>
               </div>
             </div>
-            {faq.emailIds && faq.emailIds.length > 0 && (
-              <div className="mt-4">
-                <h4 className="text-sm font-medium mb-2">Related Emails:</h4>
-                <div className="space-y-2">
-                  {faq.emailIds.map(emailId => {
-                    const relatedEmail = emails.find(e => e.id === emailId);
-                    return relatedEmail ? (
-                      <div key={emailId} className="text-sm text-gray-600">
-                        {relatedEmail.subject}
-                      </div>
-                    ) : null;
-                  })}
-                </div>
-              </div>
-            )}
           </div>
         ))}
       </div>
     );
   };
 
+  // Add this function to load FAQs from API
+  const loadFAQsFromAPI = async () => {
+    console.log('=== Loading FAQs from API ===');
+    try {
+      setLoadingFAQs(true);
+      
+      const response = await fetch('/api/faq/list');
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(`API Error: ${errorData.error || response.statusText}`);
+      }
+      
+      const data = await response.json();
+      console.log('API Response:', data);
+
+      if (data.faqs) {
+        setAnsweredFAQs(data.faqs);
+        saveToCache(CACHE_KEYS.ANSWERED_FAQS, { answeredFAQs: data.faqs });
+      }
+    } catch (error) {
+      console.error('Error loading FAQs:', error);
+      toast.error('Failed to load FAQ library');
+    } finally {
+      setLoadingFAQs(false);
+    }
+  };
+
+  // Add effect to load FAQs when component mounts and when tab changes to FAQ library
+  useEffect(() => {
+    if (activeTab === 'faq_library') {
+      loadFAQsFromAPI();
+    }
+  }, [activeTab]);
+
+  // Add effect to load FAQs on initial mount
+  useEffect(() => {
+    loadFAQsFromAPI();
+  }, []);
+
   const renderFAQLibrary = () => {
-    if (answeredFAQs.length === 0) {
+    console.log('=== Rendering FAQ Library ===');
+    console.log('Current FAQs:', answeredFAQs);
+    
+    if (loadingFAQs) {
       return (
-        <div className="text-center py-8 text-gray-500">
-          No FAQs in library yet
+        <div className="flex justify-center items-center h-64">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900" />
+        </div>
+      );
+    }
+
+    if (!answeredFAQs.length) {
+      return (
+        <div className="text-center py-8">
+          <p className="text-gray-500">No FAQs in the library yet.</p>
         </div>
       );
     }
 
     return (
-      <div className="space-y-4">
+      <div className="space-y-6">
         {answeredFAQs.map(faq => (
           <div key={faq.question} className="bg-white rounded-lg shadow p-6">
-            <div className="flex justify-between items-start mb-4">
-              <div>
-                <h3 className="text-lg font-medium">{faq.question}</h3>
-                <p className="text-sm text-gray-500">
-                  Category: {faq.category} · Confidence: {Math.round(faq.confidence * 100)}%
-                </p>
+            <div className="flex justify-between items-start">
+              <div className="flex-1">
+                <h3 className="text-xl font-bold text-gray-900 mb-2">
+                  {faq.question}
+                </h3>
+                <div className="flex items-center space-x-2 text-sm text-gray-500 mb-4">
+                  <span className="inline-flex items-center px-2.5 py-0.5 rounded-full bg-gray-100 text-gray-800">
+                    {faq.category}
+                  </span>
+                  <span>•</span>
+                  <span>
+                    Confidence: {Math.round(faq.confidence * 100)}%
+                  </span>
+                </div>
+                <div className="prose prose-sm max-w-none">
+                  <p className="text-gray-700 whitespace-pre-line">{faq.answer}</p>
+                </div>
               </div>
-              <div className="flex items-center space-x-2">
+              <div className="flex items-start space-x-2 ml-4">
                 <button
                   onClick={() => handleEditLibraryFAQ(faq)}
-                  className="text-blue-600 hover:text-blue-800"
+                  className="p-2 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded-full transition-colors"
+                  title="Edit FAQ"
                 >
                   <PencilIcon className="h-5 w-5" />
                 </button>
                 <button
                   onClick={() => handleDeleteLibraryFAQ(faq)}
-                  className="text-red-600 hover:text-red-800"
+                  className="p-2 text-red-600 hover:text-red-800 hover:bg-red-50 rounded-full transition-colors"
+                  title="Delete FAQ"
                 >
                   <TrashIcon className="h-5 w-5" />
                 </button>
               </div>
             </div>
-            <p className="text-gray-700 whitespace-pre-line">{faq.answer}</p>
           </div>
         ))}
       </div>
@@ -1609,10 +1787,25 @@ Support Team`
     }
   };
 
+  // Add debug logging for state changes
+  useEffect(() => {
+    console.log('=== FAQ State Debug ===');
+    console.log('Generic FAQs:', genericFAQs);
+    console.log('Answered FAQs:', answeredFAQs);
+    console.log('Email Questions:', Array.from(emailQuestions.entries()));
+    console.log('Active Tab:', activeTab);
+    console.log('Loading States:', {
+      loading,
+      loadingFAQs,
+      loadingCache,
+      loadingMore
+    });
+  }, [genericFAQs, answeredFAQs, emailQuestions, activeTab, loading, loadingFAQs, loadingCache, loadingMore]);
+
   return (
     <Layout>
-      <div className="min-h-screen bg-gray-50">
-        <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <div className="min-h-screen bg-gray-100 py-6">
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between mb-8">
             <div>
               <h1 className="text-2xl font-semibold text-gray-900">
@@ -1625,7 +1818,11 @@ Support Team`
             {user?.accessToken && (
               <button
                 onClick={handleRefresh}
-                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700"
+                disabled={Date.now() - lastFetchTimestamp < MIN_FETCH_INTERVAL}
+                className={`inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white
+                  ${Date.now() - lastFetchTimestamp < MIN_FETCH_INTERVAL 
+                    ? 'bg-gray-400 cursor-not-allowed'
+                    : 'bg-indigo-600 hover:bg-indigo-700'}`}
               >
                 <svg className={`mr-2 h-4 w-4 ${analyzing ? 'animate-spin' : ''}`} viewBox="0 0 24 24">
                   <path fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/>
@@ -1636,7 +1833,7 @@ Support Team`
           </div>
 
           {user?.accessToken && renderTabs()}
-          {renderContent()}
+          {renderMainContent()}
           {renderAnswerModal()}
         </div>
       </div>
