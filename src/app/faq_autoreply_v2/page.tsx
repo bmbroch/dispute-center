@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Layout } from '../components/Layout';
 import { useAuth } from '@/lib/hooks/useAuth';
 import { toast } from 'sonner';
@@ -134,6 +134,22 @@ interface EditingReply {
   reply: string;
 }
 
+// Add debounce helper at the top of the file
+const debounce = (func: Function, wait: number) => {
+  let timeout: NodeJS.Timeout;
+  return (...args: any[]) => {
+    clearTimeout(timeout);
+    timeout = setTimeout(() => func(...args), wait);
+  };
+};
+
+// Add loading state tracking
+const loadingState = {
+  isLoading: false,
+  lastFetchTime: 0,
+  retryTimeout: null as NodeJS.Timeout | null,
+};
+
 export default function FAQAutoReplyV2() {
   const { user, checkGmailAccess, refreshAccessToken } = useAuth();
   const [emails, setEmails] = useState<Email[]>([]);
@@ -141,6 +157,7 @@ export default function FAQAutoReplyV2() {
   const [genericFAQs, setGenericFAQs] = useState<GenericFAQ[]>([]);
   const [activeTab, setActiveTab] = useState<'unanswered' | 'suggested' | 'faq_expansion' | 'faq_library'>('unanswered');
   const [loading, setLoading] = useState(true);
+  const [initialized, setInitialized] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [isAnalysisEnabled, setIsAnalysisEnabled] = useState(false);
   const [showAnswerModal, setShowAnswerModal] = useState(false);
@@ -153,6 +170,8 @@ export default function FAQAutoReplyV2() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [answeredFAQs, setAnsweredFAQs] = useState<AnsweredFAQ[]>([]);
   const [editingReply, setEditingReply] = useState<EditingReply | null>(null);
+  const [lastFetchTimestamp, setLastFetchTimestamp] = useState<number>(0);
+  const MIN_FETCH_INTERVAL = 30000; // 30 seconds
 
   // Add this near the top of the component with other state declarations
   const isSubscribed = React.useRef(true);
@@ -271,9 +290,25 @@ export default function FAQAutoReplyV2() {
     return null;
   }, [emailQuestions, findMatchingAnsweredFAQ]);
 
+  // Modify the loadEmails function
   const loadEmails = useCallback(async (forceRefresh = false, nextPage = 1) => {
     if (!user?.accessToken) {
       toast.error('Please sign in to access emails');
+      return;
+    }
+
+    // Prevent multiple simultaneous loads
+    if (loading || loadingMore) {
+      return;
+    }
+
+    // Check if enough time has passed since last fetch
+    const now = Date.now();
+    const timeSinceLastFetch = now - lastFetchTimestamp;
+    
+    if (!forceRefresh && timeSinceLastFetch < MIN_FETCH_INTERVAL) {
+      const waitTime = Math.ceil((MIN_FETCH_INTERVAL - timeSinceLastFetch) / 1000);
+      toast.info(`Please wait ${waitTime} seconds before refreshing again`);
       return;
     }
 
@@ -285,60 +320,37 @@ export default function FAQAutoReplyV2() {
     }
 
     try {
-      // Get Firestore instance
-      const db = getFirebaseDB();
-      
-      // Create a map to store all cached data
-      const cachedData = new Map();
-      
-      if (db) {
-        // Get cached questions and analysis
-        const questionsRef = collection(db, 'email_questions');
-        const questionsSnapshot = await getDocs(questionsRef);
-        questionsSnapshot.forEach(doc => {
-          cachedData.set(doc.id, {
-            questions: doc.data().questions,
-            timestamp: doc.data().timestamp
-          });
-        });
-
-        // Get cached replies
-        const repliesRef = collection(db, 'email_replies');
-        const repliesSnapshot = await getDocs(repliesRef);
-        repliesSnapshot.forEach(doc => {
-          const existing = cachedData.get(doc.id) || {};
-          cachedData.set(doc.id, {
-            ...existing,
-            suggestedReply: doc.data().reply,
-            replyTimestamp: doc.data().timestamp
-          });
-        });
-      }
-
       let response = await fetch(`/api/emails/inbox`, {
         headers: {
           'Authorization': `Bearer ${user.accessToken}`,
           'X-Page': nextPage.toString(),
-          'X-Force-Refresh': forceRefresh ? 'true' : 'false'
+          'X-Force-Refresh': forceRefresh ? 'true' : 'false',
+          'X-Last-Fetch': lastFetchTimestamp.toString()
         }
       });
       
       if (response.status === 401) {
         const newToken = await refreshAccessToken();
         if (!newToken) {
-          toast.error('Session expired. Please sign in again.');
-          setLoading(false);
-          setLoadingMore(false);
-          return;
+          throw new Error('Session expired. Please sign in again.');
         }
         
         response = await fetch(`/api/emails/inbox`, {
           headers: {
             'Authorization': `Bearer ${newToken}`,
             'X-Page': nextPage.toString(),
-            'X-Force-Refresh': forceRefresh ? 'true' : 'false'
+            'X-Force-Refresh': forceRefresh ? 'true' : 'false',
+            'X-Last-Fetch': lastFetchTimestamp.toString()
           }
         });
+      }
+
+      if (response.status === 429) {
+        const data = await response.json();
+        const retryAfter = data.retryAfter || MIN_FETCH_INTERVAL;
+        const waitSeconds = Math.ceil(retryAfter / 1000);
+        toast.info(`Rate limit reached. Please wait ${waitSeconds} seconds before trying again.`);
+        return;
       }
 
       if (!response.ok) {
@@ -347,9 +359,12 @@ export default function FAQAutoReplyV2() {
 
       const data = await response.json();
       
+      // Update last fetch timestamp on successful response
+      setLastFetchTimestamp(now);
+
       // Process emails and merge with cached data
       const processedEmails = data.emails.map((email: Email) => {
-        const cached = cachedData.get(email.id) || {};
+        const cached = emailQuestions.get(email.id) || {};
         
         // First check if we have this email analyzed in the current session
         const existingEmail = emails.find(e => e.id === email.id);
@@ -370,13 +385,6 @@ export default function FAQAutoReplyV2() {
             timestamp: cached.timestamp
           };
           
-          // Update questions map
-          const questionsMap = new Map<string, GenericFAQ[]>();
-          emailQuestions.forEach((questions, emailId) => {
-            questionsMap.set(emailId, questions);
-          });
-          setEmailQuestions(questionsMap);
-          
           return {
             ...email,
             aiAnalysis,
@@ -394,21 +402,29 @@ export default function FAQAutoReplyV2() {
       });
 
       // Update emails state
-      if (isLoadingMore) {
-        setEmails(prev => {
+      setEmails(prev => {
+        if (isLoadingMore) {
           const newEmails = processedEmails.filter(
             (email: Email) => !prev.some((e: Email) => e.id === email.id)
           );
           return [...prev, ...newEmails];
-        });
-      } else {
-        setEmails(processedEmails);
-      }
+        }
+        return processedEmails;
+      });
+
+      // Update questions map after processing emails
+      const questionsMap = new Map<string, GenericFAQ[]>();
+      processedEmails.forEach(email => {
+        if (email.aiAnalysis?.questions) {
+          questionsMap.set(email.id, email.aiAnalysis.questions);
+        }
+      });
+      setEmailQuestions(questionsMap);
 
       // Process AI analysis results and update genericFAQs
       const newGenericFAQs: GenericFAQ[] = [];
       processedEmails.forEach((email: Email) => {
-        const questions = emailQuestions.get(email.id) || [];
+        const questions = questionsMap.get(email.id) || [];
         if (questions.length > 0) {
           questions.forEach((question: GenericFAQ) => {
             const existingQuestion = newGenericFAQs.find(faq => 
@@ -427,14 +443,7 @@ export default function FAQAutoReplyV2() {
               if (!existingQuestion.emailIds) {
                 existingQuestion.emailIds = [];
               }
-              
-              const currentEmailId = email.id;
-              const currentEmail = emails.find(e => e.id === currentEmailId);
-              if (currentEmail && !existingQuestion.emailIds.includes(currentEmail.id)) {
-                existingQuestion.emailIds.push(currentEmail.id);
-              } else {
-                existingQuestion.emailIds = currentEmail ? [currentEmail.id] : [];
-              }
+              existingQuestion.emailIds.push(email.id);
             }
           });
         }
@@ -444,32 +453,51 @@ export default function FAQAutoReplyV2() {
       const groupedFAQs = groupSimilarPatterns(newGenericFAQs);
 
       // Update genericFAQs state
-      if (isLoadingMore) {
-        setGenericFAQs(prev => {
+      setGenericFAQs(prev => {
+        if (isLoadingMore) {
           const combined = [...prev, ...groupedFAQs];
           return groupSimilarPatterns(combined);
-        });
-      } else {
-        setGenericFAQs(groupedFAQs);
-      }
+        }
+        return groupedFAQs;
+      });
 
       // Update pagination state
       setHasMore(data.hasMore || false);
       setPage(nextPage);
 
+      // Save to cache
+      if (!isLoadingMore) {
+        saveToCache(CACHE_KEYS.EMAILS, processedEmails);
+        saveToCache(CACHE_KEYS.QUESTIONS, Object.fromEntries(questionsMap));
+        saveToCache(CACHE_KEYS.GENERIC_FAQS, groupedFAQs);
+      }
+
       // If we got no new emails but hasMore is true, try loading the next page
       if (processedEmails.length === 0 && data.hasMore) {
         return loadEmails(forceRefresh, nextPage + 1);
       }
-
-        } catch (error) {
+    } catch (error) {
       console.error('Error loading emails:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to load emails');
-        } finally {
+      if (error instanceof Error && error.message.includes('Quota exceeded')) {
+        toast.error('Gmail API quota reached. Please try again in a few minutes.');
+      } else {
+        toast.error(error instanceof Error ? error.message : 'Failed to load emails');
+      }
+    } finally {
       setLoading(false);
       setLoadingMore(false);
     }
-  }, [user?.accessToken, emails, calculatePatternSimilarity, groupSimilarPatterns, checkEmailAnsweredStatus, emailQuestions, refreshAccessToken]);
+  }, [
+    user?.accessToken,
+    calculatePatternSimilarity,
+    groupSimilarPatterns,
+    checkEmailAnsweredStatus,
+    loading,
+    loadingMore,
+    refreshAccessToken,
+    lastFetchTimestamp,
+    MIN_FETCH_INTERVAL
+  ]);
 
   useEffect(() => {
     // Check if analysis is enabled via environment variable
@@ -484,49 +512,70 @@ export default function FAQAutoReplyV2() {
       }
 
       try {
-        // First check cache while we verify Gmail access
-        const hasValidCache = Object.values(CACHE_KEYS).every(key => 
-          key !== CACHE_KEYS.LAST_FETCH && isCacheValid(key)
-        );
-
-        if (hasValidCache) {
-          const cachedEmails = loadFromCache(CACHE_KEYS.EMAILS);
-          const cachedQuestions = loadFromCache(CACHE_KEYS.QUESTIONS);
-          const cachedGenericFAQs = loadFromCache(CACHE_KEYS.GENERIC_FAQS);
-
-          if (cachedEmails && cachedQuestions && cachedGenericFAQs) {
-            setEmails(cachedEmails);
-            const questionsMap = new Map<string, GenericFAQ[]>();
-            emailQuestions.forEach((questions, emailId) => {
-              questionsMap.set(emailId, questions);
-            });
-            setEmailQuestions(questionsMap);
-            setGenericFAQs(cachedGenericFAQs);
+        if (!initialized) {
+          setLoading(true);
+          
+          // First verify Gmail access before doing anything else
+          const hasAccess = await checkGmailAccess();
+          if (!hasAccess) {
+            toast.error('Gmail access is required. Please sign in with Gmail permissions.');
             setLoading(false);
+            return;
           }
-        }
 
-        // Verify Gmail access in parallel with showing cached data
-        const hasAccess = await checkGmailAccess();
-        if (!hasAccess) {
-          toast.error('Gmail access is required. Please sign in with Gmail permissions.');
-          setLoading(false);
-          return;
-        }
+          // Check if enough time has passed since last fetch
+          const now = Date.now();
+          const timeSinceLastFetch = now - lastFetchTimestamp;
+          if (timeSinceLastFetch < MIN_FETCH_INTERVAL) {
+            console.debug('Skipping fetch - too soon since last fetch');
+            setLoading(false);
+            return;
+          }
 
-        // If we didn't have valid cache or want fresh data, load it now
-        if (!hasValidCache || emails.length === 0) {
+          // Check cache only after verifying access
+          const hasValidCache = Object.values(CACHE_KEYS).every(key => 
+            key !== CACHE_KEYS.LAST_FETCH && isCacheValid(key)
+          );
+
+          if (hasValidCache) {
+            const cachedEmails = loadFromCache(CACHE_KEYS.EMAILS);
+            const cachedQuestions = loadFromCache(CACHE_KEYS.QUESTIONS);
+            const cachedGenericFAQs = loadFromCache(CACHE_KEYS.GENERIC_FAQS);
+
+            if (cachedEmails && cachedQuestions && cachedGenericFAQs) {
+              setEmails(cachedEmails);
+              const questionsMap = new Map<string, GenericFAQ[]>();
+              Object.entries(cachedQuestions).forEach(([emailId, questions]) => {
+                questionsMap.set(emailId, questions as GenericFAQ[]);
+              });
+              setEmailQuestions(questionsMap);
+              setGenericFAQs(cachedGenericFAQs);
+              setInitialized(true);
+              setLoading(false);
+              return;
+            }
+          }
+
+          // If we don't have valid cache, load fresh data
           await loadEmails(true);
-      }
-    } catch (error) {
+          setLastFetchTimestamp(now);
+          setInitialized(true);
+        }
+      } catch (error) {
         console.error('Error initializing:', error);
         toast.error('Failed to initialize. Please try again.');
-      setLoading(false);
-    }
+      } finally {
+        setLoading(false);
+      }
     };
 
     initialize();
-  }, [user?.accessToken, emails.length, checkGmailAccess, loadEmails, emailQuestions]);
+
+    // Cleanup function to ensure we don't set state after unmount
+    return () => {
+      isSubscribed.current = false;
+    };
+  }, [user?.accessToken, checkGmailAccess, loadEmails, lastFetchTimestamp, initialized]);
 
   // Update the loadAnsweredFAQs function
   const loadAnsweredFAQs = useCallback(async () => {
@@ -958,11 +1007,12 @@ export default function FAQAutoReplyV2() {
           content: email.content,
           matchedFAQ: email.matchedFAQ,
           questions: emailQuestions.get(email.id) || [],
-          answeredFAQs: answeredFAQs.filter(faq => 
-            (emailQuestions.get(email.id) || []).some(q => 
+          answeredFAQs: answeredFAQs.filter(faq => {
+            const emailQuestionsList = emailQuestions.get(email.id) || [];
+            return emailQuestionsList.some(q => 
               calculatePatternSimilarity(q.question, faq.question) > SIMILARITY_THRESHOLD
-            )
-          )
+            );
+          })
         })
       });
 
@@ -1329,23 +1379,23 @@ Support Team`
 
   // Update the main render logic to handle auth state better
   const renderContent = () => {
-    if (loading) {
-  return (
-            <div className="text-center py-12">
-              <div className="inline-flex items-center px-4 py-2 font-semibold leading-6 text-sm shadow rounded-md text-white bg-indigo-500">
-                <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg>
-                Loading emails...
-              </div>
-            </div>
+    if (!initialized && loading) {
+      return (
+        <div className="text-center py-12">
+          <div className="inline-flex items-center px-4 py-2 font-semibold leading-6 text-sm shadow rounded-md text-white bg-indigo-500">
+            <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            Loading emails...
+          </div>
+        </div>
       );
     }
 
     if (!user?.accessToken) {
       return (
-            <div className="text-center py-12">
+        <div className="text-center py-12">
           <div className="text-gray-500 mb-4">Please sign in with Gmail to view emails</div>
           <button
             onClick={() => window.location.href = '/api/auth/signin'}
@@ -1353,31 +1403,31 @@ Support Team`
           >
             Sign in with Gmail
           </button>
-            </div>
+        </div>
       );
     }
 
-    if (emails.length === 0 && !loading) {
+    if (initialized && emails.length === 0 && !loading) {
       return (
-            <div className="text-center py-12">
-              <div className="text-gray-500 mb-4">No emails found</div>
-              <button
-                onClick={handleTryAgain}
-                className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
-              >
-                Try Again
-              </button>
-            </div>
+        <div className="text-center py-12">
+          <div className="text-gray-500 mb-4">No emails found</div>
+          <button
+            onClick={handleTryAgain}
+            className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+          >
+            Try Again
+          </button>
+        </div>
       );
     }
 
     return (
-            <div>
-              {activeTab === 'unanswered' && renderUnansweredEmails()}
-              {activeTab === 'suggested' && renderSuggestedReplies()}
-              {activeTab === 'faq_expansion' && renderFAQExpansion()}
+      <div>
+        {activeTab === 'unanswered' && renderUnansweredEmails()}
+        {activeTab === 'suggested' && renderSuggestedReplies()}
+        {activeTab === 'faq_expansion' && renderFAQExpansion()}
         {activeTab === 'faq_library' && renderFAQLibrary()}
-            </div>
+      </div>
     );
   };
 

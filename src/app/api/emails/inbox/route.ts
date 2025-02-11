@@ -29,6 +29,28 @@ const RATE_LIMIT_DELAY = 1000; // 1 second between API calls
 const TARGET_SUPPORT_EMAILS = 5; // Lowered from 20 to 5 until we fix analysis issues
 const MAX_EMAILS_TO_PROCESS = 25; // Lowered from 100 to 25 until we fix analysis issues
 
+// Add these rate limiting constants at the top
+const GMAIL_RATE_LIMIT = {
+  REQUESTS_PER_MINUTE: 250, // Gmail API quota is 250 requests per minute per user
+  BATCH_SIZE: 10, // Process 10 threads at a time
+  DELAY_BETWEEN_BATCHES: 1000, // 1 second between batches
+};
+
+// Update the rate limiting constants
+const RATE_LIMITS = {
+  MIN_TIME_BETWEEN_FETCHES: 30000, // 30 seconds
+  RETRY_AFTER_DEFAULT: 60000, // 1 minute default retry after
+  MAX_RETRIES: 3,
+  BASE_DELAY: 2000,
+  MAX_DELAY: 10000
+};
+
+// Add rate limiting state
+let lastRequestTime = 0;
+let consecutiveRequests = 0;
+const MAX_CONSECUTIVE_REQUESTS = 5;
+const CONSECUTIVE_REQUESTS_WINDOW = 60000; // 1 minute
+
 interface EmailAnalysis {
   threadId: string;
   timestamp: string;
@@ -397,184 +419,198 @@ async function getCachedEmailQuestions(threadId: string, db: FirebaseFirestore.F
   }
 }
 
-// Update the GET function to handle pagination better
-export async function GET(request: NextRequest) {
-  try {
-    const authHeader = request.headers.get('Authorization');
-    if (!authHeader) {
-      return NextResponse.json({ error: 'No authorization header provided' }, { status: 401 });
-    }
+// Add this helper function for rate-limited thread processing
+async function processThreadsWithRateLimit(
+  gmail: gmail_v1.Gmail,
+  threads: gmail_v1.Schema$Thread[],
+  userId: string = 'me'
+) {
+  const results = [];
+  const batches = [];
+  
+  // Split threads into batches
+  for (let i = 0; i < threads.length; i += GMAIL_RATE_LIMIT.BATCH_SIZE) {
+    batches.push(threads.slice(i, i + GMAIL_RATE_LIMIT.BATCH_SIZE));
+  }
 
-    const accessToken = authHeader.replace('Bearer ', '');
-    const page = parseInt(request.headers.get('X-Page') || '1');
-    const forceRefresh = request.headers.get('X-Force-Refresh') === 'true';
-    const pageSize = 10; // Increased from 5 to 10 emails per page
-
-    // Initialize OAuth2 client and Gmail client
-    const oauth2Client = getOAuth2Client();
-    oauth2Client.setCredentials({ 
-      access_token: accessToken,
-      scope: [
-        'https://www.googleapis.com/auth/gmail.readonly',
-        'https://www.googleapis.com/auth/gmail.modify',
-        'https://www.googleapis.com/auth/gmail.send'
-      ].join(' ')
-    });
-
-    const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
-    const db = getFirestore(getFirebaseAdmin() as any);
-
-    // Get threads with proper pagination - request more than needed to account for filtering
-    const threadsResponse = await gmail.users.threads.list({
-      userId: 'me',
-      q: 'in:inbox -category:{promotions social updates forums} -label:sent',
-      maxResults: pageSize * 2, // Request more threads to account for filtering
-      pageToken: page > 1 ? String((page - 1) * pageSize) : undefined
-    });
-
-    if (!threadsResponse.data.threads) {
-      return NextResponse.json({ 
-        emails: [],
-        page,
-        hasMore: false
-      });
-    }
-
-    // Process each thread
-    const processedEmails = await Promise.all(
-      threadsResponse.data.threads.map(async (thread) => {
-        if (!thread.id) return null;
-
+  // Process each batch with delay
+  for (const batch of batches) {
+    const batchResults = await Promise.all(
+      batch.map(async (thread) => {
         try {
-          // Check if thread is marked as not relevant in Firebase
-          const notRelevantDoc = await db.collection('not_relevant_reasons')
-            .where('emailId', '==', thread.id)
-            .limit(1)
-            .get();
-
-          if (!notRelevantDoc.empty) {
-            // Skip this thread as it's marked not relevant
-            return null;
-          }
-
           const threadDetails = await gmail.users.threads.get({
-            userId: 'me',
-            id: thread.id
+            userId,
+            id: thread.id!,
           });
-
-          if (!threadDetails.data.messages?.[0]) return null;
-
-          const latestMessage = threadDetails.data.messages[threadDetails.data.messages.length - 1];
-          if (!latestMessage.payload) return null;
-
-          const headers = latestMessage.payload.headers || [];
-          const getHeader = (name: string) => 
-            headers.find(h => h.name?.toLowerCase() === name.toLowerCase())?.value || '';
-
-          const subject = getHeader('subject');
-          const from = getHeader('from');
-          const date = getHeader('date');
-          const body = extractEmailBody(latestMessage);
-
-          if (!body) return null;
-
-          // Quick check if this is likely a support email before doing full analysis
-          if (!isCustomerSupportEmail(subject, body)) {
-            return null;
-          }
-
-          // First try to get cached questions
-          const cachedQuestions = await getCachedEmailQuestions(thread.id, db);
-          let analysis = null;
-
-          if (cachedQuestions) {
-            // Use cached questions
-            analysis = {
-              questions: cachedQuestions,
-              timestamp: Date.now(),
-              _cache: {
-                source: 'cache' as const,
-                age: 0,
-                expiresIn: CACHE_EXPIRY
-              }
-            };
-          } else if (forceRefresh) {
-            // Only perform analysis if we don't have cached questions and forceRefresh is true
-            analysis = await getEmailAnalysis({
-              threadId: thread.id,
-              subject: subject || 'No Subject',
-              content: body
-            }, db, forceRefresh);
-
-            // Store the questions in Firebase if we got them
-            if (analysis !== null && typeof analysis === 'object' && 'analysis' in analysis) {
-                const analysisData = analysis.analysis;
-                if (analysisData && typeof analysisData === 'object' && 'suggestedQuestions' in analysisData) {
-                    const emailAnalysisRef = db.collection('email_analyses').doc(thread.id);
-                    await emailAnalysisRef.set({
-                        questions: analysisData.suggestedQuestions,
-                        timestamp: Date.now()
-                    });
-                }
-            }
-          }
-
-          let suggestedQuestions: string[] = [];
-          
-          // Store the questions in Firebase if we got them
-          if (analysis !== null && typeof analysis === 'object' && 'analysis' in analysis) {
-              const analysisData = analysis.analysis;
-              if (analysisData && typeof analysisData === 'object' && 'suggestedQuestions' in analysisData) {
-                  suggestedQuestions = analysisData.suggestedQuestions;
-                  const emailAnalysisRef = db.collection('email_analyses').doc(thread.id);
-                  await emailAnalysisRef.set({
-                      questions: analysisData.suggestedQuestions,
-                      timestamp: Date.now()
-                  });
-              }
-          }
-
-          // Update the confidence handling with null check
-          const confidence = (analysis !== null && 'confidence' in analysis && typeof analysis.confidence === 'number') ? analysis.confidence : 0;
-
-          return {
-            id: thread.id,
-            threadId: thread.id,
-            subject: subject || 'No Subject',
-            sender: from || 'Unknown Sender',
-            content: body,
-            receivedAt: parseGmailDate(date),
-            hasReply: threadDetails.data.messages.length > 1,
-            isReplied: false,
-            isNotRelevant: false,
-            analysis: analysis || null,
-            confidence: confidence,
-            suggestedQuestions: suggestedQuestions,
-            timestamp: analysis?.timestamp || Date.now()
-          };
+          return threadDetails;
         } catch (error) {
           console.error(`Error processing thread ${thread.id}:`, error);
           return null;
         }
       })
     );
+    
+    results.push(...batchResults.filter(Boolean));
+    
+    // Add delay between batches to respect rate limits
+    if (batches.indexOf(batch) < batches.length - 1) {
+      await sleep(GMAIL_RATE_LIMIT.DELAY_BETWEEN_BATCHES);
+    }
+  }
+  
+  return results;
+}
 
-    // Filter out null values and non-support emails
-    const validEmails = processedEmails.filter(Boolean);
+// Update the GET function to handle pagination better
+export async function GET(request: NextRequest) {
+  try {
+    // Enhanced rate limiting check
+    const now = Date.now();
+    const timeSinceLastRequest = now - lastRequestTime;
+    
+    // Check if we're within the consecutive requests window
+    if (timeSinceLastRequest < CONSECUTIVE_REQUESTS_WINDOW) {
+      consecutiveRequests++;
+      
+      // If too many requests in the window, enforce a longer cooldown
+      if (consecutiveRequests > MAX_CONSECUTIVE_REQUESTS) {
+        const retryAfter = RATE_LIMITS.RETRY_AFTER_DEFAULT;
+        return NextResponse.json(
+          { 
+            error: 'Rate limit exceeded',
+            retryAfter,
+            message: `Too many requests. Please wait ${Math.ceil(retryAfter / 1000)} seconds.`
+          },
+          { 
+            status: 429,
+            headers: {
+              'Retry-After': String(Math.ceil(retryAfter / 1000))
+            }
+          }
+        );
+      }
+    } else {
+      // Reset consecutive requests counter if outside window
+      consecutiveRequests = 1;
+    }
+    
+    // Update last request time
+    lastRequestTime = now;
 
-    // Get the next page token only if we have more valid emails
-    const hasMore = validEmails.length >= pageSize && threadsResponse.data.nextPageToken;
+    // Check minimum time between fetches
+    const lastFetchTime = request.headers.get('x-last-fetch');
+    if (lastFetchTime) {
+      const timeSinceLastFetch = now - parseInt(lastFetchTime);
+      if (timeSinceLastFetch < RATE_LIMITS.MIN_TIME_BETWEEN_FETCHES) {
+        const retryAfter = RATE_LIMITS.MIN_TIME_BETWEEN_FETCHES - timeSinceLastFetch;
+        return NextResponse.json(
+          { 
+            error: 'Rate limit exceeded',
+            retryAfter,
+            message: `Please wait ${Math.ceil(retryAfter / 1000)} seconds between fetches.`
+          },
+          { 
+            status: 429,
+            headers: {
+              'Retry-After': String(Math.ceil(retryAfter / 1000))
+            }
+          }
+        );
+      }
+    }
 
-    // Return only the requested number of emails
-    return NextResponse.json({
-      emails: validEmails.slice(0, pageSize),
-      page,
-      hasMore: hasMore
+    // Get the access token from the Authorization header
+    const authHeader = request.headers.get('Authorization');
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return NextResponse.json({ error: 'No access token provided' }, { status: 401 });
+    }
+    const accessToken = authHeader.split(' ')[1];
+
+    console.log('Initializing Google OAuth2 client...');
+    const oauth2Client = await getOAuth2Client({
+      access_token: accessToken,
+      token_type: 'Bearer'
     });
 
+    const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+    const db = getFirebaseAdmin().firestore();
+
+    // Get pagination parameters from headers correctly
+    const page = parseInt(request.headers.get('x-page') || '1');
+    const forceRefresh = request.headers.get('x-force-refresh') === 'true';
+    const pageSize = 10;
+
+    // List threads with pagination and exponential backoff
+    let retryCount = 0;
+    const maxRetries = 3;
+    const baseDelay = 2000; // Start with 2 second delay
+
+    const fetchThreads = async () => {
+      try {
+        return await gmail.users.threads.list({
+          userId: 'me',
+          maxResults: pageSize,
+          pageToken: page > 1 ? `${(page - 1) * pageSize}` : undefined,
+        });
+      } catch (error) {
+        if (retryCount < maxRetries) {
+          retryCount++;
+          const delay = Math.min(baseDelay * Math.pow(2, retryCount), 10000); // Max 10 second delay
+          console.log(`Retrying Gmail API call in ${delay}ms (attempt ${retryCount}/${maxRetries})`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          return fetchThreads();
+        }
+        throw error;
+      }
+    };
+
+    const threadsResponse = await fetchThreads();
+
+    if (!threadsResponse.data.threads || threadsResponse.data.threads.length === 0) {
+      return NextResponse.json({ emails: [], hasMore: false });
+    }
+
+    // Process threads with rate limiting
+    const threadDetails = await processThreadsWithRateLimit(
+      gmail,
+      threadsResponse.data.threads
+    );
+
+    // Process the thread details into emails
+    const emails = threadDetails
+      .filter(Boolean)
+      .map((thread) => {
+        if (!thread?.data.messages || thread.data.messages.length === 0) return null;
+
+        const message = thread.data.messages[0];
+        const headers = message.payload?.headers || [];
+        const getHeader = (name: string) =>
+          headers.find((h) => h.name?.toLowerCase() === name.toLowerCase())?.value || '';
+
+        return {
+          id: thread.data.id || '',
+          threadId: thread.data.id || '',
+          subject: getHeader('subject'),
+          sender: getHeader('from'),
+          receivedAt: parseGmailDate(getHeader('date')),
+          content: extractEmailBody(message),
+        };
+      })
+      .filter(Boolean);
+
+    // Check for more pages
+    const hasMore = threadsResponse.data.nextPageToken !== undefined;
+
+    return NextResponse.json({
+      emails,
+      hasMore,
+    });
   } catch (error) {
-    console.error('Error fetching emails:', error);
-    return NextResponse.json({ error: 'Failed to fetch emails' }, { status: 500 });
+    console.error('Error in GET /api/emails/inbox:', error);
+    return NextResponse.json(
+      { error: 'Failed to fetch emails' },
+      { status: 500 }
+    );
   }
 }
 
