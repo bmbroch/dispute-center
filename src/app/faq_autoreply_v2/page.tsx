@@ -762,12 +762,12 @@ export default function FAQAutoReplyV2() {
         const cachedFAQs = loadFromCache(CACHE_KEYS.ANSWERED_FAQS);
         console.log('Cached FAQs:', cachedFAQs);
         
-        if (cachedFAQs?.answeredFAQs) {
+        if (cachedFAQs?.answeredFAQs && Array.isArray(cachedFAQs.answeredFAQs)) {
           console.log('Using cached FAQs');
           setAnsweredFAQs(prevFAQs => {
             // Merge cached FAQs with existing ones
             const newFAQs = [...prevFAQs];
-            cachedFAQs.answeredFAQs.forEach(newFAQ => {
+            cachedFAQs.answeredFAQs.forEach((newFAQ: AnsweredFAQ) => {
               const existingIndex = newFAQs.findIndex(f => f.question === newFAQ.question);
               if (existingIndex >= 0) {
                 // Only update if the cached FAQ has an answer
@@ -838,7 +838,7 @@ export default function FAQAutoReplyV2() {
     };
   }, []); // Empty dependency array since we're using isSubscribed.current
 
-  // Add a separate effect for updating email statuses
+  // Update the email status effect
   useEffect(() => {
     console.log('=== Email Status Update Debug ===');
     console.log('Answered FAQs:', answeredFAQs);
@@ -865,7 +865,7 @@ export default function FAQAutoReplyV2() {
             return {
               ...email,
               matchedFAQ,
-              status: 'processed'
+              status: 'processed' as const
             };
           }
         }
@@ -880,7 +880,7 @@ export default function FAQAutoReplyV2() {
       console.log('Email updates complete. Has changes:', hasChanges);
       return hasChanges ? updatedEmails : prevEmails;
     });
-  }, [answeredFAQs, checkEmailAnsweredStatus, emailQuestions]);
+  }, [answeredFAQs, checkEmailAnsweredStatus, emailQuestions, emails]); // Added missing dependencies
 
   const handleLoadMore = () => {
     if (!loadingMore && hasMore) {
