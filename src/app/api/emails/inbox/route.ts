@@ -97,6 +97,20 @@ interface CachedAnalysis {
 
 type AnalysisResult = EmailAnalysis | CachedAnalysis;
 
+interface EmailResponse {
+  id: string;
+  threadId: string;
+  subject: string;
+  sender: string;
+  receivedAt: number;
+  content: string | null;
+  extractionError?: {
+    message: string;
+    details?: any;
+    timestamp: number;
+  };
+}
+
 // Add this helper function to process emails in batches
 async function processBatch(emails: any[], faqs: any[]) {
   const results = [];
@@ -461,13 +475,18 @@ async function getGmailClient(accessToken: string): Promise<gmail_v1.Gmail | nul
 // Update the GET function to handle pagination better
 export async function GET(request: NextRequest) {
   try {
-    // Enhanced rate limiting check
+    // Enhanced rate limiting check - allow first request
     const now = Date.now();
     const timeSinceLastRequest = now - lastRequestTime;
+    const isFirstRequest = lastRequestTime === 0;
     
-    if (timeSinceLastRequest < RATE_LIMITS.MIN_TIME_BETWEEN_FETCHES) {
+    if (!isFirstRequest && timeSinceLastRequest < RATE_LIMITS.MIN_TIME_BETWEEN_FETCHES) {
       return NextResponse.json(
-        { error: 'Rate limit exceeded', retryAfter: RATE_LIMITS.MIN_TIME_BETWEEN_FETCHES - timeSinceLastRequest },
+        { 
+          error: 'Rate limit exceeded', 
+          retryAfter: RATE_LIMITS.MIN_TIME_BETWEEN_FETCHES - timeSinceLastRequest,
+          message: `Please wait ${Math.ceil((RATE_LIMITS.MIN_TIME_BETWEEN_FETCHES - timeSinceLastRequest) / 1000)} seconds before refreshing again`
+        },
         { status: 429 }
       );
     }
@@ -553,13 +572,21 @@ export async function GET(request: NextRequest) {
         const isNotRelevant = await isEmailNotRelevant(thread.data.id || '', db);
         if (isNotRelevant) return null;
 
+        const { content, error } = extractEmailBody(message);
+
         return {
           id: thread.data.id || '',
           threadId: thread.data.id || '',
           subject: getHeader('subject'),
           sender: getHeader('from'),
           receivedAt: parseGmailDate(getHeader('date')),
-          content: extractEmailBody(message),
+          content,
+          ...(error && {
+            extractionError: {
+              ...error,
+              timestamp: Date.now()
+            }
+          })
         };
       });
 
@@ -610,29 +637,96 @@ function calculateConfidence(subject: string, content: string, faqQuestion: stri
 }
 
 // Add helper functions for email parsing
-function extractEmailBody(message: gmail_v1.Schema$Message): string | null {
+function extractEmailBody(message: gmail_v1.Schema$Message): { content: string | null; error?: { message: string; details?: any } } {
   try {
-    if (!message.payload) return null;
+    if (!message.payload) {
+      return {
+        content: null,
+        error: {
+          message: 'No message payload found',
+          details: { messageId: message.id }
+        }
+      };
+    }
 
-    // Try to get body from parts first
-    if (message.payload.parts) {
-      const textPart = message.payload.parts.find(part => 
-        part.mimeType === 'text/plain' || part.mimeType === 'text/html'
-      );
-      if (textPart?.body?.data) {
-        return Buffer.from(textPart.body.data, 'base64').toString();
+    // Helper function to recursively search for text content in parts
+    const findTextContent = (part: gmail_v1.Schema$MessagePart): string | null => {
+      // Log the part structure for debugging
+      console.log('Processing part:', {
+        mimeType: part.mimeType,
+        hasBody: !!part.body,
+        hasData: !!part.body?.data,
+        hasParts: !!part.parts,
+        partId: part.partId
+      });
+
+      // Check if this part is text content
+      if (part.mimeType === 'text/plain' || part.mimeType === 'text/html') {
+        if (part.body?.data) {
+          return Buffer.from(part.body.data, 'base64').toString();
+        }
       }
+
+      // If this is a multipart message, search through all parts
+      if (part.parts) {
+        for (const subPart of part.parts) {
+          const content = findTextContent(subPart);
+          if (content) return content;
+        }
+      }
+
+      return null;
+    };
+
+    // Try to find text content in the message
+    const content = findTextContent(message.payload);
+    
+    if (content) {
+      return { content };
     }
 
-    // If no parts or no text part, try body directly
-    if (message.payload.body?.data) {
-      return Buffer.from(message.payload.body.data, 'base64').toString();
-    }
-
-    return null;
+    // If no content found, return detailed error
+    return {
+      content: null,
+      error: {
+        message: 'No email body content found',
+        details: {
+          messageId: message.id,
+          hasPayload: !!message.payload,
+          hasParts: !!message.payload.parts,
+          hasDirectBody: !!message.payload.body,
+          mimeType: message.payload.mimeType,
+          partStructure: message.payload.parts?.map(part => ({
+            mimeType: part.mimeType,
+            hasBody: !!part.body,
+            hasData: !!part.body?.data,
+            hasParts: !!part.parts
+          }))
+        }
+      }
+    };
   } catch (error) {
     console.error('Error extracting email body:', error);
-    return null;
+    return {
+      content: null,
+      error: {
+        message: 'Error extracting email body',
+        details: {
+          messageId: message.id,
+          error: error instanceof Error ? error.message : String(error),
+          mimeType: message.payload?.mimeType,
+          hasPayload: !!message.payload,
+          hasParts: !!message.payload?.parts,
+          hasDirectBody: !!message.payload?.body,
+          partStructure: message.payload?.parts?.map(part => ({
+            mimeType: part.mimeType,
+            hasBody: !!part.body,
+            hasData: !!part.body?.data,
+            hasParts: !!part.parts
+          }))
+        }
+      }
+    };
   }
 }
 

@@ -718,11 +718,12 @@ export default function FAQAutoReplyV2() {
         }
       }
 
-      // Check if enough time has passed since last fetch
+      // Check if enough time has passed since last fetch, but allow first refresh
       const now = Date.now();
       const timeSinceLastFetch = now - lastFetchTimestamp;
+      const isFirstFetch = lastFetchTimestamp === 0;
       
-      if (!forceRefresh && timeSinceLastFetch < MIN_FETCH_INTERVAL) {
+      if (!forceRefresh && !isFirstFetch && timeSinceLastFetch < MIN_FETCH_INTERVAL) {
         const waitTime = Math.ceil((MIN_FETCH_INTERVAL - timeSinceLastFetch) / 1000);
         const nextRefreshTime = new Date(now + (MIN_FETCH_INTERVAL - timeSinceLastFetch));
         toast.info(`Using cached data. Next refresh available at ${nextRefreshTime.toLocaleTimeString()}`);
@@ -2073,8 +2074,13 @@ Support Team`;
 
   // Update the handleRefresh function to clear cache
   const handleRefresh = async () => {
-    if (Date.now() - lastFetchTimestamp < MIN_FETCH_INTERVAL) {
-      toast.error('Please wait before refreshing again');
+    const now = Date.now();
+    const timeSinceLastFetch = now - lastFetchTimestamp;
+    const isFirstFetch = lastFetchTimestamp === 0;
+
+    if (!isFirstFetch && timeSinceLastFetch < MIN_FETCH_INTERVAL) {
+      const waitTime = Math.ceil((MIN_FETCH_INTERVAL - timeSinceLastFetch) / 1000);
+      toast.error(`Please wait ${waitTime} seconds before refreshing again`);
       return;
     }
 
@@ -2091,14 +2097,14 @@ Support Team`;
         const readyRef = doc(db, 'ready_to_reply', 'latest');
         await setDoc(readyRef, { 
           emails: [], 
-          timestamp: Date.now() 
+          timestamp: now 
         });
 
         // Also clear the removed emails tracking
         const removedRef = doc(db, 'removed_from_ready', 'latest');
         await setDoc(removedRef, {
           emailIds: [],
-          timestamp: Date.now()
+          timestamp: now
         });
       }
       

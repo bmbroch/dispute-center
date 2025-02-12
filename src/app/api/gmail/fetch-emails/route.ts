@@ -18,6 +18,213 @@ interface EmailResponse {
   snippet?: string;
 }
 
+// Add batch processing constants
+const BATCH_SIZE = 10;
+const MAX_RETRIES = 3;
+const RETRY_DELAY = 1000;
+
+// Add retry helper function
+const retryWithExponentialBackoff = async <T>(
+  operation: () => Promise<T>,
+  retries = MAX_RETRIES,
+  delay = RETRY_DELAY
+): Promise<T> => {
+  try {
+    return await operation();
+  } catch (error) {
+    if (retries > 0) {
+      await new Promise(resolve => setTimeout(resolve, delay));
+      return retryWithExponentialBackoff(operation, retries - 1, delay * 2);
+    }
+    throw error;
+  }
+};
+
+// Update message fetching to use batching and retries
+const fetchMessageBatch = async (gmail: gmail_v1.Gmail, messageIds: string[], userId = 'me') => {
+  const results = await Promise.all(
+    messageIds.map(id =>
+      retryWithExponentialBackoff(async () => {
+        try {
+          console.log(`Fetching message ${id} in FULL format`);
+          // First try FULL format
+          const response = await gmail.users.messages.get({
+            userId,
+            id,
+            format: 'full'
+          });
+
+          // Log the response structure
+          console.log(`Message ${id} FULL format response:`, {
+            hasPayload: !!response.data.payload,
+            mimeType: response.data.payload?.mimeType,
+            hasBody: !!response.data.payload?.body,
+            hasBodyData: !!response.data.payload?.body?.data,
+            hasParts: !!response.data.payload?.parts,
+            partsCount: response.data.payload?.parts?.length,
+            hasSnippet: !!response.data.snippet
+          });
+
+          // If no content in FULL format or content is incomplete, try RAW format
+          if (!response.data.payload?.body?.data && 
+              (!response.data.payload?.parts || 
+               !response.data.payload.parts.some(p => p.body?.data || p.parts))) {
+            console.log(`No content found in FULL format for message ${id}, trying RAW format`);
+            const rawResponse = await gmail.users.messages.get({
+              userId,
+              id,
+              format: 'raw'
+            });
+
+            // Log the RAW format response
+            console.log(`Message ${id} RAW format response:`, {
+              hasRaw: !!rawResponse.data.raw,
+              rawLength: rawResponse.data.raw?.length
+            });
+
+            if (!rawResponse.data.raw) {
+              console.warn(`No raw content found for message ${id}`);
+              // If both formats fail, try one last time with metadata format
+              const metadataResponse = await gmail.users.messages.get({
+                userId,
+                id,
+                format: 'metadata',
+                metadataHeaders: ['From', 'To', 'Subject', 'Date']
+              });
+
+              console.log(`Falling back to metadata format for message ${id}:`, {
+                hasHeaders: !!metadataResponse.data.payload?.headers,
+                headerCount: metadataResponse.data.payload?.headers?.length,
+                hasSnippet: !!metadataResponse.data.snippet
+              });
+
+              return metadataResponse;
+            }
+
+            return rawResponse;
+          }
+
+          return response;
+        } catch (error) {
+          console.error(`Failed to fetch message ${id}:`, error);
+          throw error;
+        }
+      })
+    )
+  );
+  return results;
+};
+
+// Update the message processing function
+const processMessagePart = (part: Schema$MessagePart) => {
+  console.log('Processing message part:', {
+    mimeType: part.mimeType,
+    hasBody: !!part.body,
+    hasData: !!part.body?.data,
+    hasAttachment: !!part.filename,
+    partId: part.partId,
+    hasParts: !!part.parts,
+    partsCount: part.parts?.length
+  });
+
+  if (!part.mimeType) {
+    console.log('Part missing MIME type, skipping');
+    return { text: '', html: '' };
+  }
+
+  const mimeType = part.mimeType.toLowerCase();
+  let text = '';
+  let html = '';
+
+  // Handle multipart messages
+  if (mimeType.startsWith('multipart/')) {
+    console.log('Processing multipart message:', {
+      type: mimeType,
+      partsCount: part.parts?.length || 0
+    });
+
+    if (part.parts) {
+      // Sort parts by priority
+      const sortedParts = [...part.parts].sort((a, b) => {
+        const getMimeTypePriority = (mime?: string) => {
+          if (!mime) return 4;
+          mime = mime.toLowerCase();
+          if (mime === 'text/plain') return 1;
+          if (mime === 'text/html') return 2;
+          if (mime.startsWith('text/')) return 3;
+          return 4;
+        };
+        return getMimeTypePriority(a.mimeType) - getMimeTypePriority(b.mimeType);
+      });
+
+      console.log('Sorted parts by priority:', sortedParts.map(p => ({
+        mimeType: p.mimeType,
+        hasBody: !!p.body,
+        hasData: !!p.body?.data,
+        size: p.body?.size
+      })));
+
+      // Process all parts and combine results
+      const results = sortedParts.map(processMessagePart);
+      return results.reduce((acc, curr) => ({
+        text: acc.text + (curr.text ? '\\n' + curr.text : ''),
+        html: acc.html + curr.html
+      }), { text: '', html: '' });
+    }
+  }
+
+  // Handle content
+  if (part.body?.data) {
+    console.log('Found body data for part:', {
+      mimeType,
+      dataLength: part.body.data.length,
+      size: part.body.size
+    });
+
+    const content = decodeBase64(part.body.data);
+    if (content) {
+      console.log('Successfully decoded content:', {
+        mimeType,
+        contentLength: content.length,
+        preview: content.substring(0, 100) + '...'
+      });
+
+      if (mimeType === 'text/plain') {
+        text = content;
+      } else if (mimeType === 'text/html') {
+        html = content;
+      }
+    } else {
+      console.warn('Failed to decode content for part:', {
+        mimeType,
+        dataLength: part.body.data.length
+      });
+    }
+  } else {
+    console.log('No body data found for part:', {
+      mimeType,
+      hasAttachment: !!part.filename,
+      filename: part.filename
+    });
+  }
+
+  // Handle nested parts
+  if (part.parts) {
+    console.log('Processing nested parts:', {
+      parentMimeType: mimeType,
+      nestedPartsCount: part.parts.length
+    });
+
+    const nestedResults = part.parts.map(processMessagePart);
+    nestedResults.forEach(result => {
+      text += result.text;
+      html += result.html;
+    });
+  }
+
+  return { text, html };
+};
+
 export async function POST(request: NextRequest) {
   try {
     // Get authorization header
@@ -128,227 +335,38 @@ export async function POST(request: NextRequest) {
     let failedCount = 0;
     let processingErrors: any[] = [];
 
-    // Process messages with better error handling
+    // Update the message processing in the main function
     const messages = gmailResponse.data.messages || [];
-    const processedMessages = await Promise.all(
-      messages.map(async (message, index) => {
+    const batches = [];
+    for (let i = 0; i < messages.length; i += BATCH_SIZE) {
+      batches.push(messages.slice(i, i + BATCH_SIZE));
+    }
+
+    const processedMessages = [];
+    for (const batch of batches) {
+      const messageIds = batch.map(m => m.id!);
+      const responses = await fetchMessageBatch(gmail, messageIds);
+      
+      for (const response of responses) {
+        if (!response?.data) continue;
+
         try {
-          console.log(`\nProcessing message ${index + 1}/${messages.length} (ID: ${message.id})`);
+          // Process message content
+          const { text, html } = processMessagePart(response.data.payload!);
           
-          if (!message.id) {
-            console.error('Message missing ID:', message);
-            failedCount++;
-            return null;
-          }
-
-          const response = await gmail.users.messages.get({
-            userId: 'me',
-            id: message.id,
-            format: 'full'
-          }).catch(error => {
-            console.error(`Failed to fetch message ${message.id}:`, error);
-            throw error;
-          });
-
-          if (!response.data.payload) {
-            console.error('Message missing payload:', message.id);
-            failedCount++;
-            return null;
-          }
-
-          const headers = response.data.payload.headers || [];
-          if (headers.length === 0) {
-            console.error('Message has no headers:', message.id);
-            failedCount++;
-            return null;
-          }
-
-          console.log('Message headers found:', {
-            messageId: message.id,
-            headerCount: headers.length,
-            headerNames: headers.map(h => h.name)
-          });
-
-          // Enhanced header extraction with detailed logging
-          const getHeader = (name: string): string => {
-            const header = headers.find(h => h.name?.toLowerCase() === name.toLowerCase());
-            const value = header?.value || '';
-            console.log(`Header "${name}":`, { found: !!header, value });
-            return value;
-          };
-
-          // Extract and clean subject line with detailed logging
-          let subject = getHeader('subject');
-          console.log('Raw subject:', subject);
-
-          // If no subject found, try to extract from References or In-Reply-To
-          if (!subject) {
-            const references = getHeader('references');
-            const inReplyTo = getHeader('in-reply-to');
-            console.log('No subject, checking references:', { references, inReplyTo });
-            if (references || inReplyTo) {
-              subject = 'Re: (No Subject)';
-            } else {
-              subject = 'No Subject';
-            }
-          }
-
-          // Clean up common subject prefixes
-          subject = subject
-            .replace(/^(Re|RE|Fwd|FWD|Fw|FW):\s*/g, '')  // Remove Re:/Fwd: prefixes
-            .replace(/\s+/g, ' ')  // Normalize whitespace
-            .trim();
-
-          console.log('Cleaned subject:', subject);
-
-          // Extract and clean from address with detailed logging
-          const from = getHeader('from');
-          console.log('Raw from:', from);
-
-          // Enhanced from parsing
-          let cleanFrom = 'Unknown Sender';
-          if (from) {
-            // Try to extract email from various formats
-            const emailMatch = from.match(/(?:"?([^"]*)"?\s)?(?:<?(.+@[^>]+)>?)/);
-            console.log('From parsing:', {
-              original: from,
-              matchResult: emailMatch,
-              groups: emailMatch ? emailMatch.slice(1) : []
-            });
-            
-            if (emailMatch) {
-              const [, name, email] = emailMatch;
-              cleanFrom = name?.trim() || email?.trim() || from.trim();
-              console.log('Parsed from components:', { name, email, cleanFrom });
-            } else {
-              cleanFrom = from.trim();
-            }
-          }
-
-          // Extract date with validation
-          const date = getHeader('date');
-          console.log('Raw date:', date);
-          const validDate = date ? new Date(date).toISOString() : new Date().toISOString();
-          console.log('Validated date:', validDate);
-
-          console.log('Message details:', {
-            messageId: message.id,
-            threadId: response.data.threadId,
-            subject,
-            from,
-            date,
-            hasPayload: !!response.data.payload,
-            hasHeaders: headers.length > 0
-          });
-
-          // Check if email is from the authenticated user or contains a reply from them
-          const isFromUser = from.toLowerCase().includes(userEmail.toLowerCase());
-          const hasUserQuote = response.data.snippet?.toLowerCase().includes('wrote:') && 
-            response.data.snippet?.toLowerCase().includes(userEmail.toLowerCase());
-          const isReplyToUser = response.data.snippet?.toLowerCase().includes('on') && 
-            response.data.snippet?.toLowerCase().includes(userEmail.toLowerCase());
+          // Use HTML content if available, otherwise use plain text
+          const finalContent = html || text || response.data.snippet || '';
           
-          const isUserInteraction = isFromUser || hasUserQuote || isReplyToUser;
-          
-          console.log('User interaction check:', {
-            messageId: message.id,
-            isFromUser,
-            hasUserQuote,
-            isReplyToUser,
-            isUserInteraction
-          });
-
-          let body = '';
-          let htmlBody = '';
-          let contentType = 'text/plain';
-          
-          const decodeBase64 = (data: string) => {
-            try {
-              // Handle base64url encoding
-              const normalized = data.replace(/-/g, '+').replace(/_/g, '/');
-              return Buffer.from(normalized, 'base64').toString();
-            } catch (error) {
-              console.error('Error decoding base64:', error);
-              return '';
-            }
-          };
-
-          const processMessagePart = (part: Schema$MessagePart) => {
-            console.log('Processing part:', {
-              mimeType: part.mimeType,
-              hasBody: !!part.body,
-              hasData: !!part.body?.data,
-              hasParts: !!part.parts,
-              partCount: part.parts?.length
-            });
-
-            // Handle different MIME types
-            if (part.mimeType) {
-              switch (part.mimeType.toLowerCase()) {
-                case 'text/plain':
-                  if (part.body?.data) {
-                    body += decodeBase64(part.body.data);
-                  }
-                  break;
-                case 'text/html':
-                  if (part.body?.data) {
-                    // Prioritize HTML content
-                    htmlBody += decodeBase64(part.body.data);
-                  }
-                  break;
-                case 'multipart/alternative':
-                case 'multipart/mixed':
-                case 'multipart/related':
-                  if (part.parts) {
-                    // Process parts in order, so HTML takes precedence over plain text
-                    part.parts.forEach(processMessagePart);
-                  }
-                  break;
-                default:
-                  // Log unhandled MIME types for debugging
-                  if (!part.mimeType.startsWith('image/')) {
-                    console.log('Unhandled MIME type:', part.mimeType);
-                  }
-              }
-            }
-
-            // Handle nested parts
-            if (part.parts) {
-              part.parts.forEach(processMessagePart);
-            }
-          };
-
-          if (response.data.payload) {
-            processMessagePart(response.data.payload);
-          }
-
-          // Use HTML body if available, otherwise use plain text
-          let finalBody = htmlBody || body;
-
-          // Fallback to payload body if no content found
-          if (!finalBody && response.data.payload?.body?.data) {
-            console.log('Using payload body data as fallback');
-            finalBody = decodeBase64(response.data.payload.body.data);
-          }
-
-          // Final fallback to snippet
-          if (!finalBody) {
-            console.log('Using snippet as fallback body');
-            finalBody = response.data.snippet || 'No content available';
-          }
-
-          // Clean up the body text but preserve HTML structure
-          finalBody = finalBody
-            .replace(/\r\n/g, '\n') // Normalize line endings
-            .replace(/\n{3,}/g, '\n\n') // Remove excessive newlines
-            .trim();
-
-          console.log('Body extraction result:', {
-            hasBody: !!finalBody,
-            bodyLength: finalBody.length,
-            bodyPreview: finalBody.substring(0, 50) + '...',
-            hadHtmlContent: !!htmlBody,
-            hadPlainText: !!body
+          // Add to processed messages...
+          processedMessages.push({
+            id: response.data.id!,
+            threadId: response.data.threadId!,
+            subject: response.data.payload?.headers?.find(h => h.name === 'Subject')?.value || 'No Subject',
+            from: response.data.payload?.headers?.find(h => h.name === 'From')?.value || 'Unknown Sender',
+            date: response.data.payload?.headers?.find(h => h.name === 'Date')?.value || new Date().toISOString(),
+            body: finalContent,
+            contentType: response.data.payload?.mimeType || 'text/plain',
+            snippet: response.data.snippet || undefined
           });
 
           // Get or create thread entry
@@ -359,7 +377,7 @@ export async function POST(request: NextRequest) {
               messages: [],
               hasUserReply: false,
               threadId: response.data.threadId || '',
-              latestDate: date
+              latestDate: response.data.payload?.headers?.find(h => h.name === 'Date')?.value || new Date().toISOString()
             };
             threadMap.set(response.data.threadId || '', threadEntry);
           } else {
@@ -368,13 +386,30 @@ export async function POST(request: NextRequest) {
 
           // Update thread information with better content handling
           threadEntry.messages.push({
-            id: response.data.id || message.id || '',
-            subject: subject || 'No Subject',
-            from: cleanFrom,
-            date: date || new Date().toISOString(),
-            body: finalBody,
+            id: response.data.id || '',
+            subject: response.data.payload?.headers?.find(h => h.name === 'Subject')?.value || 'No Subject',
+            from: response.data.payload?.headers?.find(h => h.name === 'From')?.value || 'Unknown Sender',
+            date: response.data.payload?.headers?.find(h => h.name === 'Date')?.value || new Date().toISOString(),
+            body: finalContent,
             snippet: response.data.snippet || undefined,
-            contentType: htmlBody ? 'text/html' : 'text/plain'
+            contentType: response.data.payload?.mimeType || 'text/plain'
+          });
+
+          // Check if email is from the authenticated user or contains a reply from them
+          const isFromUser = response.data.payload?.headers?.find(h => h.name === 'From')?.value?.toLowerCase().includes(userEmail.toLowerCase()) || false;
+          const hasUserQuote = response.data.snippet?.toLowerCase().includes('wrote:') && 
+            response.data.snippet?.toLowerCase().includes(userEmail.toLowerCase());
+          const isReplyToUser = response.data.snippet?.toLowerCase().includes('on') && 
+            response.data.snippet?.toLowerCase().includes(userEmail.toLowerCase());
+          
+          const isUserInteraction = isFromUser || hasUserQuote || isReplyToUser;
+          
+          console.log('User interaction check:', {
+            messageId: response.data.id,
+            isFromUser,
+            hasUserQuote,
+            isReplyToUser,
+            isUserInteraction
           });
 
           // Update hasUserReply if this message shows user interaction
@@ -384,29 +419,22 @@ export async function POST(request: NextRequest) {
           }
 
           processedCount++;
-
-          return {
-            id: response.data.id || message.id || '',
-            threadId: response.data.threadId || '',
-            subject,
-            from,
-            date,
-            body: finalBody,
-            contentType,
-            snippet: response.data.snippet || undefined
-          };
         } catch (error) {
-          console.error(`Failed to process message ${message.id}:`, error);
+          console.error(`Error processing message ${response.data.id}:`, error);
           failedCount++;
           processingErrors.push({
-            messageId: message.id,
+            messageId: response.data.id,
             error: error instanceof Error ? error.message : 'Unknown error occurred',
             stage: 'message_processing'
           });
-          return null;
         }
-      })
-    );
+      }
+      
+      // Add delay between batches to respect rate limits
+      if (batches.indexOf(batch) < batches.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+    }
 
     // Log processing summary
     console.log('Email processing summary:', {
