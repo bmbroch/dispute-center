@@ -268,6 +268,12 @@ const saveQuestionsToFirebase = async (emailId: string, questions: GenericFAQ[])
   }
 };
 
+// Add type for cached FAQs
+interface CachedFAQsData {
+  answeredFAQs?: AnsweredFAQ[];
+  timestamp?: number;
+}
+
 export default function FAQAutoReplyV2() {
   console.log('=== Component Render Start ===');
   const { user, checkGmailAccess, refreshAccessToken } = useAuth();
@@ -759,10 +765,10 @@ export default function FAQAutoReplyV2() {
         }
         
         // Check cache first
-        const cachedFAQs = loadFromCache(CACHE_KEYS.ANSWERED_FAQS);
+        const cachedFAQs = loadFromCache(CACHE_KEYS.ANSWERED_FAQS) as { answeredFAQs: AnsweredFAQ[] } | null;
         console.log('Cached FAQs:', cachedFAQs);
         
-        if (cachedFAQs?.answeredFAQs && Array.isArray(cachedFAQs.answeredFAQs)) {
+        if (cachedFAQs && Array.isArray(cachedFAQs.answeredFAQs)) {
           console.log('Using cached FAQs');
           setAnsweredFAQs(prevFAQs => {
             // Merge cached FAQs with existing ones
@@ -799,7 +805,7 @@ export default function FAQAutoReplyV2() {
           setAnsweredFAQs(prevFAQs => {
             // Merge API FAQs with existing ones
             const newFAQs = [...prevFAQs];
-            data.faqs.forEach(newFAQ => {
+            data.faqs.forEach((newFAQ: AnsweredFAQ) => {
               const existingIndex = newFAQs.findIndex(f => f.question === newFAQ.question);
               if (existingIndex >= 0) {
                 // Only update if the new FAQ has an answer
@@ -836,7 +842,7 @@ export default function FAQAutoReplyV2() {
       console.log('Cleaning up FAQ loading effect');
       isSubscribed.current = false;
     };
-  }, []); // Empty dependency array since we're using isSubscribed.current
+  }, [answeredFAQs]);
 
   // Update the email status effect
   useEffect(() => {
