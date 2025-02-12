@@ -86,6 +86,7 @@ const CACHE_KEYS = {
 
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes in milliseconds
 const ANSWERED_FAQS_CACHE_DURATION = 30 * 60 * 1000; // 30 minutes for answered FAQs
+const MIN_FETCH_INTERVAL = 30000; // 30 seconds in milliseconds
 
 const loadFromCache = (key: string): CacheData | null => {
   try {
@@ -216,6 +217,28 @@ const saveEmailsToFirebase = async (emails: Email[]) => {
 };
 
 // Add this helper function near the top of the component
+const copyEmailDebugInfo = (email: ExtendedEmail) => {
+  const questions = emailQuestions.get(email.id) || [];
+  const debugText = `
+=== Email Debug Info ===
+Subject: ${email.subject}
+From: ${email.sender}
+
+Original Customer Question:
+${email.content}
+
+AI Generated Questions (${questions.length}):
+${questions.map((q, i) => `${i + 1}. ${q.question}`).join('\n')}
+`;
+
+  navigator.clipboard.writeText(debugText).then(() => {
+    toast.success('Debug info copied to clipboard');
+  }).catch(() => {
+    toast.error('Failed to copy debug info');
+  });
+};
+
+// Add this helper function near the top of the component
 const formatTimeRemaining = (milliseconds: number): string => {
   const seconds = Math.ceil(milliseconds / 1000);
   if (seconds < 60) {
@@ -274,6 +297,86 @@ interface CachedFAQsData {
   timestamp?: number;
 }
 
+// Add new Firebase collection reference
+const FIREBASE_COLLECTIONS = {
+  EMAILS: 'emails',
+  QUESTIONS: 'questions',
+  FAQS: 'faqs',
+  CACHED_QUESTIONS: 'cached_questions'
+};
+
+// Add new function to save extracted questions to Firebase
+const saveExtractedQuestionsToFirebase = async (emailId: string, questions: GenericFAQ[]) => {
+  try {
+    const db = getFirebaseDB();
+    const docRef = doc(db, FIREBASE_COLLECTIONS.CACHED_QUESTIONS, emailId);
+    await setDoc(docRef, {
+      questions,
+      timestamp: Date.now(),
+      emailId
+    });
+    return true;
+  } catch (error) {
+    console.error('Error saving questions to Firebase:', error);
+    return false;
+  }
+};
+
+// Add new function to get cached questions from Firebase
+const getCachedQuestionsFromFirebase = async (emailId: string) => {
+  try {
+    const db = getFirebaseDB();
+    const docRef = doc(db, FIREBASE_COLLECTIONS.CACHED_QUESTIONS, emailId);
+    const docSnap = await getDoc(docRef);
+    
+    if (docSnap.exists()) {
+      const data = docSnap.data();
+      // Check if cache is still valid (24 hours)
+      if (Date.now() - data.timestamp < 24 * 60 * 60 * 1000) {
+        return data.questions;
+      }
+    }
+    return null;
+  } catch (error) {
+    console.error('Error getting cached questions:', error);
+    return null;
+  }
+};
+
+// Modify the existing extractQuestionsFromEmail function
+const extractQuestionsFromEmail = async (email: ExtendedEmail) => {
+  // First check Firebase cache
+  const cachedQuestions = await getCachedQuestionsFromFirebase(email.id);
+  if (cachedQuestions) {
+    // Group similar questions before returning cached results
+    return groupSimilarPatterns(cachedQuestions);
+  }
+
+  // If no cache, extract questions
+  try {
+    const response = await fetch('/api/knowledge/extract-questions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ emailContent: email.content })
+    });
+
+    if (!response.ok) throw new Error('Failed to extract questions');
+    
+    const questions = await response.json();
+    
+    // Group similar questions before saving to cache
+    const groupedQuestions = groupSimilarPatterns(questions);
+    
+    // Save grouped questions to Firebase cache
+    await saveExtractedQuestionsToFirebase(email.id, groupedQuestions);
+    
+    return groupedQuestions;
+  } catch (error) {
+    console.error('Error extracting questions:', error);
+    return [];
+  }
+};
+
 export default function FAQAutoReplyV2() {
   console.log('=== Component Render Start ===');
   const { user, checkGmailAccess, refreshAccessToken } = useAuth();
@@ -297,7 +400,7 @@ export default function FAQAutoReplyV2() {
   const [answeredFAQs, setAnsweredFAQs] = useState<AnsweredFAQ[]>([]);
   const [editingReply, setEditingReply] = useState<EditingReply | null>(null);
   const [lastFetchTimestamp, setLastFetchTimestamp] = useState<number>(0);
-  const MIN_FETCH_INTERVAL = 30000; // 30 seconds
+  const [timeUntilNextRefresh, setTimeUntilNextRefresh] = useState<number>(0);
 
   // Move isSubscribed ref before the useEffect
   const isSubscribed = useRef(true);
@@ -314,7 +417,7 @@ export default function FAQAutoReplyV2() {
   }, []);
 
   // Update the similarity threshold to be more aggressive in grouping
-  const SIMILARITY_THRESHOLD = 0.8; // Lowered from 0.7 to group more aggressively
+  const SIMILARITY_THRESHOLD = 0.6; // Lowered from 0.8 to group more aggressively
 
   // Add this helper function to get all related questions for a FAQ
   const getRelatedQuestions = useCallback((faq: GenericFAQ): string[] => {
@@ -341,16 +444,29 @@ export default function FAQAutoReplyV2() {
     return Array.from(allQuestions);
   }, [emails, emailQuestions, calculatePatternSimilarity]);
 
-  // Update groupSimilarPatterns to be more aggressive
+  // Update groupSimilarPatterns to be more aggressive in consolidating similar questions
   const groupSimilarPatterns = useCallback((patterns: GenericFAQ[]): GenericFAQ[] => {
     const groups: GenericFAQ[] = [];
     
     patterns.forEach(pattern => {
-      const similarGroup = groups.find(group => 
-        calculatePatternSimilarity(group.question, pattern.question) > 0.8
-      );
+      // First try to find a group with very similar question
+      const similarGroup = groups.find(group => {
+        // Check if questions are essentially asking for the same thing
+        const baseQuestion1 = group.question.toLowerCase().replace(/{email}|{username}/g, '').trim();
+        const baseQuestion2 = pattern.question.toLowerCase().replace(/{email}|{username}/g, '').trim();
+        
+        // If both questions contain same key action words, treat them as similar
+        const keyWords1 = new Set(baseQuestion1.match(/\b(cancel|end|stop|terminate|discontinue)\b/g) || []);
+        const keyWords2 = new Set(baseQuestion2.match(/\b(cancel|end|stop|terminate|discontinue)\b/g) || []);
+        
+        const hasCommonKeyWord = [...keyWords1].some(word => keyWords2.has(word));
+        const similarity = calculatePatternSimilarity(baseQuestion1, baseQuestion2);
+        
+        return hasCommonKeyWord && similarity > SIMILARITY_THRESHOLD;
+      });
       
       if (similarGroup) {
+        // Add as a pattern variation rather than a separate question
         if (!similarGroup.similarPatterns) {
           similarGroup.similarPatterns = [];
         }
@@ -414,15 +530,16 @@ export default function FAQAutoReplyV2() {
     if (questions.length === 0) return false;
 
     // Check if all questions have matching answered FAQs
-    const allQuestionsAnswered = questions.every(q => 
-      findMatchingAnsweredFAQ(q.question) !== null
-    );
+    const allQuestionsAnswered = questions.every(q => {
+      const matchedFAQ = findMatchingAnsweredFAQ(q.question);
+      return matchedFAQ && matchedFAQ.answer && matchedFAQ.answer.trim() !== '';
+    });
 
     if (allQuestionsAnswered) {
-      // Find the best matching FAQ for the email
+      // Find the best matching FAQ for the email (highest confidence)
       const bestMatch = questions.reduce((best, current) => {
         const matchedFAQ = findMatchingAnsweredFAQ(current.question);
-        if (!matchedFAQ) return best;
+        if (!matchedFAQ || !matchedFAQ.answer || matchedFAQ.answer.trim() === '') return best;
         if (!best || matchedFAQ.confidence > best.confidence) return matchedFAQ;
         return best;
       }, null as AnsweredFAQ | null);
@@ -459,13 +576,13 @@ export default function FAQAutoReplyV2() {
     }
 
     try {
-      // Try to load from Firebase cache first
-      if (nextPage === 1) {
+      // Only use Firebase cache if not forcing refresh
+      if (!forceRefresh && nextPage === 1) {
         const cachedEmails = await loadEmailsFromFirebase();
         if (cachedEmails) {
           console.log('Using cached emails from Firebase');
           setEmails(cachedEmails);
-          setLoading(false); // Set loading to false since we have cached data to show
+          setLoading(false);
         }
       }
 
@@ -645,98 +762,55 @@ export default function FAQAutoReplyV2() {
 
   useEffect(() => {
     const initialize = async () => {
-      if (!user?.accessToken) {
-        setLoading(false);
-        return;
-      }
-
+      setLoading(true);
       try {
-        if (!initialized) {
-          setLoading(true);
-          
-          // First verify Gmail access before doing anything else
-          const hasAccess = await checkGmailAccess();
-          if (!hasAccess) {
-            toast.error('Gmail access is required. Please sign in with Gmail permissions.');
-            setLoading(false);
-            return;
-          }
-
-          // Load questions from Firebase first
-          const cachedQuestions = await loadQuestionsFromFirebase();
-          if (cachedQuestions) {
-            console.log('Loaded cached questions from Firebase:', cachedQuestions);
-            setEmailQuestions(cachedQuestions);
-            
-            // Process questions to update genericFAQs
-            const allQuestions = Array.from(cachedQuestions.values()).flat();
-            const groupedQuestions = groupSimilarPatterns(allQuestions);
-            setGenericFAQs(groupedQuestions);
-          }
-
-          // Check if enough time has passed since last fetch
-          const now = Date.now();
-          const timeSinceLastFetch = now - lastFetchTimestamp;
-          if (timeSinceLastFetch < MIN_FETCH_INTERVAL) {
-            console.debug('Skipping fetch - too soon since last fetch');
-            setLoading(false);
-            return;
-          }
-
-          // Check cache only after verifying access
-          const hasValidCache = Object.values(CACHE_KEYS).every(key => 
-            key !== CACHE_KEYS.LAST_FETCH && isCacheValid(key)
-          );
-
-          if (hasValidCache) {
-            const cachedEmails = loadFromCache(CACHE_KEYS.EMAILS);
-            const cachedQuestions = loadFromCache(CACHE_KEYS.QUESTIONS);
-            const cachedGenericFAQs = loadFromCache(CACHE_KEYS.GENERIC_FAQS);
-
-            if (cachedEmails?.emails && cachedQuestions && cachedGenericFAQs?.genericFAQs) {
-              const transformedEmails: ExtendedEmail[] = cachedEmails.emails.map((email: Email) => {
-                const { matchedFAQ, ...rest } = email;
-                const transformed: ExtendedEmail = {
-                  ...rest,
-                  questions: [],
-                  suggestedReply: '',
-                  showFullContent: false,
-                  isGeneratingReply: false,
-                  status: email.status || 'pending'
-                };
-                
-                if (matchedFAQ) {
-                  transformed.matchedFAQ = {
-                    question: matchedFAQ.question,
-                    answer: matchedFAQ.answer,
-                    confidence: matchedFAQ.confidence || 1
-                  };
-                }
-                
-                return transformed;
-              });
-              
-              setEmails(transformedEmails);
-              const questionsMap = new Map<string, GenericFAQ[]>();
-              Object.entries(cachedQuestions).forEach(([emailId, questions]) => {
-                questionsMap.set(emailId, questions as GenericFAQ[]);
-              });
-              setEmailQuestions(questionsMap);
-              setGenericFAQs(cachedGenericFAQs.genericFAQs);
-              setInitialized(true);
-              setLoading(false);
-              return;
-            }
-          }
-
-          // If we don't have valid cache, load fresh data
-          await loadEmails(true);
-          setLastFetchTimestamp(now);
-          setInitialized(true);
+        // Load emails first
+        const cachedEmails = loadFromCache(CACHE_KEYS.EMAILS);
+        let emailsData = cachedEmails?.emails || [];
+        
+        if (!cachedEmails || !isCacheValid(CACHE_KEYS.EMAILS)) {
+          emailsData = await loadEmailsFromFirebase();
+          saveToCache(CACHE_KEYS.EMAILS, { emails: emailsData, timestamp: Date.now() });
         }
+
+        // Load all questions from Firebase for all emails
+        const questionsMap = new Map<string, GenericFAQ[]>();
+        const db = getFirebaseDB();
+        if (db) {
+          const questionsSnapshot = await getDocs(collection(db, FIREBASE_QUESTIONS_COLLECTION));
+          questionsSnapshot.forEach((doc) => {
+            const data = doc.data();
+            if (data.questions) {
+              questionsMap.set(doc.id, data.questions);
+              
+              // Also add to answeredFAQs if they don't exist
+              setAnsweredFAQs(prevFAQs => {
+                const newFAQs = data.questions.map((q: GenericFAQ) => ({
+                  question: q.question,
+                  answer: '', // Empty answer that needs to be filled
+                  category: q.category || 'support',
+                  confidence: q.confidence || 1
+                })).filter((newQ: AnsweredFAQ) => !prevFAQs.some(existingQ => 
+                  calculatePatternSimilarity(existingQ.question, newQ.question) > SIMILARITY_THRESHOLD
+                ));
+                return [...prevFAQs, ...newFAQs];
+              });
+            }
+          });
+        }
+        setEmailQuestions(questionsMap);
+
+        // Update emails with their questions
+        const updatedEmails = emailsData.map((email: ExtendedEmail) => {
+          const questions = questionsMap.get(email.id);
+          return questions ? { ...email, questions } : email;
+        });
+
+        setEmails(updatedEmails);
+        setLastFetchTimestamp(Date.now());
       } catch (error) {
         console.error('Error initializing:', error);
-        toast.error('Failed to initialize. Please try again.');
+        toast.error('Failed to load emails');
       } finally {
         setLoading(false);
       }
@@ -748,101 +822,55 @@ export default function FAQAutoReplyV2() {
     return () => {
       isSubscribed.current = false;
     };
-  }, [user?.accessToken, checkGmailAccess, loadEmails, lastFetchTimestamp, initialized, groupSimilarPatterns]);
+  }, [calculatePatternSimilarity]); // Add calculatePatternSimilarity as dependency since we use it in the effect
 
   // Update the FAQ loading effect
   useEffect(() => {
     console.log('=== FAQ Loading Debug - Start ===');
-    console.log('isSubscribed.current:', isSubscribed.current);
-    console.log('Current answeredFAQs state:', answeredFAQs);
     
     const loadFAQs = async () => {
-      console.log('=== Loading FAQs ===');
       try {
-        // Don't set loading if we already have FAQs
-        if (!answeredFAQs.length) {
-          setLoadingFAQs(true);
-        }
+        setLoadingFAQs(true);
         
-        // Check cache first
-        const cachedFAQs = loadFromCache(CACHE_KEYS.ANSWERED_FAQS) as { answeredFAQs: AnsweredFAQ[] } | null;
-        console.log('Cached FAQs:', cachedFAQs);
-        
-        if (cachedFAQs && Array.isArray(cachedFAQs.answeredFAQs)) {
-          console.log('Using cached FAQs');
-          setAnsweredFAQs(prevFAQs => {
-            // Merge cached FAQs with existing ones
-            const newFAQs = [...prevFAQs];
-            cachedFAQs.answeredFAQs.forEach((newFAQ: AnsweredFAQ) => {
-              const existingIndex = newFAQs.findIndex(f => f.question === newFAQ.question);
-              if (existingIndex >= 0) {
-                // Only update if the cached FAQ has an answer
-                if (newFAQ.answer && newFAQ.answer.trim()) {
-                  newFAQs[existingIndex] = newFAQ;
-                }
-              } else {
-                newFAQs.push(newFAQ);
-              }
-            });
-            return newFAQs;
-          });
-          setLoadingFAQs(false);
-          return;
-        }
-
-        // If no cache, fetch from API
+        // Only fetch from API - remove cache logic to ensure fresh data
         console.log('Fetching FAQs from API');
         const response = await fetch('/api/faq/list');
         if (!response.ok) {
-          const errorData = await response.json();
-          throw new Error(`API Error: ${errorData.error || response.statusText}`);
+          throw new Error('Failed to fetch FAQs');
         }
+        
         const data = await response.json();
         console.log('API Response:', data);
 
         if (data.faqs) {
-          console.log(`Loaded ${data.faqs.length} FAQs from API`);
-          setAnsweredFAQs(prevFAQs => {
-            // Merge API FAQs with existing ones
-            const newFAQs = [...prevFAQs];
-            data.faqs.forEach((newFAQ: AnsweredFAQ) => {
-              const existingIndex = newFAQs.findIndex(f => f.question === newFAQ.question);
-              if (existingIndex >= 0) {
-                // Only update if the new FAQ has an answer
-                if (newFAQ.answer && newFAQ.answer.trim()) {
-                  newFAQs[existingIndex] = newFAQ;
-                }
-              } else {
-                newFAQs.push(newFAQ);
-              }
-            });
-            return newFAQs;
-          });
+          // Only include FAQs that have both a question and an answer
+          const validFAQs = data.faqs.filter((faq: AnsweredFAQ) => 
+            faq.question && 
+            faq.answer && 
+            faq.answer.trim() !== '' && 
+            faq.question.trim() !== ''
+          );
           
-          // Save to cache after merging
-          saveToCache(CACHE_KEYS.ANSWERED_FAQS, { answeredFAQs: data.faqs });
+          console.log(`Loaded ${validFAQs.length} valid FAQs from API`);
+          setAnsweredFAQs(validFAQs);
         } else {
-          console.warn('No FAQs found in API response');
+          setAnsweredFAQs([]);
         }
       } catch (error) {
         console.error('Error loading FAQs:', error);
-        toast.error(`Failed to load FAQs: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        toast.error('Failed to load FAQ library');
+        setAnsweredFAQs([]);
       } finally {
         setLoadingFAQs(false);
       }
     };
 
-    // Load FAQs only once on mount
-    if (isSubscribed.current) {
-      loadFAQs();
-    }
+    loadFAQs();
     
-    // Cleanup function
     return () => {
       console.log('Cleaning up FAQ loading effect');
-      isSubscribed.current = false;
     };
-  }, [answeredFAQs]);
+  }, []); // Remove answeredFAQs from dependencies to prevent loops
 
   // Update the email status effect
   useEffect(() => {
@@ -913,14 +941,6 @@ export default function FAQAutoReplyV2() {
   };
 
   const handleAddToFAQLibrary = (question: GenericFAQ) => {
-    const existingQuestion = genericFAQs.find(q => q.question === question.question);
-    
-    if (existingQuestion && existingQuestion.emailIds) {
-      const currentEmailIds = existingQuestion.emailIds || [];
-      const updatedEmailIds = [...new Set([...currentEmailIds, ...(question.emailIds || [])])];
-      existingQuestion.emailIds = updatedEmailIds;
-    }
-
     setSelectedFAQ(question);
     setAnswer('');
     setShowAnswerModal(true);
@@ -1031,7 +1051,7 @@ export default function FAQAutoReplyV2() {
         return newAnsweredFAQs;
       });
 
-      // Update emailQuestions to maintain the relationship
+      // Update emailQuestions to maintain the relationship and mark questions as answered
       setEmailQuestions(prev => {
         const updated = new Map(prev);
         const emailIds = selectedFAQ?.emailIds || [];
@@ -1042,7 +1062,8 @@ export default function FAQAutoReplyV2() {
                 (selectedFAQ?.similarPatterns && selectedFAQ.similarPatterns.includes(q.question))) {
               return {
                 ...q,
-                answer: answer.trim()
+                answer: answer.trim(),
+                isAnswered: true // Add this flag
               };
             }
             return q;
@@ -1051,6 +1072,14 @@ export default function FAQAutoReplyV2() {
         });
         return updated;
       });
+
+      // Update genericFAQs to remove answered questions
+      setGenericFAQs(prev => 
+        prev.filter(faq => 
+          faq.question !== selectedFAQ.question && 
+          !selectedFAQ.similarPatterns?.includes(faq.question)
+        )
+      );
 
       // Update emails that might now have all questions answered
       setEmails(prev => prev.map(email => {
@@ -1155,40 +1184,101 @@ export default function FAQAutoReplyV2() {
   };
 
   const handleCreateFAQ = async (email: ExtendedEmail) => {
-    if (!email.content) return;
+    console.log('=== Starting FAQ Creation ===');
+    console.log('Email:', {
+      id: email.id,
+      subject: email.subject,
+      contentLength: email.content?.length,
+      contentPreview: email.content?.substring(0, 100) + '...'
+    });
+
+    if (!email.content) {
+      console.log('Error: No email content to analyze');
+      toast.error('No email content to analyze');
+      return;
+    }
     
     setAnalyzing(true);
     try {
-      const response = await fetch('/api/faq/generate-pattern', {
+      console.log('Making API request to extract questions...');
+      const response = await fetch('/api/knowledge/extract-questions', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          subject: email.subject,
-          content: email.content,
+          emailContent: email.content
         })
       });
 
+      console.log('API response status:', response.status);
+      
       if (!response.ok) {
-        throw new Error('Failed to analyze email');
+        const errorText = await response.text();
+        console.error('API error:', {
+          status: response.status,
+          statusText: response.statusText,
+          errorText
+        });
+        
+        let errorData;
+        try {
+          errorData = JSON.parse(errorText);
+        } catch (e) {
+          console.error('Failed to parse error response:', e);
+          errorData = { error: 'Failed to parse error response' };
+        }
+        
+        throw new Error(errorData.error || `API error: ${response.status} ${response.statusText}`);
       }
 
       const data = await response.json();
+      console.log('API response data:', data);
       
-      // Convert API response format to questions array
-      const questions = [data.genericPattern, ...(data.similarPatterns || [])];
+      if (!data.questions) {
+        console.error('Invalid response format:', data);
+        throw new Error(data.error || 'Invalid response from question extraction');
+      }
 
-      // Map the questions to GenericFAQ objects
-      const questionObjects: GenericFAQ[] = questions.map(question => ({
-        question,
-        category: data.suggestedCategory || 'support',
-        emailIds: [email.id],
-        confidence: 1,
-        requiresCustomerSpecificInfo: data.requiresCustomerInfo || false
-      }));
+      console.log('Processing extracted questions:', data.questions);
+      
+      // Map the questions to GenericFAQ objects with proper type handling
+      const questionObjects = data.questions.map((q: any) => {
+        console.log('Processing question:', q);
+        
+        // If q is already a properly formatted object, use it directly
+        if (typeof q === 'object' && q !== null) {
+          console.log('Question is an object:', q);
+          return {
+            question: q.question,
+            category: q.category || 'support',
+            emailIds: [email.id],
+            confidence: q.confidence || 1,
+            requiresCustomerSpecificInfo: q.requiresCustomerSpecificInfo || false
+          };
+        }
+        
+        // If q is a string, create a new object
+        console.log('Question is a string:', q);
+        return {
+          question: q,
+          category: 'support',
+          emailIds: [email.id],
+          confidence: 1,
+          requiresCustomerSpecificInfo: false
+        };
+      });
+
+      console.log('Final processed questions:', questionObjects);
+
+      if (questionObjects.length === 0) {
+        console.log('No questions were found');
+        toast.info('No questions were found in this email');
+        return;
+      }
 
       // Update emailQuestions state with proper typing
+      console.log('Updating emailQuestions state...');
       setEmailQuestions(prev => {
         const updated = new Map(prev);
         updated.set(email.id, questionObjects);
@@ -1196,27 +1286,25 @@ export default function FAQAutoReplyV2() {
       });
 
       // Save questions to Firebase
+      console.log('Saving questions to Firebase...');
       await saveQuestionsToFirebase(email.id, questionObjects);
 
-      // Add questions to answeredFAQs if they don't exist yet
-      setAnsweredFAQs(prevFAQs => {
-        const newFAQs = questionObjects.map(q => ({
-          question: q.question,
-          answer: '', // Empty answer that needs to be filled
-          category: q.category,
-          confidence: q.confidence
-        })).filter(newQ => !prevFAQs.some(existingQ => 
-          calculatePatternSimilarity(existingQ.question, newQ.question) > SIMILARITY_THRESHOLD
-        ));
-        return [...prevFAQs, ...newFAQs];
-      });
+      // Update the email object with the questions
+      console.log('Updating emails state...');
+      setEmails(prev => prev.map(e => 
+        e.id === email.id 
+          ? { ...e, questions: questionObjects }
+          : e
+      ));
 
       // Save to cache
+      console.log('Saving to cache...');
       saveToCache(CACHE_KEYS.QUESTIONS, Object.fromEntries(emailQuestions));
       
-      toast.success(`Found ${questions.length} question${questions.length === 1 ? '' : 's'} in email`);
+      console.log('FAQ creation completed successfully');
+      toast.success(`Found ${questionObjects.length} question${questionObjects.length === 1 ? '' : 's'} in email`);
     } catch (error) {
-      console.error('Error analyzing email:', error);
+      console.error('Error in handleCreateFAQ:', error);
       toast.error(error instanceof Error ? error.message : 'Failed to analyze email. Please try again.');
     } finally {
       setAnalyzing(false);
@@ -1290,14 +1378,7 @@ export default function FAQAutoReplyV2() {
   const handleEditReply = (email: ExtendedEmail) => {
     setEditingReply({
       emailId: email.id,
-      reply: email.suggestedReply || `Dear ${email.sender.split('<')[0].trim()},
-
-Thank you for your email regarding ${email.matchedFAQ?.question}.
-
-${email.matchedFAQ?.answer}
-
-Best regards,
-Support Team`
+      reply: email.suggestedReply || generateDefaultReply(email)
     });
   };
 
@@ -1311,6 +1392,21 @@ Support Team`
     ));
     setEditingReply(null);
     toast.success('Reply updated');
+  };
+
+  const generateDefaultReply = (email: ExtendedEmail) => {
+    const senderName = email.sender.split('<')[0].trim();
+    const question = email.matchedFAQ?.question?.replace('{email}', email.sender) || '';
+    const answer = email.matchedFAQ?.answer || '';
+
+    return `Dear ${senderName},
+
+Thank you for your email regarding ${question}.
+
+${answer}
+
+Best regards,
+Support Team`;
   };
 
   const toggleEmailContent = (emailId: string) => {
@@ -1408,27 +1504,34 @@ Support Team`
 
     const unansweredEmails = emails.filter(email => !email.isReplied && !email.isNotRelevant && !email.matchedFAQ);
     
-    // Calculate time until next refresh
-    const now = Date.now();
-    const timeSinceLastFetch = now - lastFetchTimestamp;
-    const timeUntilNextRefresh = Math.max(0, MIN_FETCH_INTERVAL - timeSinceLastFetch);
-    const showRefreshTime = timeUntilNextRefresh > 0;
-
     return (
       <div className="space-y-4">
-        {/* Status banner for rate limits */}
-        {showRefreshTime && (
-          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+        {/* Status banner - Always show it */}
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+          <div className="flex items-center justify-between">
             <div className="flex items-center">
               <ClockIcon className="h-5 w-5 text-blue-400 mr-2" />
-              <div className="flex-1">
-                <p className="text-sm text-blue-700">
-                  Showing cached emails. Next refresh available in {formatTimeRemaining(timeUntilNextRefresh)}
-                </p>
-              </div>
+              <p className="text-sm text-blue-700">
+                {timeUntilNextRefresh > 0 
+                  ? `Showing cached emails. Next refresh available in ${formatTimeRemaining(timeUntilNextRefresh)}`
+                  : 'Showing cached emails. Refresh available now'}
+              </p>
             </div>
+            <button
+              onClick={handleRefresh}
+              disabled={timeUntilNextRefresh > 0}
+              className={`inline-flex items-center px-3 py-1.5 text-sm font-medium rounded-md
+                ${timeUntilNextRefresh > 0 
+                  ? 'bg-gray-100 text-gray-400 cursor-not-allowed' 
+                  : 'bg-blue-100 text-blue-700 hover:bg-blue-200'}`}
+            >
+              <svg className="h-4 w-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+              Refresh Now
+            </button>
           </div>
-        )}
+        </div>
 
         {unansweredEmails.map(email => {
           const questions = emailQuestions.get(email.id) || [];
@@ -1475,12 +1578,20 @@ Support Team`
                           From: {email.sender} · {new Date(email.receivedAt).toLocaleDateString()}
                         </p>
                       </div>
-                      <button
-                        onClick={() => handleMarkNotRelevant(email)}
-                        className="flex-shrink-0 inline-flex items-center px-3 py-1 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
-                      >
-                        ❌ Not Relevant
-                      </button>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => copyEmailDebugInfo(email)}
+                          className="flex-shrink-0 inline-flex items-center px-3 py-1 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+                        >
+                          📋 Copy Debug Info
+                        </button>
+                        <button
+                          onClick={() => handleMarkNotRelevant(email)}
+                          className="flex-shrink-0 inline-flex items-center px-3 py-1 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+                        >
+                          ❌ Not Relevant
+                        </button>
+                      </div>
                     </div>
                     <div className="prose prose-sm max-w-none">
                       <p className="text-gray-700 line-clamp-3">
@@ -1528,7 +1639,11 @@ Support Team`
                         <h4 className="text-sm font-medium text-gray-900 mb-3">Questions Identified:</h4>
                         <div className="flex flex-wrap gap-3">
                           {questions.map((question, index) => {
-                            const matchedFAQ = findMatchingAnsweredFAQ(question.question);
+                            const matchedFAQ = answeredFAQs.find(faq => 
+                              faq.answer && 
+                              faq.answer.trim() !== '' && 
+                              calculatePatternSimilarity(faq.question, question.question) > SIMILARITY_THRESHOLD
+                            );
                             const isAnswered = !!matchedFAQ;
                             return (
                               <button
@@ -1670,14 +1785,51 @@ Support Team`
   );
 
   // Update the handleRefresh function to clear cache
-  const handleRefresh = () => {
-    clearCache();
-    loadEmails(true);
-  };
+  const handleRefresh = async () => {
+    if (Date.now() - lastFetchTimestamp < MIN_FETCH_INTERVAL) {
+      toast.error('Please wait before refreshing again');
+      return;
+    }
 
-  // Update the Try Again button to force refresh
-  const handleTryAgain = () => {
-    loadEmails(true);
+    console.log('=== Starting Refresh ===');
+    setLoading(true);
+    try {
+      console.log('Clearing cache...');
+      clearCache();
+      
+      console.log('Loading fresh emails...');
+      await loadEmails(true, 1);
+      
+      console.log('Resetting states...');
+      setEmailQuestions(new Map());
+      setGenericFAQs([]);
+      
+      console.log('Reloading FAQ library...');
+      const response = await fetch('/api/faq/list');
+      if (response.ok) {
+        const data = await response.json();
+        console.log('FAQ library loaded:', data.faqs?.length || 0, 'FAQs found');
+        if (data.faqs) {
+          const validFAQs = data.faqs.filter((faq: AnsweredFAQ) => 
+            faq.question && 
+            faq.answer && 
+            faq.answer.trim() !== '' && 
+            faq.question.trim() !== ''
+          );
+          console.log('Valid FAQs:', validFAQs.length);
+          setAnsweredFAQs(validFAQs);
+        }
+      }
+
+      setLastFetchTimestamp(Date.now());
+      console.log('=== Refresh Complete ===');
+      toast.success('Refreshed successfully');
+    } catch (error) {
+      console.error('Error refreshing:', error);
+      toast.error('Failed to refresh');
+    } finally {
+      setLoading(false);
+    }
   };
 
   // Main render function debug
@@ -1712,41 +1864,151 @@ Support Team`
 
   // Add the missing render functions
   const renderSuggestedReplies = () => {
-    const emailsWithMatches = emails.filter(e => e.matchedFAQ && !e.isReplied);
-    
+    // Only show emails where all questions have been answered
+    const emailsWithMatches = emails.filter(e => {
+      const questions = emailQuestions.get(e.id) || [];
+      return e.matchedFAQ && 
+             !e.isReplied && 
+             questions.length > 0 && 
+             questions.every(q => {
+               const matchedFAQ = findMatchingAnsweredFAQ(q.question);
+               return matchedFAQ && matchedFAQ.answer && matchedFAQ.answer.trim() !== '';
+             });
+    });
+      
     if (emailsWithMatches.length === 0) {
       return (
         <div className="text-center py-8 text-gray-600">
-          No emails ready for auto-reply yet
+          <p>No emails ready for auto-reply yet</p>
+          <p className="text-sm mt-2">Answer all questions in the "Questions to Answer" tab first</p>
         </div>
       );
     }
 
     return (
-      <div className="space-y-4">
+      <div className="space-y-6">
         {emailsWithMatches.map(email => (
-          <div key={email.id} className="bg-white rounded-lg shadow p-6">
-            <div className="flex justify-between items-start mb-4">
-              <div>
-                <h3 className="text-lg font-medium text-gray-900">{email.subject}</h3>
-                <p className="text-sm text-gray-600">From: {email.sender}</p>
+          <div key={email.id} className="bg-white rounded-lg shadow-sm overflow-hidden">
+            {/* Email Header */}
+            <div className="p-6 border-b border-gray-200">
+              <div className="flex justify-between items-start mb-4">
+                <div>
+                  <h3 className="text-lg font-medium text-gray-900">{email.subject}</h3>
+                  <p className="text-sm text-gray-600">From: {email.sender}</p>
+                </div>
+                <div className="flex items-center space-x-3">
+                  {!editingReply || editingReply.emailId !== email.id ? (
+                    <>
+                      <button
+                        onClick={() => generateContextualReply(email)}
+                        className="inline-flex items-center px-3 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+                      >
+                        <LightbulbIcon className="h-4 w-4 mr-2" />
+                        Regenerate Reply
+                      </button>
+                      <button
+                        onClick={() => handleEditReply(email)}
+                        className="inline-flex items-center px-3 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+                      >
+                        <PencilIcon className="h-4 w-4 mr-2" />
+                        Edit Reply
+                      </button>
+                      <button
+                        onClick={() => handleAutoReply(email)}
+                        className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700"
+                      >
+                        Send Auto-Reply
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        onClick={() => setEditingReply(null)}
+                        className="inline-flex items-center px-3 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={() => handleSaveReply(email.id)}
+                        className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700"
+                      >
+                        Save Changes
+                      </button>
+                    </>
+                  )}
+                </div>
               </div>
-              <div className="flex items-center space-x-2">
-                <button
-                  onClick={() => handleAutoReply(email)}
-                  className="inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700"
-                >
-                  Send Auto-Reply
-                </button>
+
+              {/* Original Email Preview */}
+              <div className="bg-gray-50 rounded-lg p-4 mb-4">
+                <h4 className="text-sm font-medium text-gray-900 mb-2">Original Email:</h4>
+                <p className="text-sm text-gray-700 whitespace-pre-line">
+                  {email.content?.length > 200 
+                    ? `${email.content.slice(0, 200)}...` 
+                    : email.content}
+                </p>
+                {email.content?.length > 200 && (
+                  <button
+                    onClick={() => toggleEmailContent(email.id)}
+                    className="text-sm text-blue-600 hover:text-blue-800 mt-2"
+                  >
+                    {email.showFullContent ? 'Show less' : 'Show more'}
+                  </button>
+                )}
               </div>
+
+              {/* Matched FAQ */}
+              {email.matchedFAQ && (
+                <div className="bg-blue-50 rounded-lg p-4 mb-4">
+                  <h4 className="text-sm font-medium text-blue-900 mb-2">Matched FAQ:</h4>
+                  <p className="text-sm text-blue-800 font-medium">
+                    {email.matchedFAQ.question.replace('{email}', email.sender)}
+                  </p>
+                  <p className="text-sm text-blue-700 mt-2">{email.matchedFAQ.answer}</p>
+                </div>
+              )}
             </div>
-            {email.matchedFAQ && (
-              <div className="bg-gray-50 rounded-lg p-4">
-                <h4 className="text-sm font-medium text-gray-900 mb-2">Matched FAQ:</h4>
-                <p className="text-sm text-gray-700">{email.matchedFAQ.question}</p>
-                <p className="text-sm text-gray-600 mt-2">{email.matchedFAQ.answer}</p>
+
+            {/* Draft Reply Section */}
+            <div className="p-6 bg-gray-50">
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="text-sm font-medium text-gray-900">Draft Reply:</h4>
+                {email.isGeneratingReply && (
+                  <span className="text-sm text-blue-600 flex items-center">
+                    <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    Generating reply...
+                  </span>
+                )}
               </div>
-            )}
+              {editingReply && editingReply.emailId === email.id ? (
+                <div className="space-y-4">
+                  <textarea
+                    value={editingReply.reply}
+                    onChange={(e) => setEditingReply({ ...editingReply, reply: e.target.value })}
+                    className="w-full h-64 rounded-lg border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                    placeholder="Edit your reply here..."
+                  />
+                  <div className="bg-yellow-50 rounded-lg p-4">
+                    <h5 className="text-sm font-medium text-yellow-800 mb-2">Tips for a great reply:</h5>
+                    <ul className="text-sm text-yellow-700 list-disc list-inside space-y-1">
+                      <li>Be clear and concise</li>
+                      <li>Address all points in the original email</li>
+                      <li>Use a professional but friendly tone</li>
+                      <li>Include any relevant links or resources</li>
+                    </ul>
+                  </div>
+                </div>
+              ) : (
+                <div className="bg-white rounded-lg border border-gray-200 p-4">
+                  <p className="text-gray-700 whitespace-pre-line">
+                    {email.suggestedReply || generateDefaultReply(email)}
+                  </p>
+                </div>
+              )}
+            </div>
           </div>
         ))}
       </div>
@@ -1761,18 +2023,18 @@ Support Team`
     console.log('Email questions:', emailQuestions);
     console.log('Answered FAQs:', answeredFAQs);
     
-    // Get all questions from unanswered emails
-    const unansweredEmails = emails.filter(e => !e.isReplied && !e.isNotRelevant && !e.matchedFAQ);
-    const allQuestions = new Set<string>();
+    // Get all questions from all emails
+    const allQuestions = new Set<GenericFAQ>();
     
-    // Collect questions from unanswered emails
-    unansweredEmails.forEach(email => {
-      const questions = emailQuestions.get(email.id) || [];
+    // Collect questions from all emails
+    Array.from(emailQuestions.entries()).forEach(([emailId, questions]) => {
       questions.forEach(q => {
         // Only add if not already answered
-        const isAnswered = findMatchingAnsweredFAQ(q.question);
+        const isAnswered = answeredFAQs.some(faq => 
+          faq.answer && faq.answer.trim() && calculatePatternSimilarity(faq.question, q.question) > SIMILARITY_THRESHOLD
+        );
         if (!isAnswered) {
-          allQuestions.add(q.question);
+          allQuestions.add(q);
         }
       });
     });
@@ -1786,33 +2048,8 @@ Support Team`
       );
     }
 
-    // Convert to FAQ format with source email information
-    const unansweredFAQs = Array.from(allQuestions).map(question => {
-      // Find all emails that contain this question
-      const sourceEmails = unansweredEmails.filter(email => {
-        const emailQs = emailQuestions.get(email.id) || [];
-        return emailQs.some(q => calculatePatternSimilarity(q.question, question) > SIMILARITY_THRESHOLD);
-      });
-      
-      return {
-        question,
-        answer: '',
-        category: 'support',
-        confidence: 1,
-        sourceEmails
-      };
-    });
-
-    // Debug logs
-    console.log('Unanswered FAQs:', {
-      unansweredEmailsCount: unansweredEmails.length,
-      allQuestionsCount: allQuestions.size,
-      unansweredFAQsCount: unansweredFAQs.length,
-      emailQuestionsSize: emailQuestions.size
-    });
-    
     // Only show "no questions" message if we have no questions and we're not loading
-    if (!loading && unansweredFAQs.length === 0) {
+    if (!loading && allQuestions.size === 0) {
       return (
         <div className="text-center py-8 text-gray-600">
           <p>No questions to answer yet</p>
@@ -1821,54 +2058,67 @@ Support Team`
       );
     }
 
-    // Rest of the rendering code remains the same
+    // Convert to array and sort by emailIds length (most common questions first)
+    const sortedQuestions = Array.from(allQuestions).sort((a, b) => 
+      (b.emailIds?.length || 0) - (a.emailIds?.length || 0)
+    );
+
     return (
       <div className="space-y-4">
-        {unansweredFAQs.map((faq, index) => (
-          <div key={index} className="bg-white rounded-xl shadow-sm hover:shadow-md transition-shadow duration-200">
-            <div className="p-6">
-              <div className="flex items-start justify-between">
-                <div className="flex-1">
-                  <div className="flex items-center gap-3 mb-3">
-                    <PencilIcon className="h-5 w-5 text-blue-600" />
-                    <h3 className="text-lg font-medium text-gray-900">
-                      {faq.question}
-                    </h3>
-                  </div>
-                  
-                  {/* Source emails section */}
-                  <div className="mt-4">
-                    <h4 className="text-sm font-medium text-gray-700 mb-2">Found in {faq.sourceEmails.length} email{faq.sourceEmails.length !== 1 ? 's' : ''}:</h4>
-                    <div className="space-y-2">
-                      {faq.sourceEmails.map((email, emailIndex) => (
-                        <div key={emailIndex} className="flex items-start gap-2 text-sm text-gray-600">
-                          <div className="w-4 h-4 mt-0.5 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
-                            <span className="text-blue-600 text-xs">{emailIndex + 1}</span>
+        {sortedQuestions.map((faq, index) => {
+          // Find all emails that contain this question
+          const sourceEmails = emails.filter(email => {
+            const emailQs = emailQuestions.get(email.id) || [];
+            return emailQs.some(q => calculatePatternSimilarity(q.question, faq.question) > SIMILARITY_THRESHOLD);
+          });
+
+          return (
+            <div key={index} className="bg-white rounded-xl shadow-sm hover:shadow-md transition-shadow duration-200">
+              <div className="p-6">
+                <div className="flex items-start justify-between">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-3 mb-3">
+                      <PencilIcon className="h-5 w-5 text-blue-600" />
+                      <h3 className="text-lg font-medium text-gray-900">
+                        {faq.question}
+                      </h3>
+                    </div>
+                    
+                    {/* Source emails section */}
+                    <div className="mt-4">
+                      <h4 className="text-sm font-medium text-gray-700 mb-2">
+                        Found in {sourceEmails.length} email{sourceEmails.length !== 1 ? 's' : ''}:
+                      </h4>
+                      <div className="space-y-2">
+                        {sourceEmails.map((email, emailIndex) => (
+                          <div key={emailIndex} className="flex items-start gap-2 text-sm text-gray-600">
+                            <div className="w-4 h-4 mt-0.5 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
+                              <span className="text-blue-600 text-xs">{emailIndex + 1}</span>
+                            </div>
+                            <div>
+                              <div className="font-medium">{email.subject}</div>
+                              <div className="text-gray-500">From: {email.sender}</div>
+                            </div>
                           </div>
-                          <div>
-                            <div className="font-medium">{email.subject}</div>
-                            <div className="text-gray-500">From: {email.sender}</div>
-                          </div>
-                        </div>
-                      ))}
+                        ))}
+                      </div>
                     </div>
                   </div>
-                </div>
 
-                <button
-                  onClick={() => handleAddToFAQLibrary({
-                    ...faq,
-                    emailIds: faq.sourceEmails.map(e => e.id),
-                    requiresCustomerSpecificInfo: false
-                  })}
-                  className="flex-shrink-0 inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700"
-                >
-                  Answer Question
-                </button>
+                  <button
+                    onClick={() => handleAddToFAQLibrary({
+                      ...faq,
+                      emailIds: sourceEmails.map(e => e.id)
+                    })}
+                    className="flex-shrink-0 inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700"
+                  >
+                    Answer Question
+                  </button>
+                </div>
               </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     );
   };
@@ -1885,17 +2135,26 @@ Support Team`
       );
     }
 
-    if (!answeredFAQs.length) {
+    // Filter to only show FAQs with actual answers
+    const validFAQs = answeredFAQs.filter(faq => 
+      faq.answer && 
+      faq.answer.trim() !== '' && 
+      faq.question && 
+      faq.question.trim() !== ''
+    );
+
+    if (!validFAQs.length) {
       return (
         <div className="text-center py-8">
           <p className="text-gray-500">No FAQs in the library yet.</p>
+          <p className="text-sm text-gray-400 mt-2">Answer questions from the "Questions to Answer" tab to build your FAQ library.</p>
         </div>
       );
     }
 
     return (
       <div className="space-y-6">
-        {answeredFAQs.map(faq => (
+        {validFAQs.map(faq => (
           <div key={faq.question} className="bg-white rounded-lg shadow p-6">
             <div className="flex justify-between items-start">
               <div className="flex-1">
@@ -1904,12 +2163,16 @@ Support Team`
                 </h3>
                 <div className="flex items-center space-x-2 text-sm text-gray-500 mb-4">
                   <span className="inline-flex items-center px-2.5 py-0.5 rounded-full bg-gray-100 text-gray-800">
-                    {faq.category}
+                    {faq.category || 'General'}
                   </span>
-                  <span>•</span>
-                  <span>
-                    Confidence: {Math.round(faq.confidence * 100)}%
-                  </span>
+                  {faq.confidence && (
+                    <>
+                      <span>•</span>
+                      <span>
+                        Confidence: {Math.round(faq.confidence * 100)}%
+                      </span>
+                    </>
+                  )}
                 </div>
                 <div className="prose prose-sm max-w-none">
                   <p className="text-gray-700 whitespace-pre-line">{faq.answer}</p>
@@ -1973,40 +2236,67 @@ Support Team`
     });
   }, [genericFAQs, answeredFAQs, emailQuestions, activeTab, loading, loadingFAQs, loadingCache, loadingMore]);
 
+  // Add this useEffect for the countdown timer
+  useEffect(() => {
+    const updateTimer = () => {
+      const now = Date.now();
+      const timeSinceLastFetch = now - lastFetchTimestamp;
+      const remainingTime = Math.max(0, MIN_FETCH_INTERVAL - timeSinceLastFetch);
+      setTimeUntilNextRefresh(remainingTime);
+    };
+
+    // Update immediately
+    updateTimer();
+
+    // Update every second
+    const interval = setInterval(updateTimer, 1000);
+
+    return () => clearInterval(interval);
+  }, [lastFetchTimestamp]);
+
+  // Add this helper function after the state declarations
+  const copyEmailDebugInfo = useCallback((email: ExtendedEmail) => {
+    const questions = emailQuestions.get(email.id) || [];
+    const debugText = `
+=== Email Debug Info ===
+Subject: ${email.subject}
+From: ${email.sender}
+
+Original Customer Question:
+${email.content}
+
+AI Generated Questions (${questions.length}):
+${questions.map((q, i) => `${i + 1}. ${q.question}`).join('\n')}
+`;
+
+    navigator.clipboard.writeText(debugText).then(() => {
+      toast.success('Debug info copied to clipboard');
+    }).catch(() => {
+      toast.error('Failed to copy debug info');
+    });
+  }, [emailQuestions]);
+
   return (
     <Layout>
-      <div className="min-h-screen bg-gray-100 py-6">
-        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between mb-8">
-            <div>
-              <h1 className="text-2xl font-semibold text-gray-900">
-                Customer Support Triage
-              </h1>
-              <p className="mt-1 text-sm text-gray-500">
-                Create FAQs from unanswered emails to enable automatic replies
-              </p>
-            </div>
-            {user?.accessToken && (
-              <button
-                onClick={handleRefresh}
-                disabled={Date.now() - lastFetchTimestamp < MIN_FETCH_INTERVAL}
-                className={`inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white
-                  ${Date.now() - lastFetchTimestamp < MIN_FETCH_INTERVAL 
-                    ? 'bg-gray-400 cursor-not-allowed'
-                    : 'bg-indigo-600 hover:bg-indigo-700'}`}
-              >
-                <svg className={`mr-2 h-4 w-4 ${analyzing ? 'animate-spin' : ''}`} viewBox="0 0 24 24">
-                  <path fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/>
-                </svg>
-                Refresh
-              </button>
-            )}
+      <div className="max-w-[80%] mx-auto py-8">
+        <div className="flex items-center justify-between mb-8">
+          <div>
+            <h1 className="text-3xl font-semibold text-gray-900 mb-2">Customer Support Triage</h1>
+            <p className="text-gray-500">Manage and respond to customer inquiries efficiently</p>
           </div>
-
-          {user?.accessToken && renderTabs()}
-          {renderMainContent()}
-          {renderAnswerModal()}
+          <button
+            onClick={handleRefresh}
+            className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+          >
+            <ClockIcon className="h-4 w-4 mr-2" />
+            Refresh
+          </button>
         </div>
+        {renderTabs()}
+        <div className="mt-6">
+          {renderMainContent()}
+        </div>
+        {renderAnswerModal()}
       </div>
     </Layout>
   );
