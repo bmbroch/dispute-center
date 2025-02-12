@@ -15,6 +15,13 @@ import {
   BookOpenIcon,
   PencilIcon,
   TrashIcon,
+  Info,
+  Sparkles,
+  List,
+  Link,
+  Bold,
+  Italic,
+  Rocket,
 } from 'lucide-react';
 import { Dialog, Transition } from '@headlessui/react';
 import { Fragment } from 'react';
@@ -23,6 +30,7 @@ import { collection, doc, setDoc, getDoc, getDocs, query, where } from 'firebase
 import { Email } from '@/types/email';
 import { GenericFAQ, IrrelevanceAnalysis } from '@/types/faq';
 import { calculatePatternSimilarity } from '@/lib/utils/similarity';
+import { Firestore } from 'firebase/firestore';
 
 interface PotentialFAQ {
   id: string;
@@ -57,6 +65,7 @@ interface CacheData {
   emails?: Email[];
   genericFAQs?: GenericFAQ[];
   answeredFAQs?: AnsweredFAQ[];
+  matches?: { [key: string]: MatchedFAQ };
 }
 
 interface MatchedFAQ {
@@ -65,13 +74,30 @@ interface MatchedFAQ {
   confidence: number;
 }
 
-interface ExtendedEmail extends Omit<Email, 'status' | 'matchedFAQ'> {
+interface BaseEmail {
+  id: string;
+  threadId: string;
+  subject: string;
+  sender: string;
+  content: string;
+  receivedAt: number | string;  // Allow both number and string
+}
+
+interface ExtendedEmail extends BaseEmail {
   questions?: GenericFAQ[];
   suggestedReply?: string;
   showFullContent?: boolean;
   isGeneratingReply?: boolean;
   matchedFAQ?: MatchedFAQ;
-  status?: 'pending' | 'processed' | 'replied';
+  status?: 'pending' | 'processed' | 'replied' | 'removed_from_ready';
+  isReplied?: boolean;
+  isNotRelevant?: boolean;
+  isMovingToReady?: boolean;
+  emailIds?: string[];
+  irrelevanceReason?: string;
+  category?: 'support' | 'sales' | 'other';
+  aiAnalysis?: boolean;
+  analysis?: any; // TODO: Define proper type for analysis
 }
 
 // Add cache helper functions at the top of the file
@@ -81,12 +107,16 @@ const CACHE_KEYS = {
   GENERIC_FAQS: 'faq_generic_faqs_cache',
   LAST_FETCH: 'faq_last_fetch_timestamp',
   AI_ANALYSIS: 'faq_ai_analysis_cache',
-  ANSWERED_FAQS: 'faq_answered_faqs_cache'
+  ANSWERED_FAQS: 'faq_answered_faqs_cache',
+  READY_TO_REPLY: 'faq_ready_to_reply_cache',
+  FAQ_MATCHES: 'faq_matches_cache',
+  REMOVED_EMAILS: 'removed_from_ready_emails'
 };
 
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes in milliseconds
 const ANSWERED_FAQS_CACHE_DURATION = 30 * 60 * 1000; // 30 minutes for answered FAQs
 const MIN_FETCH_INTERVAL = 30000; // 30 seconds in milliseconds
+const SIMILARITY_THRESHOLD = 0.6; // Threshold for question similarity matching
 
 const loadFromCache = (key: string): CacheData | null => {
   try {
@@ -178,6 +208,23 @@ const loadingState = {
 const FIREBASE_CACHE_COLLECTION = 'email_cache';
 const FIREBASE_CACHE_DURATION = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
 
+// Add isEmailReadyForReply helper function
+const isEmailReadyForReply = (email: ExtendedEmail, emailQuestions: Map<string, GenericFAQ[]>, answeredFAQs: AnsweredFAQ[]) => {
+  const questions = emailQuestions.get(email.id) || [];
+  return email.matchedFAQ && 
+         !email.isReplied && 
+         email.suggestedReply && 
+         questions.length > 0 && 
+         questions.every(q => {
+           const matchedFAQ = answeredFAQs.find(faq => 
+             faq.answer && 
+             faq.answer.trim() !== '' && 
+             calculatePatternSimilarity(faq.question, q.question) > SIMILARITY_THRESHOLD
+           );
+           return matchedFAQ && matchedFAQ.answer && matchedFAQ.answer.trim() !== '';
+         });
+};
+
 const loadEmailsFromFirebase = async () => {
   try {
     const db = getFirebaseDB();
@@ -218,7 +265,7 @@ const saveEmailsToFirebase = async (emails: Email[]) => {
 
 // Add this helper function near the top of the component
 const copyEmailDebugInfo = (email: ExtendedEmail) => {
-  const questions = emailQuestions.get(email.id) || [];
+  const questions = email.questions || [];
   const debugText = `
 === Email Debug Info ===
 Subject: ${email.subject}
@@ -228,7 +275,7 @@ Original Customer Question:
 ${email.content}
 
 AI Generated Questions (${questions.length}):
-${questions.map((q, i) => `${i + 1}. ${q.question}`).join('\n')}
+${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\n')}
 `;
 
   navigator.clipboard.writeText(debugText).then(() => {
@@ -305,11 +352,19 @@ const FIREBASE_COLLECTIONS = {
   CACHED_QUESTIONS: 'cached_questions'
 };
 
-// Add new function to save extracted questions to Firebase
+// Add this near the Firebase-related functions
+const getDocRef = (db: Firestore | null, collection: string, docId: string) => {
+  if (!db) return null;
+  return doc(db, collection, docId);
+};
+
+// Update the saveExtractedQuestionsToFirebase function
 const saveExtractedQuestionsToFirebase = async (emailId: string, questions: GenericFAQ[]) => {
   try {
     const db = getFirebaseDB();
-    const docRef = doc(db, FIREBASE_COLLECTIONS.CACHED_QUESTIONS, emailId);
+    const docRef = getDocRef(db, FIREBASE_COLLECTIONS.CACHED_QUESTIONS, emailId);
+    if (!docRef) return false;
+
     await setDoc(docRef, {
       questions,
       timestamp: Date.now(),
@@ -322,11 +377,13 @@ const saveExtractedQuestionsToFirebase = async (emailId: string, questions: Gene
   }
 };
 
-// Add new function to get cached questions from Firebase
+// Update the getCachedQuestionsFromFirebase function
 const getCachedQuestionsFromFirebase = async (emailId: string) => {
   try {
     const db = getFirebaseDB();
-    const docRef = doc(db, FIREBASE_COLLECTIONS.CACHED_QUESTIONS, emailId);
+    const docRef = getDocRef(db, FIREBASE_COLLECTIONS.CACHED_QUESTIONS, emailId);
+    if (!docRef) return null;
+    
     const docSnap = await getDoc(docRef);
     
     if (docSnap.exists()) {
@@ -377,10 +434,62 @@ const extractQuestionsFromEmail = async (email: ExtendedEmail) => {
   }
 };
 
+// Add this before the component definition
+const groupSimilarPatterns = (patterns: GenericFAQ[]): GenericFAQ[] => {
+  const groups: GenericFAQ[] = [];
+  
+  patterns.forEach(pattern => {
+    // First try to find a group with very similar question
+    const similarGroup = groups.find(group => {
+      // Check if questions are essentially asking for the same thing
+      const baseQuestion1 = group.question.toLowerCase().replace(/{email}|{username}/g, '').trim();
+      const baseQuestion2 = pattern.question.toLowerCase().replace(/{email}|{username}/g, '').trim();
+      
+      // If both questions contain same key action words, treat them as similar
+      const keyWords1 = new Set(baseQuestion1.match(/\b(cancel|end|stop|terminate|discontinue)\b/g) || []);
+      const keyWords2 = new Set(baseQuestion2.match(/\b(cancel|end|stop|terminate|discontinue)\b/g) || []);
+      
+      const hasCommonKeyWord = [...keyWords1].some(word => keyWords2.has(word));
+      const similarity = calculatePatternSimilarity(baseQuestion1, baseQuestion2);
+      
+      return hasCommonKeyWord && similarity > SIMILARITY_THRESHOLD;
+    });
+    
+    if (similarGroup) {
+      // Add as a pattern variation rather than a separate question
+      if (!similarGroup.similarPatterns) {
+        similarGroup.similarPatterns = [];
+      }
+      similarGroup.similarPatterns.push(pattern.question);
+      similarGroup.emailIds = Array.from(new Set([
+        ...(similarGroup.emailIds || []),
+        ...(pattern.emailIds || [])
+      ]));
+    } else {
+      groups.push({
+        ...pattern,
+        similarPatterns: [],
+        emailIds: pattern.emailIds || []
+      });
+    }
+  });
+  
+  return groups;
+};
+
+// Add this type definition at the top with other interfaces
+type EmailQuestionsMap = Map<string, GenericFAQ[]>;
+
+// Add this type definition at the top with other interfaces
+interface RemovedEmailsCache {
+  emails: string[];
+  timestamp: number;
+}
+
 export default function FAQAutoReplyV2() {
   console.log('=== Component Render Start ===');
   const { user, checkGmailAccess, refreshAccessToken } = useAuth();
-  const [emails, setEmails] = useState<ExtendedEmail[]>([]);
+  const [emails, setEmails] = useState<ExtendedEmail[]>([]); // Explicitly initialize as empty array
   const [potentialFAQs, setPotentialFAQs] = useState<PotentialFAQ[]>([]);
   const [genericFAQs, setGenericFAQs] = useState<GenericFAQ[]>([]);
   const [activeTab, setActiveTab] = useState<'unanswered' | 'suggested' | 'faq_expansion' | 'faq_library'>('unanswered');
@@ -392,7 +501,7 @@ export default function FAQAutoReplyV2() {
   const [showAnswerModal, setShowAnswerModal] = useState(false);
   const [selectedFAQ, setSelectedFAQ] = useState<GenericFAQ | null>(null);
   const [answer, setAnswer] = useState('');
-  const [emailQuestions, setEmailQuestions] = useState<Map<string, GenericFAQ[]>>(new Map());
+  const [emailQuestions, setEmailQuestions] = useState<EmailQuestionsMap>(new Map());
   const [loadingCache, setLoadingCache] = useState(true);
   const [hasMore, setHasMore] = useState(true);
   const [page, setPage] = useState(1);
@@ -401,6 +510,14 @@ export default function FAQAutoReplyV2() {
   const [editingReply, setEditingReply] = useState<EditingReply | null>(null);
   const [lastFetchTimestamp, setLastFetchTimestamp] = useState<number>(0);
   const [timeUntilNextRefresh, setTimeUntilNextRefresh] = useState<number>(0);
+
+  // Add readyToReplyCount calculation
+  const readyToReplyCount = useMemo(() => emails.filter(e => 
+    e.status === 'processed' && 
+    e.matchedFAQ && 
+    !e.isReplied &&
+    e.suggestedReply
+  ).length, [emails]);
 
   // Move isSubscribed ref before the useEffect
   const isSubscribed = useRef(true);
@@ -526,25 +643,39 @@ export default function FAQAutoReplyV2() {
 
   // Add this helper function to check if all email questions have been answered
   const checkEmailAnsweredStatus = useCallback((email: ExtendedEmail) => {
+    console.log(`Checking status for email ${email.id}`);
     const questions = emailQuestions.get(email.id) || [];
-    if (questions.length === 0) return false;
+    
+    if (questions.length === 0) {
+      console.log('No questions found for email');
+      return null;
+    }
 
     // Check if all questions have matching answered FAQs
-    const allQuestionsAnswered = questions.every(q => {
-      const matchedFAQ = findMatchingAnsweredFAQ(q.question);
-      return matchedFAQ && matchedFAQ.answer && matchedFAQ.answer.trim() !== '';
+    const questionsWithAnswers = questions.map(q => {
+      const matchedFAQ = answeredFAQs.find(faq => 
+        faq.answer && 
+        faq.answer.trim() !== '' && 
+        calculatePatternSimilarity(faq.question, q.question) > SIMILARITY_THRESHOLD
+      );
+      return { question: q, matchedFAQ };
     });
 
+    const allQuestionsAnswered = questionsWithAnswers.every(q => q.matchedFAQ);
+    console.log(`All questions answered: ${allQuestionsAnswered}`);
+
     if (allQuestionsAnswered) {
-      // Find the best matching FAQ for the email (highest confidence)
-      const bestMatch = questions.reduce((best, current) => {
-        const matchedFAQ = findMatchingAnsweredFAQ(current.question);
-        if (!matchedFAQ || !matchedFAQ.answer || matchedFAQ.answer.trim() === '') return best;
-        if (!best || matchedFAQ.confidence > best.confidence) return matchedFAQ;
+      // Find the best matching FAQ (highest confidence)
+      const bestMatch = questionsWithAnswers.reduce((best, current) => {
+        if (!current.matchedFAQ) return best;
+        if (!best || current.matchedFAQ.confidence > best.confidence) {
+          return current.matchedFAQ;
+        }
         return best;
       }, null as AnsweredFAQ | null);
 
       if (bestMatch) {
+        console.log(`Found best match for email: ${bestMatch.question}`);
         return {
           question: bestMatch.question,
           answer: bestMatch.answer,
@@ -553,8 +684,9 @@ export default function FAQAutoReplyV2() {
       }
     }
 
+    console.log('No suitable match found');
     return null;
-  }, [emailQuestions, findMatchingAnsweredFAQ]);
+  }, [emailQuestions, answeredFAQs, calculatePatternSimilarity]);
 
   // Update the loadEmails function to use Firebase cache
   const loadEmails = useCallback(async (forceRefresh = false, nextPage = 1) => {
@@ -751,8 +883,7 @@ export default function FAQAutoReplyV2() {
     loading,
     loadingMore,
     refreshAccessToken,
-    lastFetchTimestamp,
-    MIN_FETCH_INTERVAL
+    lastFetchTimestamp
   ]);
 
   useEffect(() => {
@@ -762,52 +893,59 @@ export default function FAQAutoReplyV2() {
 
   useEffect(() => {
     const initialize = async () => {
-      setLoading(true);
+      if (!isSubscribed.current) return;
+      
       try {
-        // Load emails first
-        const cachedEmails = loadFromCache(CACHE_KEYS.EMAILS);
-        let emailsData = cachedEmails?.emails || [];
+        // Always try Firebase cache first for ready-to-reply emails
+        const firebaseReadyToReply = await loadReadyToReplyFromFirebase();
         
-        if (!cachedEmails || !isCacheValid(CACHE_KEYS.EMAILS)) {
-          emailsData = await loadEmailsFromFirebase();
-          saveToCache(CACHE_KEYS.EMAILS, { emails: emailsData, timestamp: Date.now() });
-        }
-
-        // Load all questions from Firebase for all emails
-        const questionsMap = new Map<string, GenericFAQ[]>();
-        const db = getFirebaseDB();
-        if (db) {
-          const questionsSnapshot = await getDocs(collection(db, FIREBASE_QUESTIONS_COLLECTION));
-          questionsSnapshot.forEach((doc) => {
-            const data = doc.data();
-            if (data.questions) {
-              questionsMap.set(doc.id, data.questions);
-              
-              // Also add to answeredFAQs if they don't exist
-              setAnsweredFAQs(prevFAQs => {
-                const newFAQs = data.questions.map((q: GenericFAQ) => ({
-                  question: q.question,
-                  answer: '', // Empty answer that needs to be filled
-                  category: q.category || 'support',
-                  confidence: q.confidence || 1
-                })).filter((newQ: AnsweredFAQ) => !prevFAQs.some(existingQ => 
-                  calculatePatternSimilarity(existingQ.question, newQ.question) > SIMILARITY_THRESHOLD
-                ));
-                return [...prevFAQs, ...newFAQs];
-              });
-            }
+        if (firebaseReadyToReply && firebaseReadyToReply.length > 0) {
+          // Update local cache
+          saveToCache(CACHE_KEYS.READY_TO_REPLY, { 
+            emails: firebaseReadyToReply, 
+            timestamp: Date.now() 
+          });
+          
+          // Update emails state to include ready-to-reply
+          setEmails(prev => {
+            const existingEmailIds = new Set(prev.map(e => e.id));
+            const newEmails = [...prev];
+            
+            firebaseReadyToReply.forEach((readyEmail: ExtendedEmail) => {
+              if (!existingEmailIds.has(readyEmail.id)) {
+                newEmails.push(readyEmail);
+              } else {
+                // Update existing email with ready-to-reply status
+                const index = newEmails.findIndex(e => e.id === readyEmail.id);
+                if (index !== -1) {
+                  newEmails[index] = {
+                    ...newEmails[index],
+                    ...readyEmail,
+                    status: 'processed'
+                  };
+                }
+              }
+            });
+            
+            return newEmails;
           });
         }
-        setEmailQuestions(questionsMap);
-
-        // Update emails with their questions
-        const updatedEmails = emailsData.map((email: ExtendedEmail) => {
-          const questions = questionsMap.get(email.id);
-          return questions ? { ...email, questions } : email;
-        });
-
-        setEmails(updatedEmails);
+        
+        // Then load regular emails
+        const firebaseEmails = await loadEmailsFromFirebase();
+        if (firebaseEmails && firebaseEmails.length > 0) {
+          setEmails(prev => {
+            const existingEmailIds = new Set(prev.map(e => e.id));
+            return [
+              ...prev,
+              ...firebaseEmails.filter((e: ExtendedEmail) => !existingEmailIds.has(e.id))
+            ];
+          });
+          saveToCache(CACHE_KEYS.EMAILS, { emails: firebaseEmails, timestamp: Date.now() });
+        }
+        
         setLastFetchTimestamp(Date.now());
+        
       } catch (error) {
         console.error('Error initializing:', error);
         toast.error('Failed to load emails');
@@ -818,11 +956,10 @@ export default function FAQAutoReplyV2() {
 
     initialize();
 
-    // Cleanup function to ensure we don't set state after unmount
     return () => {
       isSubscribed.current = false;
     };
-  }, [calculatePatternSimilarity]); // Add calculatePatternSimilarity as dependency since we use it in the effect
+  }, [emails, isSubscribed, loadEmails]); // Added emails to dependency array
 
   // Update the FAQ loading effect
   useEffect(() => {
@@ -872,49 +1009,88 @@ export default function FAQAutoReplyV2() {
     };
   }, []); // Remove answeredFAQs from dependencies to prevent loops
 
-  // Update the email status effect
+  // Update the email status effect to cache FAQ matches
   useEffect(() => {
-    console.log('=== Email Status Update Debug ===');
-    console.log('Answered FAQs:', answeredFAQs);
-    console.log('Current Emails:', emails);
-    
     if (answeredFAQs.length === 0) return;
 
-    setEmails(prevEmails => {
-      const updatedEmails = prevEmails.map(email => {
+    const updateEmails = async () => {
+      const updatedEmails = await Promise.all(emails.map(async (email) => {
         const questions = emailQuestions.get(email.id) || [];
-        console.log(`Checking email ${email.id}, questions:`, questions);
-        
         if (questions.length === 0) return email;
 
         const matchedFAQ = checkEmailAnsweredStatus(email);
-        console.log(`Email ${email.id} matchedFAQ:`, matchedFAQ);
         
         if (matchedFAQ) {
-          // Only update if the status has actually changed
-          if (!email.matchedFAQ || 
-              email.matchedFAQ.question !== matchedFAQ.question || 
-              email.matchedFAQ.answer !== matchedFAQ.answer) {
-            console.log(`Updating email ${email.id} with new matchedFAQ`);
-            return {
-              ...email,
-              matchedFAQ,
-              status: 'processed' as const
-            };
+          const updatedEmail = {
+            ...email,
+            matchedFAQ,
+            status: 'processed' as const
+          };
+
+          // Cache the FAQ match
+          const faqMatches = loadFromCache(CACHE_KEYS.FAQ_MATCHES)?.matches || {};
+          faqMatches[email.id] = matchedFAQ;
+          saveToCache(CACHE_KEYS.FAQ_MATCHES, { matches: faqMatches, timestamp: Date.now() });
+
+          const needsNewReply = !email.suggestedReply || 
+                              !email.matchedFAQ || 
+                              email.matchedFAQ.question !== matchedFAQ.question;
+
+          if (needsNewReply) {
+            try {
+              const response = await fetch('/api/knowledge/generate-reply', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  emailId: email.id,
+                  subject: email.subject,
+                  content: email.content,
+                  matchedFAQ: matchedFAQ,
+                  questions: questions,
+                  answeredFAQs: answeredFAQs.filter(faq => 
+                    questions.some(q => 
+                      calculatePatternSimilarity(q.question, faq.question) > SIMILARITY_THRESHOLD
+                    )
+                  )
+                })
+              });
+
+              if (response.ok) {
+                const data = await response.json();
+                const emailWithReply = {
+                  ...updatedEmail,
+                  suggestedReply: data.reply
+                };
+
+                // Cache the ready to reply email
+                const readyToReplyEmails = loadFromCache(CACHE_KEYS.READY_TO_REPLY)?.emails || [];
+                const updatedReadyToReply = [...readyToReplyEmails, emailWithReply];
+                saveToCache(CACHE_KEYS.READY_TO_REPLY, { 
+                  emails: updatedReadyToReply,
+                  timestamp: Date.now()
+                });
+                saveReadyToReplyToFirebase(updatedReadyToReply);
+
+                return emailWithReply;
+              }
+            } catch (error) {
+              console.error('Error generating reply:', error);
+            }
           }
+
+          return updatedEmail;
         }
         return email;
-      });
+      }));
 
-      // Only return new array if there were actual changes
-      const hasChanges = updatedEmails.some((email, index) => 
-        email !== prevEmails[index]
-      );
-      
-      console.log('Email updates complete. Has changes:', hasChanges);
-      return hasChanges ? updatedEmails : prevEmails;
+      setEmails(updatedEmails);
+    };
+
+    updateEmails().catch(error => {
+      console.error('Error updating emails:', error);
     });
-  }, [answeredFAQs, checkEmailAnsweredStatus, emailQuestions, emails]); // Added missing dependencies
+
+  }, [answeredFAQs, checkEmailAnsweredStatus, emailQuestions, calculatePatternSimilarity]);
 
   const handleLoadMore = () => {
     if (!loadingMore && hasMore) {
@@ -930,6 +1106,15 @@ export default function FAQAutoReplyV2() {
       });
       
       if (response.ok) {
+        // Remove from ready to reply cache
+        const readyToReplyEmails = loadFromCache(CACHE_KEYS.READY_TO_REPLY)?.emails || [];
+        const updatedReadyToReply = readyToReplyEmails.filter(e => e.id !== email.id);
+        saveToCache(CACHE_KEYS.READY_TO_REPLY, { 
+          emails: updatedReadyToReply,
+          timestamp: Date.now()
+        });
+        saveReadyToReplyToFirebase(updatedReadyToReply);
+
         toast.success('Auto-reply sent successfully');
         loadEmails();
       } else {
@@ -1013,6 +1198,9 @@ export default function FAQAutoReplyV2() {
 
       const savedFAQ = await response.json();
 
+      // Track which emails become ready for reply
+      const emailsMovedToReady: ExtendedEmail[] = [];
+
       // Update answeredFAQs state with both the main question and similar patterns
       setAnsweredFAQs(prev => {
         const newAnsweredFAQs = [...prev];
@@ -1051,7 +1239,7 @@ export default function FAQAutoReplyV2() {
         return newAnsweredFAQs;
       });
 
-      // Update emailQuestions to maintain the relationship and mark questions as answered
+      // Update emailQuestions and check for ready emails
       setEmailQuestions(prev => {
         const updated = new Map(prev);
         const emailIds = selectedFAQ?.emailIds || [];
@@ -1063,7 +1251,7 @@ export default function FAQAutoReplyV2() {
               return {
                 ...q,
                 answer: answer.trim(),
-                isAnswered: true // Add this flag
+                isAnswered: true
               };
             }
             return q;
@@ -1082,47 +1270,71 @@ export default function FAQAutoReplyV2() {
       );
 
       // Update emails that might now have all questions answered
-      setEmails(prev => prev.map(email => {
-        const emailIds = selectedFAQ?.emailIds || [];
-        if (emailIds.includes(email.id)) {
-          const questions = emailQuestions.get(email.id) || [];
-          const allAnswered = questions.every(q => 
-            answeredFAQs.some(faq => 
-              calculatePatternSimilarity(faq.question, q.question) > SIMILARITY_THRESHOLD ||
-              (selectedFAQ?.similarPatterns && selectedFAQ.similarPatterns.includes(q.question))
-            )
-          );
-          
-          if (allAnswered) {
-            const bestMatch = questions.reduce((best, current) => {
-              const matchedFAQ = findMatchingAnsweredFAQ(current.question) || 
-                (current.question === selectedFAQ?.question ? {
-                  question: selectedFAQ?.question,
-                  answer: answer.trim(),
-                  category: selectedFAQ?.category,
-                  confidence: selectedFAQ?.confidence
-                } : null);
+      setEmails(prev => {
+        const updatedEmails = prev.map(email => {
+          const emailIds = selectedFAQ?.emailIds || [];
+          if (emailIds.includes(email.id)) {
+            const questions = emailQuestions.get(email.id) || [];
+            const allAnswered = questions.every(q => 
+              answeredFAQs.some(faq => 
+                calculatePatternSimilarity(faq.question, q.question) > SIMILARITY_THRESHOLD ||
+                (selectedFAQ?.similarPatterns && selectedFAQ.similarPatterns.includes(q.question))
+              )
+            );
+            
+            if (allAnswered) {
+              const bestMatch = questions.reduce((best, current) => {
+                const matchedFAQ = findMatchingAnsweredFAQ(current.question) || 
+                  (current.question === selectedFAQ?.question ? {
+                    question: selectedFAQ?.question,
+                    answer: answer.trim(),
+                    category: selectedFAQ?.category,
+                    confidence: selectedFAQ?.confidence
+                  } : null);
 
-              if (!matchedFAQ) return best;
-              if (!best || matchedFAQ.confidence > best.confidence) return matchedFAQ;
-              return best;
-            }, null as AnsweredFAQ | null);
+                if (!matchedFAQ) return best;
+                if (!best || matchedFAQ.confidence > best.confidence) return matchedFAQ;
+                return best;
+              }, null as AnsweredFAQ | null);
 
-            if (bestMatch) {
-              return {
-                ...email,
-                matchedFAQ: {
-                  question: bestMatch.question,
-                  answer: bestMatch.answer,
-                  confidence: bestMatch.confidence
-                },
-                status: 'processed'
-              };
+              if (bestMatch) {
+                const updatedEmail = {
+                  ...email,
+                  matchedFAQ: {
+                    question: bestMatch.question,
+                    answer: bestMatch.answer,
+                    confidence: bestMatch.confidence
+                  },
+                  status: 'processed' as const
+                };
+                emailsMovedToReady.push(updatedEmail);
+                return updatedEmail;
+              }
             }
           }
+          return email;
+        });
+
+        // Save ready to reply emails to Firebase
+        const readyToReplyEmails = updatedEmails.filter(email => 
+          email.status === 'processed' && 
+          email.matchedFAQ && 
+          !email.isReplied
+        );
+        
+        if (readyToReplyEmails.length > 0) {
+          console.log('Saving ready to reply emails to Firebase:', readyToReplyEmails.length);
+          saveReadyToReplyToFirebase(readyToReplyEmails);
+          
+          // Also save to local cache
+          saveToCache(CACHE_KEYS.READY_TO_REPLY, {
+            emails: readyToReplyEmails,
+            timestamp: Date.now()
+          });
         }
-        return email;
-      }));
+
+        return updatedEmails;
+      });
 
       // Save updated state to cache
       saveToCache(CACHE_KEYS.QUESTIONS, Object.fromEntries(emailQuestions));
@@ -1301,8 +1513,49 @@ export default function FAQAutoReplyV2() {
       console.log('Saving to cache...');
       saveToCache(CACHE_KEYS.QUESTIONS, Object.fromEntries(emailQuestions));
       
-      console.log('FAQ creation completed successfully');
+      // Show success toast with question count
       toast.success(`Found ${questionObjects.length} question${questionObjects.length === 1 ? '' : 's'} in email`);
+
+      // Check if all questions have matching FAQs
+      const allQuestionsAnswered = questionObjects.every((q: GenericFAQ) => 
+        answeredFAQs.some(faq => 
+          faq.answer && 
+          faq.answer.trim() !== '' && 
+          calculatePatternSimilarity(faq.question, q.question) > SIMILARITY_THRESHOLD
+        )
+      );
+
+      // If all questions are answered, show the "moving to Ready to Reply" notification
+      if (allQuestionsAnswered) {
+        toast.success(
+          <div className="flex flex-col gap-1">
+            <div className="font-medium">All questions have been answered! 🎉</div>
+            <div className="text-sm text-gray-600">
+              Moving to "Ready to Reply" once we finish generating a response...
+            </div>
+          </div>,
+          {
+            duration: 5000,
+            icon: '✨'
+          }
+        );
+
+        // Add a slight delay before starting the animation
+        setTimeout(() => {
+          setEmails(prev => prev.map(e => 
+            e.id === email.id 
+              ? { ...e, isMovingToReady: true }
+              : e
+          ));
+        }, 1000);
+
+        // Remove the email from the list after animation completes
+        setTimeout(() => {
+          setEmails(prev => prev.filter(e => e.id !== email.id));
+        }, 1500);
+      }
+
+      console.log('FAQ creation completed successfully');
     } catch (error) {
       console.error('Error in handleCreateFAQ:', error);
       toast.error(error instanceof Error ? error.message : 'Failed to analyze email. Please try again.');
@@ -1385,13 +1638,40 @@ export default function FAQAutoReplyV2() {
   const handleSaveReply = async (emailId: string) => {
     if (!editingReply) return;
 
-    setEmails(prev => prev.map(e => 
-      e.id === emailId 
-        ? { ...e, suggestedReply: editingReply.reply }
-        : e
-    ));
-    setEditingReply(null);
-    toast.success('Reply updated');
+    try {
+      // Update emails state
+      setEmails(prev => prev.map(e => 
+        e.id === emailId 
+          ? { ...e, suggestedReply: editingReply.reply }
+          : e
+      ));
+
+      // Get the updated ready-to-reply emails
+      const readyToReplyEmails = emails.map(e => 
+        e.id === emailId 
+          ? { ...e, suggestedReply: editingReply.reply }
+          : e
+      ).filter(e => 
+        e.status === 'processed' && 
+        e.matchedFAQ && 
+        !e.isReplied
+      );
+
+      // Save to Firebase
+      await saveReadyToReplyToFirebase(readyToReplyEmails);
+
+      // Save to local cache
+      saveToCache(CACHE_KEYS.READY_TO_REPLY, {
+        emails: readyToReplyEmails,
+        timestamp: Date.now()
+      });
+
+      setEditingReply(null);
+      toast.success('Reply updated successfully');
+    } catch (error) {
+      console.error('Error saving reply:', error);
+      toast.error('Failed to save reply');
+    }
   };
 
   const generateDefaultReply = (email: ExtendedEmail) => {
@@ -1417,69 +1697,84 @@ Support Team`;
     ));
   };
 
-  const renderTabs = () => (
-    <div className="border-b border-gray-200 mb-8">
-      <nav className="-mb-px flex space-x-8" aria-label="Tabs">
-        {[
-          { 
-            id: 'unanswered', 
-            label: 'Unanswered Emails', 
-            icon: MessageCircleIcon, 
-            count: emails.filter(e => !e.isReplied && !e.isNotRelevant && !e.matchedFAQ).length,
-            description: 'Step 1: Extract questions from emails'
-          },
-          { 
-            id: 'faq_expansion', 
-            label: 'Questions to Answer', 
-            icon: LightbulbIcon, 
-            count: answeredFAQs.filter(faq => !faq.answer).length,
-            description: 'Step 2: Answer extracted questions',
-            highlight: answeredFAQs.filter(faq => !faq.answer).length > 0
-          },
-          { 
-            id: 'suggested', 
-            label: 'Ready to Reply', 
-            icon: CheckCircleIcon, 
-            count: emails.filter(e => e.matchedFAQ && !e.isReplied).length,
-            description: 'Step 3: Send auto-replies'
-          },
-          {
-            id: 'faq_library',
-            label: 'FAQ Library',
-            icon: BookOpenIcon,
-            count: answeredFAQs.filter(faq => faq.answer).length,
-            description: 'Browse all answered FAQs'
-          }
-        ].map(({ id, label, icon: Icon, count, description, highlight }) => (
-          <button
-            key={id}
-            onClick={() => setActiveTab(id as any)}
-            className={`
-              group relative min-w-0 flex-1 overflow-hidden py-4 px-4 text-center text-sm font-medium hover:bg-gray-50 focus:z-10
-              ${activeTab === id ? 'border-b-2 border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}
-              ${highlight ? 'bg-yellow-50' : ''}
-            `}
-          >
-            <div className="flex items-center justify-center space-x-2">
-              <Icon className="h-5 w-5" />
-              <span>{label}</span>
-              {count > 0 && (
-                <span className={`ml-2 rounded-full px-2.5 py-0.5 text-xs font-medium 
-                  ${activeTab === id ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-600'}`}>
-                  {count}
-                </span>
-              )}
-            </div>
-            <span className="mt-1 block text-xs text-gray-500">{description}</span>
-          </button>
-        ))}
-      </nav>
-    </div>
-  );
+  const renderTabs = () => {
+    const readyToReplyCount = emails.filter(e => 
+      e.status === 'processed' && 
+      e.matchedFAQ && 
+      !e.isReplied &&
+      e.suggestedReply // Make sure we have a suggested reply
+    ).length;
+
+    return (
+      <div className="border-b border-gray-200 mb-8">
+        <nav className="-mb-px flex space-x-8" aria-label="Tabs">
+          {[
+            { 
+              id: 'unanswered', 
+              label: 'Unanswered Emails', 
+              icon: MessageCircleIcon, 
+              count: emails.filter(e => !e.isReplied && !e.isNotRelevant && !e.matchedFAQ).length,
+              description: 'Step 1: Extract questions from emails'
+            },
+            { 
+              id: 'faq_expansion', 
+              label: 'Questions to Answer', 
+              icon: LightbulbIcon, 
+              count: answeredFAQs.filter(faq => !faq.answer).length,
+              description: 'Step 2: Answer extracted questions',
+              highlight: answeredFAQs.filter(faq => !faq.answer).length > 0
+            },
+            { 
+              id: 'suggested', 
+              label: 'Ready to Reply', 
+              icon: CheckCircleIcon, 
+              count: readyToReplyCount,
+              description: 'Step 3: Send auto-replies'
+            },
+            {
+              id: 'faq_library',
+              label: 'FAQ Library',
+              icon: BookOpenIcon,
+              count: answeredFAQs.filter(faq => faq.answer).length,
+              description: 'Browse all answered FAQs'
+            }
+          ].map(({ id, label, icon: Icon, count, description, highlight }) => (
+            <button
+              key={id}
+              onClick={() => setActiveTab(id as any)}
+              className={`
+                group relative min-w-0 flex-1 overflow-hidden py-4 px-4 text-center text-sm font-medium hover:bg-gray-50 focus:z-10
+                ${activeTab === id ? 'border-b-2 border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}
+                ${highlight ? 'bg-yellow-50' : ''}
+              `}
+            >
+              <div className="flex items-center justify-center space-x-2">
+                <Icon className="h-5 w-5" />
+                <span>{label}</span>
+                {count > 0 && (
+                  <span className={`ml-2 rounded-full px-2.5 py-0.5 text-xs font-medium 
+                    ${activeTab === id ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-600'}`}>
+                    {count}
+                  </span>
+                )}
+              </div>
+              <span className="mt-1 block text-xs text-gray-500">{description}</span>
+            </button>
+          ))}
+        </nav>
+      </div>
+    );
+  };
 
   const renderUnansweredEmails = () => {
+    // Add debug logging
+    console.log('=== Debug renderUnansweredEmails ===');
+    console.log('Emails state:', emails);
+    console.log('Emails type:', typeof emails);
+    console.log('Is array:', Array.isArray(emails));
+
     // Show skeleton during initial load, refresh, or when we have no emails yet
-    if (loading && !emails.length) {  // Only show loading skeleton if we have no emails to display
+    if (loading && (!emails || !Array.isArray(emails) || emails.length === 0)) {
       return (
         <div className="space-y-4">
           {[1, 2, 3].map((i) => (
@@ -1502,16 +1797,18 @@ Support Team`;
       );
     }
 
-    const unansweredEmails = emails.filter(email => !email.isReplied && !email.isNotRelevant && !email.matchedFAQ);
+    // Ensure emails is an array
+    const emailsArray = Array.isArray(emails) ? emails : [];
+    const unansweredEmails = emailsArray.filter(email => !email.isReplied && !email.isNotRelevant && !email.matchedFAQ);
     
     return (
-      <div className="space-y-4">
-        {/* Status banner - Always show it */}
-        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+      <div className="space-y-3">
+        {/* Status banner */}
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center">
-              <ClockIcon className="h-5 w-5 text-blue-400 mr-2" />
-              <p className="text-sm text-blue-700">
+              <ClockIcon className="h-4 w-4 text-blue-400 mr-1.5" />
+              <p className="text-xs text-blue-700">
                 {timeUntilNextRefresh > 0 
                   ? `Showing cached emails. Next refresh available in ${formatTimeRemaining(timeUntilNextRefresh)}`
                   : 'Showing cached emails. Refresh available now'}
@@ -1520,12 +1817,12 @@ Support Team`;
             <button
               onClick={handleRefresh}
               disabled={timeUntilNextRefresh > 0}
-              className={`inline-flex items-center px-3 py-1.5 text-sm font-medium rounded-md
+              className={`inline-flex items-center px-2 py-1 text-xs font-medium rounded-md
                 ${timeUntilNextRefresh > 0 
                   ? 'bg-gray-100 text-gray-400 cursor-not-allowed' 
                   : 'bg-blue-100 text-blue-700 hover:bg-blue-200'}`}
             >
-              <svg className="h-4 w-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="h-3 w-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
               </svg>
               Refresh Now
@@ -1539,26 +1836,31 @@ Support Team`;
           const answeredQuestions = questions.filter(q => findMatchingAnsweredFAQ(q.question));
           const unansweredQuestions = questions.filter(q => !findMatchingAnsweredFAQ(q.question));
           const progress = hasQuestions ? (answeredQuestions.length / questions.length) * 100 : 0;
+          const isMovingToReady = progress === 100;
           
           return (
-            <div key={email.id} className="bg-white rounded-xl shadow-sm hover:shadow-md transition-shadow duration-200 overflow-hidden">
-              <div className="p-6">
+            <div 
+              key={email.id} 
+              className={`bg-white rounded-lg shadow-sm hover:shadow-md transition-all duration-500 ease-in-out overflow-hidden
+                ${isMovingToReady ? 'animate-slide-fade-out' : ''}`}
+            >
+              <div className="p-4">
                 {/* Header with progress bar */}
                 {hasQuestions && (
-                  <div className="mb-4">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="text-sm font-medium text-gray-500">
+                  <div className="mb-3">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs font-medium text-gray-500">
                         Progress: {answeredQuestions.length}/{questions.length} questions answered
                       </span>
                       {progress > 0 && progress < 100 && (
-                        <span className="text-sm font-medium text-blue-600">
+                        <span className="text-xs font-medium text-blue-600">
                           {unansweredQuestions.length} more to auto-reply
                         </span>
                       )}
                     </div>
-                    <div className="w-full bg-gray-200 rounded-full h-2">
+                    <div className="w-full bg-gray-200 rounded-full h-1.5">
                       <div 
-                        className="bg-blue-600 h-2 rounded-full transition-all duration-500"
+                        className="bg-blue-600 h-1.5 rounded-full transition-all duration-500"
                         style={{ width: `${progress}%` }}
                       />
                     </div>
@@ -1566,54 +1868,54 @@ Support Team`;
                 )}
 
                 {/* Main content */}
-                <div className="flex flex-col md:flex-row md:items-start gap-6">
+                <div className="flex flex-col md:flex-row md:items-start gap-4">
                   {/* Email content */}
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-start justify-between mb-4">
-                      <div className="min-w-0 flex-1 pr-4">
-                        <h3 className="text-lg font-medium text-gray-900 mb-1 truncate">
+                    <div className="flex items-start justify-between mb-3">
+                      <div className="min-w-0 flex-1 pr-3">
+                        <h3 className="text-sm font-medium text-gray-900 mb-0.5 truncate">
                           {email.subject}
                         </h3>
-                        <p className="text-sm text-gray-500">
+                        <p className="text-xs text-gray-500">
                           From: {email.sender} · {new Date(email.receivedAt).toLocaleDateString()}
                         </p>
                       </div>
-                      <div className="flex gap-2">
+                      <div className="flex gap-1.5">
                         <button
                           onClick={() => copyEmailDebugInfo(email)}
-                          className="flex-shrink-0 inline-flex items-center px-3 py-1 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+                          className="flex-shrink-0 inline-flex items-center px-2 py-1 border border-gray-300 text-xs font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
                         >
-                          📋 Copy Debug Info
+                          📋 Copy Debug
                         </button>
                         <button
                           onClick={() => handleMarkNotRelevant(email)}
-                          className="flex-shrink-0 inline-flex items-center px-3 py-1 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+                          className="flex-shrink-0 inline-flex items-center px-2 py-1 border border-gray-300 text-xs font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
                         >
                           ❌ Not Relevant
                         </button>
                       </div>
                     </div>
                     <div className="prose prose-sm max-w-none">
-                      <p className="text-gray-700 line-clamp-3">
+                      <p className="text-xs text-gray-700 line-clamp-3">
                         {email.content}
                       </p>
                       <button 
                         onClick={() => toggleEmailContent(email.id)}
-                        className="text-blue-600 text-sm hover:text-blue-700 mt-1"
+                        className="text-xs text-blue-600 hover:text-blue-700 mt-1"
                       >
                         {email.showFullContent ? 'Show less' : 'Show more'}
                       </button>
                     </div>
-                    <div className="mt-4">
+                    <div className="mt-3">
                       {(!email.aiAnalysis && !email.analysis) || (!hasQuestions && !email.isGeneratingReply) ? (
                         <button
                           onClick={() => handleCreateFAQ(email)}
                           disabled={analyzing}
-                          className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50"
+                          className="inline-flex items-center px-3 py-1.5 border border-transparent text-xs font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50"
                         >
                           {analyzing ? (
                             <>
-                              <svg className="animate-spin -ml-1 mr-3 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                              <svg className="animate-spin -ml-1 mr-2 h-3 w-3 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                               </svg>
@@ -1621,13 +1923,13 @@ Support Team`;
                             </>
                           ) : (
                             <>
-                              <LightbulbIcon className="h-4 w-4 mr-2" />
+                              <LightbulbIcon className="h-3 w-3 mr-1.5" />
                               Extract Questions
                             </>
                           )}
                         </button>
                       ) : (
-                        <div className="text-sm text-gray-500">
+                        <div className="text-xs text-gray-500">
                           {hasQuestions ? `${questions.length} questions found` : 'No questions found in this email'}
                         </div>
                       )}
@@ -1635,9 +1937,9 @@ Support Team`;
 
                     {/* Questions bubbles */}
                     {hasQuestions && (
-                      <div className="mt-6">
-                        <h4 className="text-sm font-medium text-gray-900 mb-3">Questions Identified:</h4>
-                        <div className="flex flex-wrap gap-3">
+                      <div className="mt-4">
+                        <h4 className="text-xs font-medium text-gray-900 mb-2">Questions Identified:</h4>
+                        <div className="flex flex-wrap gap-2">
                           {questions.map((question, index) => {
                             const matchedFAQ = answeredFAQs.find(faq => 
                               faq.answer && 
@@ -1650,7 +1952,7 @@ Support Team`;
                                 key={index}
                                 onClick={() => handleAddToFAQLibrary(question)}
                                 className={`
-                                  group relative inline-flex items-center px-4 py-2 rounded-full text-sm font-medium
+                                  group relative inline-flex items-center px-2 py-1 rounded-full text-xs font-medium
                                   transition-all duration-200 hover:shadow-md
                                   ${isAnswered 
                                     ? 'bg-green-100 text-green-800 hover:bg-green-200 border border-green-200' 
@@ -1658,14 +1960,14 @@ Support Team`;
                                 `}
                               >
                                 {isAnswered ? (
-                                  <CheckCircleIcon className="h-4 w-4 mr-2 text-green-600" />
+                                  <CheckCircleIcon className="h-3 w-3 mr-1" />
                                 ) : (
-                                  <PencilIcon className="h-4 w-4 mr-2 text-blue-600" />
+                                  <PencilIcon className="h-3 w-3 mr-1" />
                                 )}
                                 {truncateQuestion(question.question)}
                                 {isAnswered && (
-                                  <div className="absolute -top-2 -right-2 h-4 w-4 bg-green-500 rounded-full border-2 border-white flex items-center justify-center">
-                                    <CheckCircleIcon className="h-3 w-3 text-white" />
+                                  <div className="absolute -top-1 -right-1 h-3 w-3 bg-green-500 rounded-full border-2 border-white flex items-center justify-center">
+                                    <CheckCircleIcon className="h-2 w-2 text-white" />
                                   </div>
                                 )}
                               </button>
@@ -1675,26 +1977,11 @@ Support Team`;
                       </div>
                     )}
                   </div>
-
-                  {/* Questions panel - Keep this as a reference but hide it */}
-                  {false && hasQuestions && (
-                    <div className="w-full md:w-[350px] flex-shrink-0 border-t md:border-t-0 md:border-l border-gray-200 pt-4 md:pt-0 md:pl-6">
-                      {/* ... existing questions panel code ... */}
-                    </div>
-                  )}
                 </div>
               </div>
             </div>
           );
         })}
-
-        {/* Loading more indicator */}
-        {loadingMore && (
-          <div className="bg-white rounded-xl shadow-sm p-6 animate-pulse">
-            <div className="h-4 bg-gray-200 rounded w-3/4 mb-4"></div>
-            <div className="h-4 bg-gray-200 rounded w-1/2"></div>
-          </div>
-        )}
       </div>
     );
   };
@@ -1797,30 +2084,32 @@ Support Team`;
       console.log('Clearing cache...');
       clearCache();
       
-      console.log('Loading fresh emails...');
-      await loadEmails(true, 1);
+      // Reset ready-to-reply emails in Firebase
+      const db = getFirebaseDB();
+      if (db) {
+        console.log('Resetting ready-to-reply emails in Firebase...');
+        const readyRef = doc(db, 'ready_to_reply', 'latest');
+        await setDoc(readyRef, { 
+          emails: [], 
+          timestamp: Date.now() 
+        });
+
+        // Also clear the removed emails tracking
+        const removedRef = doc(db, 'removed_from_ready', 'latest');
+        await setDoc(removedRef, {
+          emailIds: [],
+          timestamp: Date.now()
+        });
+      }
       
-      console.log('Resetting states...');
+      // Reset states
+      setEmails(prev => prev.filter(e => e.status !== 'processed' && e.status !== 'removed_from_ready'));
       setEmailQuestions(new Map());
       setGenericFAQs([]);
       
-      console.log('Reloading FAQ library...');
-      const response = await fetch('/api/faq/list');
-      if (response.ok) {
-        const data = await response.json();
-        console.log('FAQ library loaded:', data.faqs?.length || 0, 'FAQs found');
-        if (data.faqs) {
-          const validFAQs = data.faqs.filter((faq: AnsweredFAQ) => 
-            faq.question && 
-            faq.answer && 
-            faq.answer.trim() !== '' && 
-            faq.question.trim() !== ''
-          );
-          console.log('Valid FAQs:', validFAQs.length);
-          setAnsweredFAQs(validFAQs);
-        }
-      }
-
+      // Load fresh data
+      await loadEmails(true, 1);
+      
       setLastFetchTimestamp(Date.now());
       console.log('=== Refresh Complete ===');
       toast.success('Refreshed successfully');
@@ -1864,153 +2153,194 @@ Support Team`;
 
   // Add the missing render functions
   const renderSuggestedReplies = () => {
-    // Only show emails where all questions have been answered
-    const emailsWithMatches = emails.filter(e => {
-      const questions = emailQuestions.get(e.id) || [];
-      return e.matchedFAQ && 
-             !e.isReplied && 
-             questions.length > 0 && 
-             questions.every(q => {
-               const matchedFAQ = findMatchingAnsweredFAQ(q.question);
-               return matchedFAQ && matchedFAQ.answer && matchedFAQ.answer.trim() !== '';
-             });
-    });
-      
-    if (emailsWithMatches.length === 0) {
-      return (
-        <div className="text-center py-8 text-gray-600">
-          <p>No emails ready for auto-reply yet</p>
-          <p className="text-sm mt-2">Answer all questions in the "Questions to Answer" tab first</p>
-        </div>
-      );
-    }
-
+    // Get list of removed email IDs
+    const removedEmailsCache = loadFromCache('removed_from_ready_emails') as RemovedEmailsCache | null;
+    const removedEmailIds = new Set(removedEmailsCache?.emails || []);
+    
+    // Only show emails that are processed, have a matched FAQ, haven't been replied to, and haven't been removed
+    const readyToReplyEmails = emails.filter(e => 
+      e.status === 'processed' && 
+      e.matchedFAQ && 
+      !e.isReplied &&
+      e.suggestedReply &&
+      !removedEmailIds.has(e.id)
+    );
+    
     return (
       <div className="space-y-6">
-        {emailsWithMatches.map(email => (
-          <div key={email.id} className="bg-white rounded-lg shadow-sm overflow-hidden">
-            {/* Email Header */}
-            <div className="p-6 border-b border-gray-200">
-              <div className="flex justify-between items-start mb-4">
-                <div>
-                  <h3 className="text-lg font-medium text-gray-900">{email.subject}</h3>
-                  <p className="text-sm text-gray-600">From: {email.sender}</p>
-                </div>
-                <div className="flex items-center space-x-3">
-                  {!editingReply || editingReply.emailId !== email.id ? (
-                    <>
-                      <button
-                        onClick={() => generateContextualReply(email)}
-                        className="inline-flex items-center px-3 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
-                      >
-                        <LightbulbIcon className="h-4 w-4 mr-2" />
-                        Regenerate Reply
-                      </button>
-                      <button
-                        onClick={() => handleEditReply(email)}
-                        className="inline-flex items-center px-3 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
-                      >
-                        <PencilIcon className="h-4 w-4 mr-2" />
-                        Edit Reply
-                      </button>
-                      <button
-                        onClick={() => handleAutoReply(email)}
-                        className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700"
-                      >
-                        Send Auto-Reply
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <button
-                        onClick={() => setEditingReply(null)}
-                        className="inline-flex items-center px-3 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        onClick={() => handleSaveReply(email.id)}
-                        className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700"
-                      >
-                        Save Changes
-                      </button>
-                    </>
-                  )}
-                </div>
-              </div>
-
-              {/* Original Email Preview */}
-              <div className="bg-gray-50 rounded-lg p-4 mb-4">
-                <h4 className="text-sm font-medium text-gray-900 mb-2">Original Email:</h4>
-                <p className="text-sm text-gray-700 whitespace-pre-line">
-                  {email.content?.length > 200 
-                    ? `${email.content.slice(0, 200)}...` 
-                    : email.content}
-                </p>
-                {email.content?.length > 200 && (
-                  <button
-                    onClick={() => toggleEmailContent(email.id)}
-                    className="text-sm text-blue-600 hover:text-blue-800 mt-2"
-                  >
-                    {email.showFullContent ? 'Show less' : 'Show more'}
-                  </button>
-                )}
-              </div>
-
-              {/* Matched FAQ */}
-              {email.matchedFAQ && (
-                <div className="bg-blue-50 rounded-lg p-4 mb-4">
-                  <h4 className="text-sm font-medium text-blue-900 mb-2">Matched FAQ:</h4>
-                  <p className="text-sm text-blue-800 font-medium">
-                    {email.matchedFAQ.question.replace('{email}', email.sender)}
-                  </p>
-                  <p className="text-sm text-blue-700 mt-2">{email.matchedFAQ.answer}</p>
-                </div>
-              )}
+        {readyToReplyEmails.length === 0 ? (
+          <div className="text-center py-12">
+            <div className="mx-auto h-12 w-12 text-gray-400 mb-4">
+              <InboxIcon className="h-12 w-12" />
             </div>
-
-            {/* Draft Reply Section */}
-            <div className="p-6 bg-gray-50">
-              <div className="flex items-center justify-between mb-3">
-                <h4 className="text-sm font-medium text-gray-900">Draft Reply:</h4>
-                {email.isGeneratingReply && (
-                  <span className="text-sm text-blue-600 flex items-center">
-                    <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                    Generating reply...
-                  </span>
-                )}
-              </div>
-              {editingReply && editingReply.emailId === email.id ? (
-                <div className="space-y-4">
-                  <textarea
-                    value={editingReply.reply}
-                    onChange={(e) => setEditingReply({ ...editingReply, reply: e.target.value })}
-                    className="w-full h-64 rounded-lg border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
-                    placeholder="Edit your reply here..."
-                  />
-                  <div className="bg-yellow-50 rounded-lg p-4">
-                    <h5 className="text-sm font-medium text-yellow-800 mb-2">Tips for a great reply:</h5>
-                    <ul className="text-sm text-yellow-700 list-disc list-inside space-y-1">
-                      <li>Be clear and concise</li>
-                      <li>Address all points in the original email</li>
-                      <li>Use a professional but friendly tone</li>
-                      <li>Include any relevant links or resources</li>
-                    </ul>
+            <h3 className="text-lg font-medium text-gray-900">No emails ready for reply</h3>
+            <p className="mt-2 text-sm text-gray-500">
+              Answer questions in the "Questions to Answer" tab to prepare replies
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-6">
+            {readyToReplyEmails.map(email => (
+              <div key={email.id} className="bg-white rounded-xl shadow-sm overflow-hidden border border-gray-100">
+                {/* Email Header */}
+                <div className="p-6 pb-4">
+                  <div className="flex items-start justify-between">
+                    <div className="min-w-0 flex-1">
+                      <h3 className="text-base font-medium text-gray-900 truncate pr-4">
+                        {email.subject}
+                      </h3>
+                      <p className="mt-1 text-sm text-gray-500">
+                        From: {email.sender}
+                      </p>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <div className="flex items-center px-2.5 py-1.5 bg-gray-50 text-xs text-gray-600 rounded-full">
+                        <span className="flex items-center">
+                          <span className="flex-shrink-0 h-1.5 w-1.5 rounded-full bg-green-400 mr-1.5"></span>
+                          Ready to reply
+                        </span>
+                      </div>
+                    </div>
                   </div>
                 </div>
-              ) : (
-                <div className="bg-white rounded-lg border border-gray-200 p-4">
-                  <p className="text-gray-700 whitespace-pre-line">
-                    {email.suggestedReply || generateDefaultReply(email)}
-                  </p>
+
+                {/* Content Sections */}
+                <div className="px-6">
+                  {/* Original Email */}
+                  <div className="mb-6">
+                    <div className="flex items-center text-sm text-gray-500 mb-2">
+                      <MessageCircleIcon className="h-4 w-4 mr-1.5" />
+                      Original Email
+                    </div>
+                    <div className="bg-gray-50 rounded-lg p-4">
+                      <p className="text-sm text-gray-700 whitespace-pre-wrap">
+                        {email.content}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* FAQ Match Indicator */}
+                  <div className="mb-6">
+                    <div className="group relative">
+                      <div className="flex items-center text-sm text-gray-500 mb-2">
+                        <BookOpenIcon className="h-4 w-4 mr-1.5" />
+                        <span>Matched with {email.matchedFAQ ? '2' : '0'} FAQs</span>
+                        <button className="ml-1.5 text-gray-400 hover:text-gray-600">
+                          <Info className="h-4 w-4" />
+                        </button>
+                      </div>
+                      {/* Tooltip content */}
+                      <div className="hidden group-hover:block absolute left-0 bottom-full mb-2 w-72 p-3 bg-gray-900 text-white text-xs rounded-lg shadow-lg z-10">
+                        <div className="font-medium mb-1">Matched FAQs:</div>
+                        <ul className="space-y-1">
+                          <li>• {email.matchedFAQ?.question}</li>
+                        </ul>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* AI Generated Reply */}
+                  <div className="mb-6">
+                    <div className="flex items-center justify-between text-sm mb-2">
+                      <div className="flex items-center text-gray-500">
+                        <Sparkles className="h-4 w-4 mr-1.5 text-purple-400" />
+                        AI Generated Reply
+                      </div>
+                      {editingReply?.emailId !== email.id && (
+                        <button
+                          onClick={() => handleEditReply(email)}
+                          className="flex items-center text-gray-400 hover:text-gray-600"
+                        >
+                          <PencilIcon className="h-4 w-4" />
+                        </button>
+                      )}
+                    </div>
+                    
+                    {editingReply?.emailId === email.id ? (
+                      <div className="space-y-3">
+                        <div className="relative">
+                          {/* Rich Text Editor Controls */}
+                          <div className="absolute top-0 left-0 right-0 flex items-center gap-1 px-2 py-1.5 bg-gray-50 border-b border-gray-200 rounded-t-lg">
+                            <button className="p-1 hover:bg-gray-200 rounded" title="Bold">
+                              <Bold className="h-4 w-4 text-gray-600" />
+                            </button>
+                            <button className="p-1 hover:bg-gray-200 rounded" title="Italic">
+                              <Italic className="h-4 w-4 text-gray-600" />
+                            </button>
+                            <button className="p-1 hover:bg-gray-200 rounded" title="Bullet List">
+                              <List className="h-4 w-4 text-gray-600" />
+                            </button>
+                            <div className="h-4 w-px bg-gray-300 mx-1"></div>
+                            <button className="p-1 hover:bg-gray-200 rounded" title="Add Link">
+                              <Link className="h-4 w-4 text-gray-600" />
+                            </button>
+                          </div>
+                          
+                          <textarea
+                            value={editingReply.reply}
+                            onChange={(e) => setEditingReply({ ...editingReply, reply: e.target.value })}
+                            className="w-full rounded-lg border border-gray-200 shadow-sm focus:border-purple-500 focus:ring-purple-500 mt-12 px-6 py-4"
+                            rows={15}
+                            style={{ minHeight: '400px' }}
+                            placeholder="Edit your reply here..."
+                          />
+                        </div>
+                        
+                        <div className="flex justify-end gap-2">
+                          <button
+                            onClick={() => setEditingReply(null)}
+                            className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            onClick={() => handleSaveReply(email.id)}
+                            className="px-3 py-1.5 text-sm bg-purple-50 text-purple-700 rounded hover:bg-purple-100"
+                          >
+                            Save Changes
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="relative">
+                        <div className="absolute -left-2 top-3 w-1 h-[calc(100%-24px)] bg-purple-100 rounded-full"></div>
+                        <div className="bg-purple-50 rounded-lg p-4 pl-6">
+                          <p className="text-sm text-gray-700 whitespace-pre-wrap">
+                            {email.suggestedReply || generateDefaultReply(email)}
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
-              )}
-            </div>
+
+                {/* Actions Footer */}
+                <div className="px-6 py-4 bg-gray-50 flex justify-between items-center">
+                  <div className="flex items-center text-xs text-gray-500">
+                    <ClockIcon className="h-4 w-4 mr-1" />
+                    Generated {new Date(email.receivedAt).toLocaleDateString()}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => handleRemoveFromReadyToReply(email)}
+                      className="inline-flex items-center px-3 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
+                      title="Remove from Ready to Reply"
+                    >
+                      <TrashIcon className="h-4 w-4 text-gray-500" />
+                    </button>
+                    <button
+                      onClick={() => handleAutoReply(email)}
+                      className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-purple-600 hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500"
+                    >
+                      <Rocket className="h-4 w-4 mr-1.5" />
+                      Send Reply
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
           </div>
-        ))}
+        )}
       </div>
     );
   };
@@ -2053,7 +2383,7 @@ Support Team`;
       return (
         <div className="text-center py-8 text-gray-600">
           <p>No questions to answer yet</p>
-          <p className="text-sm mt-2">Extract questions from emails in the Unanswered Emails tab</p>
+          <p className="text-sm mt-2">Extract questions from emails in the "Unanswered Emails" tab</p>
         </div>
       );
     }
@@ -2087,7 +2417,7 @@ Support Team`;
                     {/* Source emails section */}
                     <div className="mt-4">
                       <h4 className="text-sm font-medium text-gray-700 mb-2">
-                        Found in {sourceEmails.length} email{sourceEmails.length !== 1 ? 's' : ''}:
+                        Found in {sourceEmails.length} email{sourceEmails.length !== 1 ? 's' : ''}
                       </h4>
                       <div className="space-y-2">
                         {sourceEmails.map((email, emailIndex) => (
@@ -2256,7 +2586,7 @@ Support Team`;
 
   // Add this helper function after the state declarations
   const copyEmailDebugInfo = useCallback((email: ExtendedEmail) => {
-    const questions = emailQuestions.get(email.id) || [];
+    const questions = email.questions || [];
     const debugText = `
 === Email Debug Info ===
 Subject: ${email.subject}
@@ -2266,7 +2596,7 @@ Original Customer Question:
 ${email.content}
 
 AI Generated Questions (${questions.length}):
-${questions.map((q, i) => `${i + 1}. ${q.question}`).join('\n')}
+${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\n')}
 `;
 
     navigator.clipboard.writeText(debugText).then(() => {
@@ -2274,25 +2604,242 @@ ${questions.map((q, i) => `${i + 1}. ${q.question}`).join('\n')}
     }).catch(() => {
       toast.error('Failed to copy debug info');
     });
-  }, [emailQuestions]);
+  }, []);
+
+  // Add these styles to your global CSS or in a style tag in your layout
+  const globalStyles = `
+    @keyframes slideAndFadeOut {
+      0% {
+        transform: translateX(0);
+        opacity: 1;
+        max-height: 1000px;
+        margin-bottom: 1rem;
+      }
+      60% {
+        transform: translateX(30%);
+        opacity: 0.5;
+      }
+      100% {
+        transform: translateX(100%);
+        opacity: 0;
+        max-height: 0;
+        margin-bottom: 0;
+        padding: 0;
+      }
+    }
+
+    .animate-slide-fade-out {
+      animation: slideAndFadeOut 1s ease-in-out forwards;
+    }
+  `;
+
+  // Capture globalStyles in a ref to avoid dependency issues
+  const globalStylesRef = useRef(globalStyles);
+
+  useEffect(() => {
+    const styleSheet = document.createElement("style");
+    styleSheet.textContent = globalStylesRef.current;
+    document.head.appendChild(styleSheet);
+
+    return () => {
+      document.head.removeChild(styleSheet);
+    };
+  }, []); // Remove globalStyles from dependencies since it's captured in closure
+
+  // Add this function near other Firebase-related functions
+  const saveReadyToReplyToFirebase = async (emails: (Email | ExtendedEmail)[]) => {
+    try {
+      const db = getFirebaseDB();
+      if (!db) return;
+
+      // Convert and sanitize emails
+      const sanitizedEmails = emails.map(email => {
+        const baseEmail: BaseEmail = {
+          id: email.id,
+          threadId: email.threadId,
+          subject: email.subject,
+          sender: email.sender,
+          content: email.content,
+          receivedAt: typeof email.receivedAt === 'string' ? Date.parse(email.receivedAt) : email.receivedAt
+        };
+
+        return {
+          ...baseEmail,
+          isReplied: 'isReplied' in email ? email.isReplied : false,
+          matchedFAQ: 'matchedFAQ' in email && email.matchedFAQ ? {
+            question: email.matchedFAQ.question,
+            answer: email.matchedFAQ.answer,
+            confidence: typeof email.matchedFAQ.confidence === 'number' ? email.matchedFAQ.confidence : 1
+          } : undefined,
+          suggestedReply: 'suggestedReply' in email ? email.suggestedReply : '',
+          status: 'status' in email ? email.status : 'processed'
+        } as ExtendedEmail;
+      });
+
+      const readyRef = doc(db, 'ready_to_reply', 'latest');
+      await setDoc(readyRef, {
+        emails: sanitizedEmails,
+        timestamp: Date.now()
+      });
+    } catch (error) {
+      console.error('Error saving ready to reply emails to Firebase:', error);
+    }
+  };
+
+  const loadReadyToReplyFromFirebase = async () => {
+    try {
+      const db = getFirebaseDB();
+      if (!db) return null;
+
+      const readyRef = doc(db, 'ready_to_reply', 'latest');
+      const readyDoc = await getDoc(readyRef);
+      
+      if (readyDoc.exists()) {
+        const { emails, timestamp } = readyDoc.data();
+        if (Date.now() - timestamp < FIREBASE_CACHE_DURATION) {
+          return emails;
+        }
+      }
+      return null;
+    } catch (error) {
+      console.error('Error loading ready to reply emails from Firebase:', error);
+      return null;
+    }
+  };
+
+  const handleRemoveFromReadyToReply = async (email: ExtendedEmail) => {
+    try {
+      // Update emails state to remove this email from ready to reply
+      setEmails(prev => prev.map(e => {
+        if (e.id === email.id) {
+          const updatedEmail: ExtendedEmail = {
+            ...e,
+            status: 'removed_from_ready',
+            matchedFAQ: undefined
+          };
+          return updatedEmail;
+        }
+        return e;
+      }));
+
+      // Get current ready to reply emails excluding the removed one
+      const readyToReplyEmails = emails.filter(e => 
+        e.id !== email.id && 
+        e.status === 'processed' && 
+        e.matchedFAQ && 
+        !e.isReplied &&
+        e.suggestedReply
+      );
+      
+      // Update Firebase cache
+      await saveReadyToReplyToFirebase(readyToReplyEmails);
+
+      // Update local cache
+      saveToCache(CACHE_KEYS.READY_TO_REPLY, {
+        emails: readyToReplyEmails,
+        timestamp: Date.now()
+      });
+
+      // Also save the removed status to a separate cache to persist it
+      const removedEmails = loadFromCache('removed_from_ready_emails')?.emails || [];
+      saveToCache('removed_from_ready_emails', {
+        emails: [...removedEmails, email.id],
+        timestamp: Date.now()
+      });
+
+      toast.success(
+        <div className="flex flex-col gap-1">
+          <div className="font-medium">Removed from Ready to Reply</div>
+          <div className="text-sm text-gray-600">
+            This email won&apos;t be auto-replied to unless you refresh the page
+          </div>
+        </div>,
+        {
+          duration: 5000,
+          icon: '🚫'
+        }
+      );
+
+    } catch (error) {
+      console.error('Error removing email from ready to reply:', error);
+      toast.error('Failed to remove email');
+    }
+  };
 
   return (
     <Layout>
-      <div className="max-w-[80%] mx-auto py-8">
-        <div className="flex items-center justify-between mb-8">
+      <div className="max-w-[80%] mx-auto px-4 py-2">
+        <div className="flex items-center justify-between mb-4">
           <div>
-            <h1 className="text-3xl font-semibold text-gray-900 mb-2">Customer Support Triage</h1>
-            <p className="text-gray-500">Manage and respond to customer inquiries efficiently</p>
+            <h1 className="text-xl font-semibold text-gray-900 mb-0.5">Customer Support Triage</h1>
+            <p className="text-xs text-gray-500">Manage and respond to customer inquiries efficiently</p>
           </div>
           <button
             onClick={handleRefresh}
-            className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+            className="inline-flex items-center px-3 py-1.5 border border-gray-300 shadow-sm text-xs font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
           >
-            <ClockIcon className="h-4 w-4 mr-2" />
+            <ClockIcon className="h-3 w-3 mr-1.5" />
             Refresh
           </button>
         </div>
-        {renderTabs()}
+        {/* Tabs section */}
+        <div className="border-b border-gray-200 mb-4">
+          <nav className="-mb-px flex space-x-4" aria-label="Tabs">
+            {[
+              { 
+                id: 'unanswered', 
+                label: 'Unanswered Emails', 
+                icon: MessageCircleIcon, 
+                count: emails.filter(e => !e.isReplied && !e.isNotRelevant && !e.matchedFAQ).length,
+                description: 'Step 1: Extract questions from emails'
+              },
+              { 
+                id: 'faq_expansion', 
+                label: 'Questions to Answer', 
+                icon: LightbulbIcon, 
+                count: answeredFAQs.filter(faq => !faq.answer).length,
+                description: 'Step 2: Answer extracted questions',
+                highlight: answeredFAQs.filter(faq => !faq.answer).length > 0
+              },
+              { 
+                id: 'suggested', 
+                label: 'Ready to Reply', 
+                icon: CheckCircleIcon, 
+                count: readyToReplyCount,
+                description: 'Step 3: Send auto-replies'
+              },
+              {
+                id: 'faq_library',
+                label: 'FAQ Library',
+                icon: BookOpenIcon,
+                count: answeredFAQs.filter(faq => faq.answer).length,
+                description: 'Browse all answered FAQs'
+              }
+            ].map(({ id, label, icon: Icon, count, description, highlight }) => (
+              <button
+                key={id}
+                onClick={() => setActiveTab(id as any)}
+                className={`
+                  group relative min-w-0 flex-1 overflow-hidden py-2 px-2 text-center text-xs font-medium hover:bg-gray-50 focus:z-10
+                  ${activeTab === id ? 'border-b-2 border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}
+                  ${highlight ? 'bg-yellow-50' : ''}
+                `}
+              >
+                <div className="flex items-center justify-center space-x-1">
+                  <Icon className="h-3.5 w-3.5" />
+                  <span>{label}</span>
+                  {count > 0 && (
+                    <span className={`ml-1.5 rounded-full px-1.5 py-0.5 text-xs font-medium 
+                      ${activeTab === id ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-600'}`}>
+                      {count}
+                    </span>
+                  )}
+                </div>
+                <span className="mt-0.5 block text-[10px] text-gray-500">{description}</span>
+              </button>
+            ))}
+          </nav>
+        </div>
         <div className="mt-6">
           {renderMainContent()}
         </div>
