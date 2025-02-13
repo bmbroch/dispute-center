@@ -3037,7 +3037,7 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
 
   // Add this helper function inside the component
   const handleShowFullContent = useCallback((emailId: string) => {
-    setEmails(prev => prev.map(e => 
+    setEmails((prev: ExtendedEmail[]) => prev.map((e: ExtendedEmail) => 
       e.id === emailId 
         ? { ...e, showFullContent: true }
         : e
