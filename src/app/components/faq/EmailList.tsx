@@ -3,36 +3,11 @@ import { XCircleIcon } from 'lucide-react';
 import { Email, GenericFAQ } from '@/types/faq';
 import { Email as EmailType } from '@/types/email';
 
-interface ThreadMessage {
-  id: string;
-  subject?: string;
-  from?: string;
-  content: string;
-  receivedAt: string;
-  snippet?: string;
-}
-
-interface EmailThread {
-  id: string;
-  subject: string;
-  from: string;
-  content: string;
-  receivedAt: string;
-  messages: ThreadMessage[];
-  snippet?: string;
-}
-
-interface ExtendedEmail extends Omit<EmailType, 'thread'> {
-  thread?: EmailThread;
-  threadMessages?: ThreadMessage[];
-  matchedFAQ?: any;
-}
-
 interface EmailListProps {
-  emails: ExtendedEmail[];
+  emails: EmailType[];
   emailQuestions: Map<string, GenericFAQ[]>;
-  onAutoReply: (email: ExtendedEmail) => void;
-  onMarkNotRelevant: (email: ExtendedEmail) => void;
+  onAutoReply: (email: EmailType) => void;
+  onMarkNotRelevant: (email: EmailType) => void;
   showNotRelevantButton?: boolean;
 }
 
@@ -75,12 +50,8 @@ export function EmailList({
   return (
     <div className="space-y-6">
       {emails.map((email) => {
-        if (!email.thread) {
-          return null;
-        }
-
         const isExpanded = expandedThreads.includes(email.threadId);
-        const hasThread = email.thread.messages.length > 1;
+        const hasThread = email.thread && email.thread.length > 1;
 
         return (
           <div
@@ -91,11 +62,11 @@ export function EmailList({
               <div className="flex items-center justify-between">
                 <div className="flex-1">
                   <h3 className="text-lg font-medium text-gray-900">
-                    {email.thread.subject || 'No Subject'}
+                    {email.subject || 'No Subject'}
                   </h3>
                   <p className="mt-1 text-sm text-gray-500">
-                    From: {email.thread.from || 'Unknown'} • {formatDate(email.receivedAt)}
-                    {hasThread && ` • ${email.thread.messages.length} messages in thread`}
+                    From: {email.sender || 'Unknown Sender'} • {formatDate(email.receivedAt)}
+                    {hasThread && email.thread && ` • ${email.thread.length} messages in thread`}
                   </p>
                 </div>
                 <div className="flex space-x-3">
@@ -119,34 +90,31 @@ export function EmailList({
               </div>
               <div className="mt-4">
                 <div className="prose prose-sm max-w-none">
-                  {email.thread.snippet ? (
+                  {email.content ? (
                     <div>
                       <div className={`text-gray-700 whitespace-pre-wrap ${!isExpanded ? 'max-h-[60px] overflow-hidden relative' : ''}`}>
-                        {email.thread.snippet}
+                        {email.content}
                       </div>
                       {!isExpanded && hasThread && (
                         <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            toggleThread(email.threadId);
-                          }}
+                          onClick={() => toggleThread(email.threadId)}
                           className="mt-2 text-blue-600 hover:text-blue-800 text-sm font-medium focus:outline-none"
                         >
-                          See Full Thread ({email.thread.messages.length} messages)
+                          See Full Thread ({email.thread?.length} messages)
                         </button>
                       )}
                     </div>
                   ) : (
-                    <p className="text-gray-500 italic">No preview available</p>
+                    <p className="text-gray-500 italic">No content available</p>
                   )}
                 </div>
               </div>
               {isExpanded && hasThread && (
                 <div className="mt-6 space-y-4 border-t pt-4">
-                  {email.threadMessages?.map((threadMessage: ThreadMessage, index: number) => (
+                  {email.thread?.slice(0, -1).map((threadMessage, index) => (
                     <div key={threadMessage.id} className="pl-4 border-l-2 border-gray-200">
                       <div className="text-sm text-gray-500">
-                        From: {threadMessage.from} • {formatDate(threadMessage.receivedAt)}
+                        From: {threadMessage.sender} • {formatDate(threadMessage.receivedAt)}
                       </div>
                       <div className="mt-2 text-gray-700 whitespace-pre-wrap">
                         {threadMessage.content}

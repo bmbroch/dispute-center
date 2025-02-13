@@ -3,7 +3,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getOAuth2Client } from '@/lib/google/auth';
 import { isGmailError } from '@/lib/types/gmail';
 import { gmail_v1 } from 'googleapis';
-import { Credentials } from 'google-auth-library';
 
 type Schema$Message = gmail_v1.Schema$Message;
 type Schema$MessagePart = gmail_v1.Schema$MessagePart;
@@ -20,10 +19,6 @@ interface EmailResponse {
 }
 
 interface ProcessedMessagePart {
-  mimeType: string;
-  content?: string;
-  filename?: string | undefined;
-  parts?: ProcessedMessagePart[];
   text?: string;
   html?: string;
 }
@@ -138,40 +133,43 @@ const fetchMessageBatch = async (gmail: gmail_v1.Gmail, messageIds: string[], us
   return results;
 };
 
-// Update the message processing function with return type
+// Update the message processing function
 const processMessagePart = (part: Schema$MessagePart): ProcessedMessagePart => {
   console.log('Processing message part:', {
     mimeType: part.mimeType,
     hasBody: !!part.body,
-    bodySize: part.body?.size,
-    hasData: !!part.body?.data,
-    hasParts: !!part.parts,
-    numParts: part.parts?.length
+    hasData: part.body?.data ? 'yes' : 'no',
+    hasParts: part.parts ? `yes (${part.parts.length})` : 'no'
   });
 
-  const result: ProcessedMessagePart = {
-    mimeType: part.mimeType || 'unknown',
-    content: part.body?.data ? decodeBase64UrlSafe(part.body.data) : undefined,
-    filename: part.filename || undefined,
-    parts: part.parts?.map(processMessagePart)
-  };
+  if (part.mimeType === 'text/plain' && part.body?.data) {
+    return {
+      text: Buffer.from(part.body.data, 'base64').toString()
+    };
+  }
 
-  return result;
+  if (part.mimeType === 'text/html' && part.body?.data) {
+    return {
+      html: Buffer.from(part.body.data, 'base64').toString()
+    };
+  }
+
+  if (part.parts) {
+    const results: ProcessedMessagePart[] = part.parts.map(processMessagePart);
+    return results.reduce((acc: ProcessedMessagePart, curr: ProcessedMessagePart) => ({
+      text: acc.text || curr.text,
+      html: acc.html || curr.html
+    }), { text: undefined, html: undefined });
+  }
+
+  return {};
 };
 
-// Update GmailErrorResponse interface
-interface GmailErrorResponse {
-  code: number;
-  status: string;
-  statusText: string;
-  message?: string;
-  response?: {
-    data: any;
-  };
+interface GmailErrorResponse extends Error {
+  code?: number;
+  status?: number;
+  statusText?: string;
 }
-
-// Fix Credentials type error
-const credentials = JSON.parse(process.env.GMAIL_CREDENTIALS || '{}') as Credentials;
 
 export async function POST(request: NextRequest) {
   try {
@@ -436,30 +434,16 @@ export async function POST(request: NextRequest) {
     });
 
   } catch (error) {
-    console.error('Error in fetch-emails:', error);
-    const errorResponse = {
-      error: 'Failed to fetch emails',
-      timestamp: new Date().toISOString(),
-      details: error instanceof Error ? {
-        message: error.message,
-        name: error.name,
-        stack: error.stack,
-        cause: error.cause
-      } : error
-    };
-
-    if (isGmailError(error)) {
-      return NextResponse.json({ 
-        ...errorResponse,
-        gmailError: {
-          code: error.code,
-          status: error.status,
-          statusText: error.statusText,
-          response: error.response?.data
-        }
-      }, { status: error.code || 500 });
-    }
-
-    return NextResponse.json(errorResponse, { status: 500 });
+    console.error('Error fetching emails:', error);
+    const gmailError = error as GmailErrorResponse;
+    return NextResponse.json({
+      error: {
+        message: gmailError.message,
+        code: gmailError.code,
+        status: gmailError.status,
+        statusText: gmailError.statusText,
+        stack: process.env.NODE_ENV === 'development' ? gmailError.stack : undefined
+      }
+    }, { status: gmailError.code || 500 });
   }
 } 

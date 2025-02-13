@@ -586,7 +586,7 @@ const handleShowFullContent = (emailId: string) => {
 export default function FAQAutoReplyV2() {
   console.log('=== Component Render Start ===');
   const { user, checkGmailAccess, refreshAccessToken } = useAuth();
-  const [emails, setEmails] = useState<ExtendedEmail[]>([]); // Explicitly initialize as empty array
+  const [emails, setEmails] = useState<Email[]>([]); // Explicitly initialize as empty array
   const [potentialFAQs, setPotentialFAQs] = useState<PotentialFAQ[]>([]);
   const [genericFAQs, setGenericFAQs] = useState<GenericFAQ[]>([]);
   const [activeTab, setActiveTab] = useState<'unanswered' | 'suggested' | 'faq_library' | 'not_relevant'>('unanswered');
@@ -611,26 +611,13 @@ export default function FAQAutoReplyV2() {
   // Add this state near other state declarations
   const [hasRefreshedOnce, setHasRefreshedOnce] = useState(false);
 
-  // Add formatDate function
-  const formatDate = (date: string | number): string => {
-    try {
-      const dateObj = typeof date === 'string' ? new Date(date) : new Date(Number(date));
-      return dateObj.toLocaleString();
-    } catch (error) {
-      console.error('Error formatting date:', error);
-      return 'Invalid date';
-    }
-  };
-
-  // Update the readyToReplyCount calculation
-  const readyToReplyCount = useMemo(() => {
-    return emails.filter(email => 
-      email.status === 'processed' && 
-      email.threadMessages && 
-      email.threadMessages.length > 0 && 
-      !email.isReplied
-    ).length;
-  }, [emails]);
+  // Add readyToReplyCount calculation
+  const readyToReplyCount = useMemo(() => emails.filter(e => 
+    e.status === 'processed' && 
+    e.matchedFAQ && 
+    !e.isReplied &&
+    e.suggestedReply
+  ).length, [emails]);
 
   // Move isSubscribed ref before the useEffect
   const isSubscribed = useRef(true);
@@ -1125,9 +1112,9 @@ export default function FAQAutoReplyV2() {
           });
           
           // Update emails state to include ready-to-reply
-          setEmails((prevEmails: ExtendedEmail[]) => {
-            const existingEmailIds = new Set(prevEmails.map(e => e.id));
-            const newEmails = [...prevEmails];
+          setEmails(prev => {
+            const existingEmailIds = new Set(prev.map(e => e.id));
+            const newEmails = [...prev];
             
             firebaseReadyToReply.forEach((readyEmail: ExtendedEmail) => {
               if (!existingEmailIds.has(readyEmail.id)) {
@@ -1152,10 +1139,10 @@ export default function FAQAutoReplyV2() {
         // Then load regular emails
         const firebaseEmails = await loadEmailsFromFirebase();
         if (firebaseEmails && firebaseEmails.length > 0) {
-          setEmails((prevEmails: ExtendedEmail[]) => {
-            const existingEmailIds = new Set(prevEmails.map(e => e.id));
+          setEmails(prev => {
+            const existingEmailIds = new Set(prev.map(e => e.id));
             return [
-              ...prevEmails,
+              ...prev,
               ...firebaseEmails.filter((e: ExtendedEmail) => !existingEmailIds.has(e.id))
             ];
           });
@@ -1177,7 +1164,7 @@ export default function FAQAutoReplyV2() {
     return () => {
       isSubscribed.current = false;
     };
-  }, [loadEmails, isSubscribed]); // Remove emails from dependency array since we're using functional updates
+  }, [emails, isSubscribed, loadEmails]); // Added emails to dependency array
 
   // Update the FAQ loading effect
   useEffect(() => {
@@ -1997,17 +1984,95 @@ Support Team`;
   };
 
   const renderEmailContent = (email: ExtendedEmail) => {
-    if (!email.threadMessages || email.threadMessages.length === 0) {
-      return <div className="text-gray-500">No messages available</div>;
-    }
+    const isThreadExpanded = expandedThreads.has(email.threadId);
+    const hasThread = email.threadMessages && email.threadMessages.length > 1;
+    
+    // Get the most recent message content
+    const mostRecentContent = hasThread 
+      ? getCleanContent(email.threadMessages[0].content)
+      : getCleanContent(email.content);
+
+    const rawContent = hasThread ? email.threadMessages[0].content : email.content;
+    const isHTML = isHTMLContent(rawContent);
 
     return (
       <div className="space-y-4">
-        {email.threadMessages.map((message, index) => (
-          <div key={`${email.id}-${index}`} className="message-container">
-            {/* Message content */}
+        {/* Show More/Less Button at the top */}
+        <button
+          onClick={() => handleShowFullContent(email.id)}
+          className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-md text-blue-700 bg-blue-50 hover:bg-blue-100 transition-all duration-200"
+        >
+          <ChevronRightIcon 
+            className={`h-3 w-3 transform transition-transform duration-200 ${
+              email.showFullContent ? 'rotate-90' : '-rotate-90'
+            }`}
+          />
+          {email.showFullContent ? 'Show Less' : 'Show More'}
+        </button>
+
+        {/* Email Content */}
+        <div className="prose max-w-none">
+          <div className="text-gray-700">
+            <div 
+              className={`relative overflow-hidden transition-all duration-300 ease-in-out ${
+                email.showFullContent ? '' : 'max-h-[120px]'
+              }`}
+            >
+              {/* Gradient overlay for collapsed state */}
+              {!email.showFullContent && (
+                <div className="absolute bottom-0 left-0 right-0 h-20 bg-gradient-to-t from-white to-transparent pointer-events-none" />
+              )}
+              
+              {/* Content */}
+              {isHTML ? (
+                <div 
+                  className="email-html-content"
+                  dangerouslySetInnerHTML={{ __html: mostRecentContent }}
+                />
+              ) : (
+                <div className="whitespace-pre-wrap">{mostRecentContent}</div>
+              )}
+            </div>
           </div>
-        ))}
+        </div>
+
+        {/* Thread View Toggle */}
+        {hasThread && (
+          <div className="mt-4">
+            <button
+              onClick={() => toggleThreadExpansion(email.threadId)}
+              className="flex items-center text-sm text-gray-600 hover:text-gray-800"
+            >
+              <ChevronRightIcon
+                className={`w-4 h-4 mr-1 transform transition-transform duration-200 ${
+                  isThreadExpanded ? 'rotate-90' : ''
+                }`}
+              />
+              {isThreadExpanded ? 'Hide Thread' : `View Thread (${email.threadMessages?.length || 0} messages)`}
+            </button>
+          </div>
+        )}
+
+        {/* Thread Messages */}
+        {isThreadExpanded && hasThread && (
+          <div className="mt-4 space-y-4 pl-4 border-l-2 border-gray-200">
+            {email.threadMessages?.map((message, index) => (
+              <div key={message.id} className="space-y-2">
+                <div className="flex items-center text-sm text-gray-600">
+                  <span className="font-medium">{message.sender}</span>
+                  <span className="mx-2">•</span>
+                  <span>{new Date(message.receivedAt).toLocaleString()}</span>
+                </div>
+                <div 
+                  className="prose max-w-none text-gray-700"
+                  dangerouslySetInnerHTML={{ 
+                    __html: isHTMLContent(message.content) ? message.content : message.content
+                  }}
+                />
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     );
   };
@@ -3043,30 +3108,6 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
       </div>
     );
   }
-
-  const renderEmailPreview = (email: ExtendedEmail) => {
-    // Add null check for threadMessages
-    if (!email.threadMessages || email.threadMessages.length === 0) {
-      return <div className="text-gray-500">No messages available</div>;
-    }
-
-    const lastMessage = email.threadMessages[email.threadMessages.length - 1];
-    return (
-      <div className="space-y-2">
-        <div className="flex justify-between items-start">
-          <div>
-            <h3 className="text-sm font-medium">{lastMessage.subject || 'No Subject'}</h3>
-            <p className="text-xs text-gray-500">
-              From: {lastMessage.from || 'Unknown'} • {formatDate(lastMessage.receivedAt)}
-            </p>
-          </div>
-        </div>
-        <p className="text-sm text-gray-600 line-clamp-2">
-          {lastMessage.snippet || 'No preview available'}
-        </p>
-      </div>
-    );
-  };
 
   return (
     <Layout>
