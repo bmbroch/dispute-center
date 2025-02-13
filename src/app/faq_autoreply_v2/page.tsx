@@ -578,14 +578,6 @@ const truncateText = (text: string, maxLength: number): string => {
   return text.substring(0, maxLength) + '...';
 };
 
-// Add this helper function near the top with other helper functions
-const handleShowFullContent = (emailId: string): void => {
-  setEmails((prev: ExtendedEmail[]) => prev.map((e: ExtendedEmail) => 
-    e.id === emailId 
-      ? { ...e, showFullContent: true }
-      : e
-  ));
-};
 
 export default function FAQAutoReplyV2() {
   console.log('=== Component Render Start ===');
@@ -1880,41 +1872,15 @@ export default function FAQAutoReplyV2() {
 
   const handleSaveReply = async (emailId: string) => {
     if (!editingReply) return;
-
-    try {
-      // Update emails state
-      setEmails(prev => prev.map(e => 
-        e.id === emailId 
-          ? { ...e, suggestedReply: editingReply.reply }
-          : e
-      ));
-
-      // Get the updated ready-to-reply emails
-      const readyToReplyEmails = emails.map(e => 
-        e.id === emailId 
-          ? { ...e, suggestedReply: editingReply.reply }
-          : e
-      ).filter(e => 
-        e.status === 'processed' && 
-        e.matchedFAQ && 
-        !e.isReplied
-      );
-
-      // Save to Firebase
-      await saveReadyToReplyToFirebase(readyToReplyEmails);
-
-      // Save to local cache
-      saveToCache(CACHE_KEYS.READY_TO_REPLY, {
-        emails: readyToReplyEmails,
-        timestamp: Date.now()
-      });
-
-      setEditingReply(null);
-      toast.success('Reply updated successfully');
-    } catch (error) {
-      console.error('Error saving reply:', error);
-      toast.error('Failed to save reply');
-    }
+    
+    setEmails(prev => prev.map(e => {
+      if (e.id === emailId) {
+        return { ...e, suggestedReply: editingReply.reply };
+      }
+      return e;
+    }));
+    
+    setEditingReply(null);
   };
 
   const generateDefaultReply = (email: ExtendedEmail) => {
@@ -1989,94 +1955,34 @@ Support Team`;
 
   const renderEmailContent = (email: ExtendedEmail) => {
     const hasThread = email.threadMessages && email.threadMessages.length > 0;
-    const content = hasThread && email.threadMessages?.[0]
-      ? getCleanContent(email.threadMessages[0].content)
-      : getCleanContent(email.content);
-
-    const rawContent = hasThread && email.threadMessages?.[0]
+    const isThreadExpanded = expandedThreads.has(email.threadId);
+    const rawContent = hasThread && email.threadMessages?.[0]?.content 
       ? email.threadMessages[0].content 
       : email.content;
+    const isHTML = isHTMLContent(rawContent);
+    const cleanContent = getCleanContent(rawContent);
 
-    const isThreadExpanded = expandedThreads.has(email.threadId);
-    
     return (
-      <div className="space-y-4">
-        {/* Show More/Less Button at the top */}
-        <button
-          onClick={() => handleShowFullContent(email.id)}
-          className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-md text-blue-700 bg-blue-50 hover:bg-blue-100 transition-all duration-200"
-        >
-          <ChevronRightIcon 
-            className={`h-3 w-3 transform transition-transform duration-200 ${
-              email.showFullContent ? 'rotate-90' : '-rotate-90'
-            }`}
-          />
-          {email.showFullContent ? 'Show Less' : 'Show More'}
-        </button>
-
-        {/* Email Content */}
-        <div className="prose max-w-none">
-          <div className="text-gray-700">
-            <div 
-              className={`relative overflow-hidden transition-all duration-300 ease-in-out ${
-                email.showFullContent ? '' : 'max-h-[120px]'
-              }`}
-            >
-              {/* Gradient overlay for collapsed state */}
-              {!email.showFullContent && (
-                <div className="absolute bottom-0 left-0 right-0 h-20 bg-gradient-to-t from-white to-transparent pointer-events-none" />
-              )}
-              
-              {/* Content */}
-              {isHTMLContent(rawContent) ? (
-                <div 
-                  className="email-html-content"
-                  dangerouslySetInnerHTML={{ __html: content }}
-                />
-              ) : (
-                <div className="whitespace-pre-wrap">{content}</div>
+      <div className="mt-4">
+        <div className="prose prose-sm max-w-none">
+          {cleanContent ? (
+            <div>
+              <div className={`text-gray-700 whitespace-pre-wrap ${!isThreadExpanded ? 'max-h-[60px] overflow-hidden relative' : ''}`}>
+                {cleanContent}
+              </div>
+              {!isThreadExpanded && hasThread && (
+                <button
+                  onClick={() => handleShowFullContent(email.id)}
+                  className="mt-2 text-blue-600 hover:text-blue-800 text-sm font-medium focus:outline-none"
+                >
+                  See Full Thread ({email.threadMessages?.length} messages)
+                </button>
               )}
             </div>
-          </div>
+          ) : (
+            <p className="text-gray-500 italic">No content available</p>
+          )}
         </div>
-
-        {/* Thread View Toggle */}
-        {hasThread && (
-          <div className="mt-4">
-            <button
-              onClick={() => toggleThreadExpansion(email.threadId)}
-              className="flex items-center text-sm text-gray-600 hover:text-gray-800"
-            >
-              <ChevronRightIcon
-                className={`w-4 h-4 mr-1 transform transition-transform duration-200 ${
-                  isThreadExpanded ? 'rotate-90' : ''
-                }`}
-              />
-              {isThreadExpanded ? 'Hide Thread' : `View Thread (${email.threadMessages?.length || 0} messages)`}
-            </button>
-          </div>
-        )}
-
-        {/* Thread Messages */}
-        {isThreadExpanded && hasThread && (
-          <div className="mt-4 space-y-4 pl-4 border-l-2 border-gray-200">
-            {email.threadMessages?.map((message, index) => (
-              <div key={message.id} className="space-y-2">
-                <div className="flex items-center text-sm text-gray-600">
-                  <span className="font-medium">{message.sender}</span>
-                  <span className="mx-2">•</span>
-                  <span>{new Date(message.receivedAt).toLocaleString()}</span>
-                </div>
-                <div 
-                  className="prose max-w-none text-gray-700"
-                  dangerouslySetInnerHTML={{ 
-                    __html: isHTMLContent(message.content) ? message.content : message.content
-                  }}
-                />
-              </div>
-            ))}
-          </div>
-        )}
       </div>
     );
   };
