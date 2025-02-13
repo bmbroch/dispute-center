@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getOAuth2Client } from '@/lib/google/auth';
 import { isGmailError } from '@/lib/types/gmail';
 import { gmail_v1 } from 'googleapis';
+import { Credentials } from 'google-auth-library';
 
 type Schema$Message = gmail_v1.Schema$Message;
 type Schema$MessagePart = gmail_v1.Schema$MessagePart;
@@ -23,6 +24,8 @@ interface ProcessedMessagePart {
   content?: string;
   filename?: string;
   parts?: ProcessedMessagePart[];
+  text?: string;
+  html?: string;
 }
 
 // Add batch processing constants
@@ -147,30 +150,14 @@ const processMessagePart = (part: Schema$MessagePart): ProcessedMessagePart => {
   });
 
   const result: ProcessedMessagePart = {
-    mimeType: part.mimeType || 'unknown'
+    mimeType: part.mimeType || 'unknown',
+    content: part.body?.data ? Buffer.from(part.body.data, 'base64').toString() : undefined,
+    filename: part.filename,
+    parts: part.parts?.map(processMessagePart)
   };
-
-  if (part.body?.data) {
-    result.content = Buffer.from(part.body.data, 'base64').toString();
-  }
-
-  if (part.filename) {
-    result.filename = part.filename;
-  }
-
-  if (part.parts) {
-    result.parts = part.parts.map(processMessagePart);
-  }
 
   return result;
 };
-
-// Fix the results initialization and reduce function
-const results: ProcessedMessagePart[] = [];
-const processedParts = part.parts?.reduce((acc: ProcessedMessagePart[], curr: Schema$MessagePart) => {
-  const processed = processMessagePart(curr);
-  return [...acc, processed];
-}, []) || [];
 
 // Update GmailErrorResponse interface
 interface GmailErrorResponse {
@@ -178,6 +165,9 @@ interface GmailErrorResponse {
   status: string;
   statusText: string;
   message?: string;
+  response?: {
+    data: any;
+  };
 }
 
 // Fix Credentials type error

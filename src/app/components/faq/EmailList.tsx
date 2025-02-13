@@ -3,11 +3,36 @@ import { XCircleIcon } from 'lucide-react';
 import { Email, GenericFAQ } from '@/types/faq';
 import { Email as EmailType } from '@/types/email';
 
+interface ThreadMessage {
+  id: string;
+  subject?: string;
+  from?: string;
+  content: string;
+  receivedAt: string;
+  snippet?: string;
+}
+
+interface EmailThread {
+  id: string;
+  subject: string;
+  from: string;
+  content: string;
+  receivedAt: string;
+  length: number;
+  snippet?: string;
+}
+
+interface ExtendedEmail extends EmailType {
+  thread?: EmailThread;
+  threadMessages?: ThreadMessage[];
+  matchedFAQ?: any;
+}
+
 interface EmailListProps {
-  emails: EmailType[];
+  emails: ExtendedEmail[];
   emailQuestions: Map<string, GenericFAQ[]>;
-  onAutoReply: (email: EmailType) => void;
-  onMarkNotRelevant: (email: EmailType) => void;
+  onAutoReply: (email: ExtendedEmail) => void;
+  onMarkNotRelevant: (email: ExtendedEmail) => void;
   showNotRelevantButton?: boolean;
 }
 

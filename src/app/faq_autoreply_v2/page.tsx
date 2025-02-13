@@ -611,13 +611,24 @@ export default function FAQAutoReplyV2() {
   // Add this state near other state declarations
   const [hasRefreshedOnce, setHasRefreshedOnce] = useState(false);
 
-  // Add readyToReplyCount calculation
+  // Add formatDate function
+  const formatDate = (date: string | number): string => {
+    try {
+      const dateObj = typeof date === 'string' ? new Date(date) : new Date(Number(date));
+      return dateObj.toLocaleString();
+    } catch (error) {
+      console.error('Error formatting date:', error);
+      return 'Invalid date';
+    }
+  };
+
+  // Update the readyToReplyCount calculation
   const readyToReplyCount = useMemo(() => {
     return emails.filter(email => 
       email.status === 'processed' && 
       email.threadMessages && 
       email.threadMessages.length > 0 && 
-      !email.hasAutoReply
+      !email.isReplied
     ).length;
   }, [emails]);
 
