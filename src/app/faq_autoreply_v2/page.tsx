@@ -26,7 +26,7 @@ import {
 import { Dialog, Transition } from '@headlessui/react';
 import { Fragment } from 'react';
 import { getFirebaseDB } from '@/lib/firebase/firebase';
-import { collection, doc, setDoc, getDoc, getDocs, query, where } from 'firebase/firestore';
+import { collection, doc, setDoc, getDoc, getDocs, query, where, deleteDoc } from 'firebase/firestore';
 import { Email } from '@/types/email';
 import { GenericFAQ, IrrelevanceAnalysis } from '@/types/faq';
 import { calculatePatternSimilarity } from '@/lib/utils/similarity';
@@ -98,6 +98,14 @@ interface ExtendedEmail extends BaseEmail {
   category?: 'support' | 'sales' | 'other';
   aiAnalysis?: boolean;
   analysis?: any; // TODO: Define proper type for analysis
+  gmailError?: string;
+  threadMessages?: {
+    id: string;
+    subject: string;
+    sender: string;
+    content: string;
+    receivedAt: number | string;
+  }[];
 }
 
 // Add cache helper functions at the top of the file
@@ -238,7 +246,46 @@ const loadEmailsFromFirebase = async () => {
       
       // Check if cache is still valid
       if (Date.now() - timestamp < FIREBASE_CACHE_DURATION) {
-        return emails;
+        // Get all not relevant email IDs
+        const notRelevantRef = collection(db, 'not_relevant_emails');
+        const notRelevantDocs = await getDocs(notRelevantRef);
+        const notRelevantIds = new Set(notRelevantDocs.docs.map(doc => doc.id));
+
+        // Sort emails by the most recent message in their thread
+        const sortedEmails = emails.map((email: ExtendedEmail) => {
+          // Mark email as not relevant if it's in the not_relevant_emails collection
+          const isNotRelevant = notRelevantIds.has(email.id);
+          
+          if (email.threadMessages && email.threadMessages.length > 0) {
+            // Sort thread messages by receivedAt in descending order
+            email.threadMessages.sort((a, b) => {
+              const aTime = typeof a.receivedAt === 'string' ? new Date(a.receivedAt).getTime() : Number(a.receivedAt);
+              const bTime = typeof b.receivedAt === 'string' ? new Date(b.receivedAt).getTime() : Number(b.receivedAt);
+              return bTime - aTime;
+            });
+            
+            // Update the email's content and receivedAt with the most recent message
+            const mostRecent = email.threadMessages[0];
+            return {
+              ...email,
+              content: mostRecent.content,
+              subject: mostRecent.subject,
+              sender: mostRecent.sender,
+              receivedAt: mostRecent.receivedAt,
+              isNotRelevant
+            };
+          }
+          return { ...email, isNotRelevant };
+        });
+
+        // Sort emails by their most recent message
+        sortedEmails.sort((a: ExtendedEmail, b: ExtendedEmail) => {
+          const aTime = typeof a.receivedAt === 'string' ? new Date(a.receivedAt).getTime() : Number(a.receivedAt);
+          const bTime = typeof b.receivedAt === 'string' ? new Date(b.receivedAt).getTime() : Number(b.receivedAt);
+          return bTime - aTime;
+        });
+
+        return sortedEmails;
       }
     }
     return null;
@@ -486,13 +533,63 @@ interface RemovedEmailsCache {
   timestamp: number;
 }
 
+// Add this helper function near the top with other helper functions
+const isHTMLContent = (content: string): boolean => {
+  // Check for common HTML indicators
+  const htmlIndicators = [
+    '<!DOCTYPE',
+    '<html',
+    '<body',
+    '<div',
+    '<p>',
+    '<table',
+    '<head',
+    '<style',
+    '<script'
+  ];
+  
+  const lowerContent = content.toLowerCase();
+  return htmlIndicators.some(indicator => lowerContent.includes(indicator.toLowerCase()));
+};
+
+const sanitizeHTML = (html: string): string => {
+  // Basic sanitization to extract text from HTML
+  // Remove style/script tags and their contents
+  let sanitized = html.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+                     .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+                     .replace(/<[^>]+>/g, ' ') // Replace any remaining tags with space
+                     .replace(/\s+/g, ' ') // Replace multiple spaces with single space
+                     .trim();
+  
+  // Decode HTML entities
+  const textarea = document.createElement('textarea');
+  textarea.innerHTML = sanitized;
+  return textarea.value;
+};
+
+// Add this helper function near the top with other helper functions
+const truncateText = (text: string, maxLength: number): string => {
+  if (!text) return '';
+  if (text.length <= maxLength) return text;
+  return text.substring(0, maxLength) + '...';
+};
+
+// Add this helper function near the top with other helper functions
+const handleShowFullContent = (emailId: string) => {
+  setEmails(prev => prev.map(e => 
+    e.id === emailId 
+      ? { ...e, showFullContent: true }
+      : e
+  ));
+};
+
 export default function FAQAutoReplyV2() {
   console.log('=== Component Render Start ===');
   const { user, checkGmailAccess, refreshAccessToken } = useAuth();
   const [emails, setEmails] = useState<ExtendedEmail[]>([]); // Explicitly initialize as empty array
   const [potentialFAQs, setPotentialFAQs] = useState<PotentialFAQ[]>([]);
   const [genericFAQs, setGenericFAQs] = useState<GenericFAQ[]>([]);
-  const [activeTab, setActiveTab] = useState<'unanswered' | 'suggested' | 'faq_expansion' | 'faq_library'>('unanswered');
+  const [activeTab, setActiveTab] = useState<'unanswered' | 'suggested' | 'faq_library' | 'not_relevant'>('unanswered');
   const [loading, setLoading] = useState(true);
   const [loadingFAQs, setLoadingFAQs] = useState(true);
   const [initialized, setInitialized] = useState(false);
@@ -510,6 +607,9 @@ export default function FAQAutoReplyV2() {
   const [editingReply, setEditingReply] = useState<EditingReply | null>(null);
   const [lastFetchTimestamp, setLastFetchTimestamp] = useState<number>(0);
   const [timeUntilNextRefresh, setTimeUntilNextRefresh] = useState<number>(0);
+  const [expandedThreads, setExpandedThreads] = useState<Set<string>>(new Set());
+  // Add this state near other state declarations
+  const [hasRefreshedOnce, setHasRefreshedOnce] = useState(false);
 
   // Add readyToReplyCount calculation
   const readyToReplyCount = useMemo(() => emails.filter(e => 
@@ -718,7 +818,7 @@ export default function FAQAutoReplyV2() {
         }
       }
 
-      // Check if enough time has passed since last fetch, but allow first refresh
+      // Check if enough time has passed since last fetch
       const now = Date.now();
       const timeSinceLastFetch = now - lastFetchTimestamp;
       const isFirstFetch = lastFetchTimestamp === 0;
@@ -730,145 +830,248 @@ export default function FAQAutoReplyV2() {
         return;
       }
 
-      let response = await fetch(`/api/emails/inbox`, {
-        headers: {
-          'Authorization': `Bearer ${user.accessToken}`,
-          'X-Page': nextPage.toString(),
-          'X-Force-Refresh': forceRefresh ? 'true' : 'false',
-          'X-Last-Fetch': lastFetchTimestamp.toString()
-        }
-      });
-      
-      if (response.status === 401) {
-        const newToken = await refreshAccessToken();
-        if (!newToken) {
-          throw new Error('Session expired. Please sign in again.');
-        }
-        
+      let response;
+      try {
         response = await fetch(`/api/emails/inbox`, {
           headers: {
-            'Authorization': `Bearer ${newToken}`,
+            'Authorization': `Bearer ${user.accessToken}`,
             'X-Page': nextPage.toString(),
             'X-Force-Refresh': forceRefresh ? 'true' : 'false',
             'X-Last-Fetch': lastFetchTimestamp.toString()
           }
         });
+      } catch (fetchError) {
+        console.error('Network error fetching emails:', fetchError);
+        throw new Error('Failed to connect to email server. Please check your internet connection.');
+      }
+
+      // Handle various HTTP status codes
+      if (response.status === 401) {
+        console.log('Access token expired, attempting to refresh...');
+        const newToken = await refreshAccessToken();
+        if (!newToken) {
+          throw new Error('Your session has expired. Please sign in again.');
+        }
+        
+        try {
+          response = await fetch(`/api/emails/inbox`, {
+            headers: {
+              'Authorization': `Bearer ${newToken}`,
+              'X-Page': nextPage.toString(),
+              'X-Force-Refresh': forceRefresh ? 'true' : 'false',
+              'X-Last-Fetch': lastFetchTimestamp.toString()
+            }
+          });
+        } catch (retryError) {
+          console.error('Network error on retry:', retryError);
+          throw new Error('Failed to connect after token refresh. Please try again.');
+        }
       }
 
       if (response.status === 429) {
         const data = await response.json();
         const retryAfter = data.retryAfter || MIN_FETCH_INTERVAL;
         const nextRefreshTime = new Date(now + retryAfter);
-        toast.info(`Rate limit reached. Using cached data. Next refresh available at ${nextRefreshTime.toLocaleTimeString()}`);
+        toast.warning(`Rate limit reached. Next refresh available at ${nextRefreshTime.toLocaleTimeString()}`, {
+          duration: 5000,
+          icon: '⚠️'
+        });
         return;
       }
 
-      if (!response.ok) {
-        throw new Error('Failed to fetch emails');
+      if (response.status === 403) {
+        throw new Error('Access to Gmail API is forbidden. Please check your permissions.');
       }
 
-      const data = await response.json();
-      
+      if (response.status === 404) {
+        throw new Error('Email inbox not found. Please verify your Gmail settings.');
+      }
+
+      if (response.status === 500) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Gmail server error. Please try again later.');
+      }
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `Failed to fetch emails (Status: ${response.status})`);
+      }
+
+      let data;
+      try {
+        data = await response.json();
+      } catch (parseError) {
+        console.error('Error parsing response:', parseError);
+        throw new Error('Invalid response from email server');
+      }
+
+      // Validate response data structure
+      if (!data || !Array.isArray(data.emails)) {
+        console.error('Invalid response format:', data);
+        throw new Error('Invalid email data received from server');
+      }
+
       // Update last fetch timestamp on successful response
       setLastFetchTimestamp(now);
 
       // Process emails and merge with cached data
-      const processedEmails = data.emails.map((email: ExtendedEmail) => {
-        const cached = loadFromCache(`${CACHE_KEYS.AI_ANALYSIS}_${email.id}`) || {};
-        return {
-          ...email,
-          suggestedReply: email.suggestedReply || (cached as CacheData).suggestedReply || '',
-          questions: cached.questions || [],
-          timestamp: cached.timestamp || Date.now()
-        };
-      });
+      const processedEmails = await Promise.all(data.emails.map(async (email: ExtendedEmail) => {
+        try {
+          // Check if email is marked as not relevant
+          const isNotRelevant = await isEmailMarkedNotRelevant(email.id);
+          if (isNotRelevant) {
+            return null; // Skip this email
+          }
+
+          const cached = loadFromCache(`${CACHE_KEYS.AI_ANALYSIS}_${email.id}`) || {};
+          return {
+            ...email,
+            suggestedReply: email.suggestedReply || (cached as CacheData).suggestedReply || '',
+            questions: cached.questions || [],
+            timestamp: cached.timestamp || Date.now()
+          };
+        } catch (processingError) {
+          console.error('Error processing email:', email.id, processingError);
+          return email;
+        }
+      }));
+
+      // Filter out null values (not relevant emails)
+      const filteredEmails = processedEmails.filter(email => email !== null);
 
       // Update emails state
       setEmails(prev => {
         const newEmails = isLoadingMore
-          ? [...prev, ...processedEmails.filter(
+          ? [...prev, ...filteredEmails.filter(
               (email: ExtendedEmail) => !prev.some((e: ExtendedEmail) => e.id === email.id)
             )]
-          : processedEmails;
+          : filteredEmails;
 
         // Save to Firebase cache if this is a fresh load
         if (!isLoadingMore) {
-          saveEmailsToFirebase(newEmails);
+          saveEmailsToFirebase(newEmails).catch(error => {
+            console.error('Error saving to Firebase:', error);
+          });
         }
 
         return newEmails;
       });
 
       // Update questions map after processing emails
-      const questionsMap = new Map<string, GenericFAQ[]>();
-      processedEmails.forEach((email: ExtendedEmail) => {
-        if (email.questions) {
-          questionsMap.set(email.id, email.questions);
-        }
-      });
-      setEmailQuestions(questionsMap);
+      try {
+        const questionsMap = new Map<string, GenericFAQ[]>();
+        filteredEmails.forEach((email: ExtendedEmail) => {
+          if (email.questions) {
+            questionsMap.set(email.id, email.questions);
+          }
+        });
+        setEmailQuestions(questionsMap);
+      } catch (questionsError) {
+        console.error('Error updating questions map:', questionsError);
+        toast.error('Failed to process email questions');
+      }
 
       // Process AI analysis results and update genericFAQs
-      const newGenericFAQs: GenericFAQ[] = [];
-      processedEmails.forEach((email: ExtendedEmail) => {
-        const questions = questionsMap.get(email.id) || [];
-        if (questions.length > 0) {
-          questions.forEach((question: GenericFAQ) => {
-            const existingQuestion = newGenericFAQs.find(faq => 
-              calculatePatternSimilarity(faq.question, typeof question === 'string' ? question : question.question) > 0.8
-            );
-            
-            if (!existingQuestion) {
-              newGenericFAQs.push({
-                question: typeof question === 'string' ? question : question.question,
-                category: 'support',
-                emailIds: [email.id],
-                confidence: 1,
-                requiresCustomerSpecificInfo: false
-              });
-            } else {
-              if (!existingQuestion.emailIds) {
-                existingQuestion.emailIds = [];
+      try {
+        const newGenericFAQs: GenericFAQ[] = [];
+        filteredEmails.forEach((email: ExtendedEmail) => {
+          const questions = emailQuestions.get(email.id) || [];
+          if (questions.length > 0) {
+            questions.forEach((question: GenericFAQ) => {
+              const existingQuestion = newGenericFAQs.find(faq => 
+                calculatePatternSimilarity(faq.question, typeof question === 'string' ? question : question.question) > 0.8
+              );
+              
+              if (!existingQuestion) {
+                newGenericFAQs.push({
+                  question: typeof question === 'string' ? question : question.question,
+                  category: 'support',
+                  emailIds: [email.id],
+                  confidence: 1,
+                  requiresCustomerSpecificInfo: false
+                });
+              } else {
+                if (!existingQuestion.emailIds) {
+                  existingQuestion.emailIds = [];
+                }
+                existingQuestion.emailIds.push(email.id);
               }
-              existingQuestion.emailIds.push(email.id);
-            }
-          });
-        }
-      });
+            });
+          }
+        });
 
-      // Group similar questions before updating state
-      const groupedFAQs = groupSimilarPatterns(newGenericFAQs);
+        // Group similar questions before updating state
+        const groupedFAQs = groupSimilarPatterns(newGenericFAQs);
 
-      // Update genericFAQs state
-      setGenericFAQs(prev => {
-        if (isLoadingMore) {
-          const combined = [...prev, ...groupedFAQs];
-          return groupSimilarPatterns(combined);
+        // Update genericFAQs state
+        setGenericFAQs(prev => {
+          if (isLoadingMore) {
+            const combined = [...prev, ...groupedFAQs];
+            return groupSimilarPatterns(combined);
+          }
+          return groupedFAQs;
+        });
+
+        // Save to cache
+        try {
+          if (!isLoadingMore) {
+            saveToCache(CACHE_KEYS.EMAILS, filteredEmails);
+            saveToCache(CACHE_KEYS.QUESTIONS, Object.fromEntries(emailQuestions));
+            saveToCache(CACHE_KEYS.GENERIC_FAQS, groupedFAQs);
+          }
+        } catch (cacheError) {
+          console.error('Error saving to cache:', cacheError);
+          // Continue even if cache save fails
         }
-        return groupedFAQs;
-      });
+
+        // If we got no new emails but hasMore is true, try loading the next page
+        if (filteredEmails.length === 0 && data.hasMore) {
+          return loadEmails(forceRefresh, nextPage + 1);
+        }
+      } catch (faqError) {
+        console.error('Error processing FAQs:', faqError);
+        toast.error('Failed to process FAQ patterns');
+      }
 
       // Update pagination state
       setHasMore(data.hasMore || false);
       setPage(nextPage);
 
-      // Save to cache
-      if (!isLoadingMore) {
-        saveToCache(CACHE_KEYS.EMAILS, processedEmails);
-        saveToCache(CACHE_KEYS.QUESTIONS, Object.fromEntries(questionsMap));
-        saveToCache(CACHE_KEYS.GENERIC_FAQS, groupedFAQs);
-      }
-
       // If we got no new emails but hasMore is true, try loading the next page
-      if (processedEmails.length === 0 && data.hasMore) {
+      if (filteredEmails.length === 0 && data.hasMore) {
         return loadEmails(forceRefresh, nextPage + 1);
       }
     } catch (error) {
       console.error('Error loading emails:', error);
-      if (error instanceof Error && error.message.includes('Quota exceeded')) {
-        toast.error('Gmail API quota reached. Please try again in a few minutes.');
+      
+      // Handle specific error types
+      if (error instanceof Error) {
+        if (error.message.includes('Quota exceeded')) {
+          toast.error('Gmail API quota reached. Please try again in a few minutes.', {
+            duration: 5000,
+            icon: '⚠️'
+          });
+        } else if (error.message.includes('internet connection')) {
+          toast.error('Network error. Please check your internet connection.', {
+            duration: 5000,
+            icon: '🌐'
+          });
+        } else if (error.message.includes('session has expired')) {
+          toast.error('Session expired. Please sign in again.', {
+            duration: 5000,
+            icon: '🔑'
+          });
+        } else {
+          toast.error(error.message, {
+            duration: 5000,
+            icon: '❌'
+          });
+        }
       } else {
-        toast.error(error instanceof Error ? error.message : 'Failed to load emails');
+        toast.error('An unexpected error occurred while loading emails', {
+          duration: 5000,
+          icon: '❌'
+        });
       }
     } finally {
       // Only set loading to false if we have emails or if there was an error
@@ -884,7 +1087,8 @@ export default function FAQAutoReplyV2() {
     loading,
     loadingMore,
     refreshAccessToken,
-    lastFetchTimestamp
+    lastFetchTimestamp,
+    emailQuestions
   ]);
 
   useEffect(() => {
@@ -1355,16 +1559,33 @@ export default function FAQAutoReplyV2() {
   };
 
   const handleMarkNotRelevant = async (email: ExtendedEmail) => {
-    try {
-      // Immediately remove the email from the list for better UX
-      setEmails(prev => prev.filter(e => e.id !== email.id));
-      
-      // Remove from questions if present
-      const updatedQuestions = new Map(emailQuestions);
-      updatedQuestions.delete(email.id);
-      setEmailQuestions(updatedQuestions);
+    // Immediately mark locally as isNotRelevant
+    setEmails(prev => prev.map(e => 
+      e.id === email.id ? { ...e, isNotRelevant: true } : e
+    ));
 
-      // Then send the analysis request in the background
+    // Remove from questions if you wish
+    const updatedQuestions = new Map(emailQuestions);
+    updatedQuestions.delete(email.id);
+    setEmailQuestions(updatedQuestions);
+
+    try {
+      // Save to Firebase first
+      const db = getFirebaseDB();
+      if (!db) throw new Error('Firebase DB not initialized');
+
+      const notRelevantRef = doc(db, 'not_relevant_emails', email.id);
+      await setDoc(notRelevantRef, {
+        emailId: email.id,
+        threadId: email.threadId,
+        subject: email.subject,
+        sender: email.sender,
+        content: email.content,
+        receivedAt: email.receivedAt,
+        markedNotRelevantAt: Date.now()
+      });
+
+      // Now call analyze-irrelevant with threadId
       const response = await fetch('/api/emails/analyze-irrelevant', {
         method: 'POST',
         headers: {
@@ -1372,7 +1593,7 @@ export default function FAQAutoReplyV2() {
         },
         body: JSON.stringify({ 
           email: {
-            id: email.id,
+            threadId: email.threadId,
             subject: email.subject || 'No Subject',
             content: email.content || '',
             sender: email.sender || 'Unknown Sender'
@@ -1386,13 +1607,30 @@ export default function FAQAutoReplyV2() {
 
       const analysis: IrrelevanceAnalysis = await response.json();
       
-      // Show a simple success message with the reason
-      toast.success(`Removed: ${analysis.reason}`);
+      // Update the Firebase document with the analysis reason
+      await setDoc(notRelevantRef, {
+        reason: analysis.reason
+      }, { merge: true });
 
+      toast.success(`Removed: ${analysis.reason}`);
     } catch (error) {
       console.error('Error marking email as not relevant:', error);
-      // Even if the analysis fails, we keep the email removed
       toast.error('Error analyzing email, but it has been removed from the list');
+    }
+  };
+
+  // Add this function to check if an email is marked as not relevant
+  const isEmailMarkedNotRelevant = async (emailId: string): Promise<boolean> => {
+    try {
+      const db = getFirebaseDB();
+      if (!db) return false;
+
+      const notRelevantRef = doc(db, 'not_relevant_emails', emailId);
+      const docSnap = await getDoc(notRelevantRef);
+      return docSnap.exists();
+    } catch (error) {
+      console.error('Error checking not relevant status:', error);
+      return false;
     }
   };
 
@@ -1570,7 +1808,7 @@ export default function FAQAutoReplyV2() {
       // Set loading state
       setEmails(prev => prev.map(e => 
         e.id === email.id 
-          ? { ...e, isGeneratingReply: true }
+          ? { ...e, isGeneratingReply: true, gmailError: undefined }
           : e
       ));
 
@@ -1690,12 +1928,153 @@ Best regards,
 Support Team`;
   };
 
-  const toggleEmailContent = (emailId: string) => {
+  const toggleEmailContent = useCallback((emailId: string) => {
     setEmails(prev => prev.map(e => 
       e.id === emailId 
         ? { ...e, showFullContent: !e.showFullContent }
         : e
     ));
+  }, []);
+
+  const toggleThreadExpansion = (threadId: string) => {
+    setExpandedThreads(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(threadId)) {
+        newSet.delete(threadId);
+      } else {
+        newSet.add(threadId);
+      }
+      return newSet;
+    });
+  };
+
+  const getCleanContent = (content: string) => {
+    // Split into lines
+    const lines = content.split('\n');
+    let cleanContent = [];
+    
+    // Process each line
+    for (const line of lines) {
+      const trimmedLine = line.trim();
+      
+      // Stop at common email reply indicators
+      if (
+        trimmedLine.match(/^On .+wrote:/) ||  // "On ... wrote:"
+        trimmedLine.startsWith('>') ||        // Quoted text
+        trimmedLine.match(/^-{3,}/) ||       // Horizontal rules
+        trimmedLine.match(/^_{3,}/) ||       // Horizontal rules
+        trimmedLine.match(/^From:/) ||       // Forwarded message headers
+        trimmedLine.match(/^Date:/) ||
+        trimmedLine.match(/^Subject:/) ||
+        trimmedLine.match(/^To:/)
+      ) {
+        break;
+      }
+      
+      // Skip empty signature indicators
+      if (trimmedLine === '--' || trimmedLine === '__') {
+        continue;
+      }
+      
+      cleanContent.push(line);
+    }
+    
+    // Join lines back together and trim any trailing whitespace
+    return cleanContent.join('\n').trim();
+  };
+
+  const renderEmailContent = (email: ExtendedEmail) => {
+    const isThreadExpanded = expandedThreads.has(email.threadId);
+    const hasThread = email.threadMessages && email.threadMessages.length > 1;
+    
+    // Get the most recent message content
+    const mostRecentContent = hasThread 
+      ? getCleanContent(email.threadMessages[0].content)
+      : getCleanContent(email.content);
+
+    const rawContent = hasThread ? email.threadMessages[0].content : email.content;
+    const isHTML = isHTMLContent(rawContent);
+
+    return (
+      <div className="space-y-4">
+        {/* Show More/Less Button at the top */}
+        <button
+          onClick={() => handleShowFullContent(email.id)}
+          className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-md text-blue-700 bg-blue-50 hover:bg-blue-100 transition-all duration-200"
+        >
+          <ChevronRightIcon 
+            className={`h-3 w-3 transform transition-transform duration-200 ${
+              email.showFullContent ? 'rotate-90' : '-rotate-90'
+            }`}
+          />
+          {email.showFullContent ? 'Show Less' : 'Show More'}
+        </button>
+
+        {/* Email Content */}
+        <div className="prose max-w-none">
+          <div className="text-gray-700">
+            <div 
+              className={`relative overflow-hidden transition-all duration-300 ease-in-out ${
+                email.showFullContent ? '' : 'max-h-[120px]'
+              }`}
+            >
+              {/* Gradient overlay for collapsed state */}
+              {!email.showFullContent && (
+                <div className="absolute bottom-0 left-0 right-0 h-20 bg-gradient-to-t from-white to-transparent pointer-events-none" />
+              )}
+              
+              {/* Content */}
+              {isHTML ? (
+                <div 
+                  className="email-html-content"
+                  dangerouslySetInnerHTML={{ __html: mostRecentContent }}
+                />
+              ) : (
+                <div className="whitespace-pre-wrap">{mostRecentContent}</div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Thread View Toggle */}
+        {hasThread && (
+          <div className="mt-4">
+            <button
+              onClick={() => toggleThreadExpansion(email.threadId)}
+              className="flex items-center text-sm text-gray-600 hover:text-gray-800"
+            >
+              <ChevronRightIcon
+                className={`w-4 h-4 mr-1 transform transition-transform duration-200 ${
+                  isThreadExpanded ? 'rotate-90' : ''
+                }`}
+              />
+              {isThreadExpanded ? 'Hide Thread' : `View Thread (${email.threadMessages.length} messages)`}
+            </button>
+          </div>
+        )}
+
+        {/* Thread Messages */}
+        {isThreadExpanded && hasThread && (
+          <div className="mt-4 space-y-4 pl-4 border-l-2 border-gray-200">
+            {email.threadMessages.map((message, index) => (
+              <div key={message.id} className="space-y-2">
+                <div className="flex items-center text-sm text-gray-600">
+                  <span className="font-medium">{message.sender}</span>
+                  <span className="mx-2">•</span>
+                  <span>{new Date(message.receivedAt).toLocaleString()}</span>
+                </div>
+                <div 
+                  className="prose max-w-none text-gray-700"
+                  dangerouslySetInnerHTML={{ 
+                    __html: isHTMLContent(message.content) ? message.content : message.content
+                  }}
+                />
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
   };
 
   const renderTabs = () => {
@@ -1718,19 +2097,11 @@ Support Team`;
               description: 'Step 1: Extract questions from emails'
             },
             { 
-              id: 'faq_expansion', 
-              label: 'Questions to Answer', 
-              icon: LightbulbIcon, 
-              count: answeredFAQs.filter(faq => !faq.answer).length,
-              description: 'Step 2: Answer extracted questions',
-              highlight: answeredFAQs.filter(faq => !faq.answer).length > 0
-            },
-            { 
               id: 'suggested', 
               label: 'Ready to Reply', 
               icon: CheckCircleIcon, 
               count: readyToReplyCount,
-              description: 'Step 3: Send auto-replies'
+              description: 'Step 2: Send auto-replies'
             },
             {
               id: 'faq_library',
@@ -1738,15 +2109,21 @@ Support Team`;
               icon: BookOpenIcon,
               count: answeredFAQs.filter(faq => faq.answer).length,
               description: 'Browse all answered FAQs'
+            },
+            {
+              id: 'not_relevant',
+              label: 'Not Relevant',
+              icon: XCircleIcon,
+              count: emails.filter(e => e.isNotRelevant).length,
+              description: 'Emails marked as not relevant'
             }
-          ].map(({ id, label, icon: Icon, count, description, highlight }) => (
+          ].map(({ id, label, icon: Icon, count, description }) => (
             <button
               key={id}
               onClick={() => setActiveTab(id as any)}
               className={`
                 group relative min-w-0 flex-1 overflow-hidden py-4 px-4 text-center text-sm font-medium hover:bg-gray-50 focus:z-10
                 ${activeTab === id ? 'border-b-2 border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}
-                ${highlight ? 'bg-yellow-50' : ''}
               `}
             >
               <div className="flex items-center justify-center space-x-2">
@@ -1768,221 +2145,123 @@ Support Team`;
   };
 
   const renderUnansweredEmails = () => {
-    // Add debug logging
-    console.log('=== Debug renderUnansweredEmails ===');
-    console.log('Emails state:', emails);
-    console.log('Emails type:', typeof emails);
-    console.log('Is array:', Array.isArray(emails));
-
-    // Show skeleton during initial load, refresh, or when we have no emails yet
-    if (loading && (!emails || !Array.isArray(emails) || emails.length === 0)) {
-      return (
-        <div className="space-y-4">
-          {[1, 2, 3].map((i) => (
-            <div key={i} className="bg-white rounded-xl shadow-sm p-6 animate-pulse">
-              <div className="flex justify-between items-start mb-4">
-                <div className="w-3/4">
-                  <div className="h-5 bg-gray-200 rounded w-2/3 mb-2"></div>
-                  <div className="h-4 bg-gray-200 rounded w-1/2"></div>
-                </div>
-                <div className="h-8 w-24 bg-gray-200 rounded"></div>
-              </div>
-              <div className="space-y-3">
-                <div className="h-4 bg-gray-200 rounded w-full"></div>
-                <div className="h-4 bg-gray-200 rounded w-5/6"></div>
-                <div className="h-4 bg-gray-200 rounded w-4/6"></div>
-              </div>
-            </div>
-          ))}
-        </div>
-      );
-    }
-
-    // Ensure emails is an array
-    const emailsArray = Array.isArray(emails) ? emails : [];
-    const unansweredEmails = emailsArray.filter(email => !email.isReplied && !email.isNotRelevant && !email.matchedFAQ);
-    
     return (
-      <div className="space-y-3">
-        {/* Status banner */}
-        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center">
-              <ClockIcon className="h-4 w-4 text-blue-400 mr-1.5" />
-              <p className="text-xs text-blue-700">
-                {timeUntilNextRefresh > 0 
-                  ? `Showing cached emails. Next refresh available in ${formatTimeRemaining(timeUntilNextRefresh)}`
-                  : 'Showing cached emails. Refresh available now'}
-              </p>
-            </div>
-            <button
-              onClick={handleRefresh}
-              disabled={timeUntilNextRefresh > 0}
-              className={`inline-flex items-center px-2 py-1 text-xs font-medium rounded-md
-                ${timeUntilNextRefresh > 0 
-                  ? 'bg-gray-100 text-gray-400 cursor-not-allowed' 
-                  : 'bg-blue-100 text-blue-700 hover:bg-blue-200'}`}
-            >
-              <svg className="h-3 w-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-              </svg>
-              Refresh Now
-            </button>
-          </div>
-        </div>
+      <div className="space-y-8">
+        {emails
+          .filter(email => !email.isReplied && !email.isNotRelevant)
+          .map(email => {
+            const questions = emailQuestions.get(email.id) || [];
+            const hasQuestions = questions.length > 0;
 
-        {unansweredEmails.map(email => {
-          const questions = emailQuestions.get(email.id) || [];
-          const hasQuestions = questions.length > 0;
-          const answeredQuestions = questions.filter(q => findMatchingAnsweredFAQ(q.question));
-          const unansweredQuestions = questions.filter(q => !findMatchingAnsweredFAQ(q.question));
-          const progress = hasQuestions ? (answeredQuestions.length / questions.length) * 100 : 0;
-          const isMovingToReady = progress === 100;
-          
-          return (
-            <div 
-              key={email.id} 
-              className={`bg-white rounded-lg shadow-sm hover:shadow-md transition-all duration-500 ease-in-out overflow-hidden
-                ${isMovingToReady ? 'animate-slide-fade-out' : ''}`}
-            >
-              <div className="p-4">
-                {/* Header with progress bar */}
-                {hasQuestions && (
-                  <div className="mb-3">
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-xs font-medium text-gray-500">
-                        Progress: {answeredQuestions.length}/{questions.length} questions answered
-                      </span>
-                      {progress > 0 && progress < 100 && (
-                        <span className="text-xs font-medium text-blue-600">
-                          {unansweredQuestions.length} more to auto-reply
-                        </span>
-                      )}
+            return (
+              <div
+                key={email.id}
+                className={`bg-white rounded-lg shadow-sm p-6 space-y-4 ${
+                  email.isMovingToReady ? 'opacity-50' : ''
+                }`}
+              >
+                {/* Email Header */}
+                <div className="flex justify-between items-start">
+                  <div className="space-y-1">
+                    <h3 className="text-lg font-medium text-gray-900">
+                      {email.subject}
+                    </h3>
+                    <div className="text-sm text-gray-500">
+                      From: {email.sender} • {new Date(email.receivedAt).toLocaleString()}
                     </div>
-                    <div className="w-full bg-gray-200 rounded-full h-1.5">
-                      <div 
-                        className="bg-blue-600 h-1.5 rounded-full transition-all duration-500"
-                        style={{ width: `${progress}%` }}
-                      />
+                  </div>
+                  <div className="flex gap-1.5">
+                    <button
+                      onClick={() => copyEmailDebugInfo(email)}
+                      className="flex-shrink-0 inline-flex items-center px-2 py-1 border border-gray-300 text-xs font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+                    >
+                      📋 Copy Debug
+                    </button>
+                    <button
+                      onClick={() => handleMarkNotRelevant(email)}
+                      className="flex-shrink-0 inline-flex items-center px-2 py-1 border border-gray-300 text-xs font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+                    >
+                      ❌ Not Relevant
+                    </button>
+                  </div>
+                </div>
+
+                {/* Email Content with Thread Support */}
+                {renderEmailContent(email)}
+
+                <div className="mt-3">
+                  {(!email.aiAnalysis && !email.analysis) || (!hasQuestions && !email.isGeneratingReply) ? (
+                    <button
+                      onClick={() => handleCreateFAQ(email)}
+                      disabled={analyzing}
+                      className="inline-flex items-center px-3 py-1.5 border border-transparent text-xs font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50"
+                    >
+                      {analyzing ? (
+                        <>
+                          <svg className="animate-spin -ml-1 mr-2 h-3 w-3 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                          </svg>
+                          Analyzing...
+                        </>
+                      ) : (
+                        <>
+                          <LightbulbIcon className="h-3 w-3 mr-1.5" />
+                          Extract Questions
+                        </>
+                      )}
+                    </button>
+                  ) : (
+                    <div className="text-xs text-gray-500">
+                      {hasQuestions ? `${questions.length} questions found` : 'No questions found in this email'}
+                    </div>
+                  )}
+                </div>
+
+                {/* Questions bubbles */}
+                {hasQuestions && (
+                  <div className="mt-4">
+                    <h4 className="text-xs font-medium text-gray-900 mb-2">Questions Identified:</h4>
+                    <div className="flex flex-wrap gap-2">
+                      {questions.map((question, index) => {
+                        const matchedFAQ = answeredFAQs.find(faq => 
+                          faq.answer && 
+                          faq.answer.trim() !== '' && 
+                          calculatePatternSimilarity(faq.question, question.question) > SIMILARITY_THRESHOLD
+                        );
+                        const isAnswered = !!matchedFAQ;
+                        return (
+                          <button
+                            key={index}
+                            onClick={() => handleAddToFAQLibrary(question)}
+                            className={`
+                              group relative inline-flex items-center px-2 py-1 rounded-full text-xs font-medium
+                              transition-all duration-200 hover:shadow-md
+                              ${isAnswered 
+                                ? 'bg-green-100 text-green-800 hover:bg-green-200 border border-green-200' 
+                                : 'bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200'}
+                            `}
+                          >
+                            {isAnswered ? (
+                              <CheckCircleIcon className="h-3 w-3 mr-1" />
+                            ) : (
+                              <PencilIcon className="h-3 w-3 mr-1" />
+                            )}
+                            {truncateQuestion(question.question)}
+                            {isAnswered && (
+                              <div className="absolute -top-1 -right-1 h-3 w-3 bg-green-500 rounded-full border-2 border-white flex items-center justify-center">
+                                <CheckCircleIcon className="h-2 w-2 text-white" />
+                              </div>
+                            )}
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
                 )}
-
-                {/* Main content */}
-                <div className="flex flex-col md:flex-row md:items-start gap-4">
-                  {/* Email content */}
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-start justify-between mb-3">
-                      <div className="min-w-0 flex-1 pr-3">
-                        <h3 className="text-sm font-medium text-gray-900 mb-0.5 truncate">
-                          {email.subject}
-                        </h3>
-                        <p className="text-xs text-gray-500">
-                          From: {email.sender} · {new Date(email.receivedAt).toLocaleDateString()}
-                        </p>
-                      </div>
-                      <div className="flex gap-1.5">
-                        <button
-                          onClick={() => copyEmailDebugInfo(email)}
-                          className="flex-shrink-0 inline-flex items-center px-2 py-1 border border-gray-300 text-xs font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
-                        >
-                          📋 Copy Debug
-                        </button>
-                        <button
-                          onClick={() => handleMarkNotRelevant(email)}
-                          className="flex-shrink-0 inline-flex items-center px-2 py-1 border border-gray-300 text-xs font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
-                        >
-                          ❌ Not Relevant
-                        </button>
-                      </div>
-                    </div>
-                    <div className="prose prose-sm max-w-none">
-                      <p className="text-xs text-gray-700 line-clamp-3">
-                        {email.content}
-                      </p>
-                      <button 
-                        onClick={() => toggleEmailContent(email.id)}
-                        className="text-xs text-blue-600 hover:text-blue-700 mt-1"
-                      >
-                        {email.showFullContent ? 'Show less' : 'Show more'}
-                      </button>
-                    </div>
-                    <div className="mt-3">
-                      {(!email.aiAnalysis && !email.analysis) || (!hasQuestions && !email.isGeneratingReply) ? (
-                        <button
-                          onClick={() => handleCreateFAQ(email)}
-                          disabled={analyzing}
-                          className="inline-flex items-center px-3 py-1.5 border border-transparent text-xs font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50"
-                        >
-                          {analyzing ? (
-                            <>
-                              <svg className="animate-spin -ml-1 mr-2 h-3 w-3 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                              </svg>
-                              Analyzing...
-                            </>
-                          ) : (
-                            <>
-                              <LightbulbIcon className="h-3 w-3 mr-1.5" />
-                              Extract Questions
-                            </>
-                          )}
-                        </button>
-                      ) : (
-                        <div className="text-xs text-gray-500">
-                          {hasQuestions ? `${questions.length} questions found` : 'No questions found in this email'}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Questions bubbles */}
-                    {hasQuestions && (
-                      <div className="mt-4">
-                        <h4 className="text-xs font-medium text-gray-900 mb-2">Questions Identified:</h4>
-                        <div className="flex flex-wrap gap-2">
-                          {questions.map((question, index) => {
-                            const matchedFAQ = answeredFAQs.find(faq => 
-                              faq.answer && 
-                              faq.answer.trim() !== '' && 
-                              calculatePatternSimilarity(faq.question, question.question) > SIMILARITY_THRESHOLD
-                            );
-                            const isAnswered = !!matchedFAQ;
-                            return (
-                              <button
-                                key={index}
-                                onClick={() => handleAddToFAQLibrary(question)}
-                                className={`
-                                  group relative inline-flex items-center px-2 py-1 rounded-full text-xs font-medium
-                                  transition-all duration-200 hover:shadow-md
-                                  ${isAnswered 
-                                    ? 'bg-green-100 text-green-800 hover:bg-green-200 border border-green-200' 
-                                    : 'bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200'}
-                                `}
-                              >
-                                {isAnswered ? (
-                                  <CheckCircleIcon className="h-3 w-3 mr-1" />
-                                ) : (
-                                  <PencilIcon className="h-3 w-3 mr-1" />
-                                )}
-                                {truncateQuestion(question.question)}
-                                {isAnswered && (
-                                  <div className="absolute -top-1 -right-1 h-3 w-3 bg-green-500 rounded-full border-2 border-white flex items-center justify-center">
-                                    <CheckCircleIcon className="h-2 w-2 text-white" />
-                                  </div>
-                                )}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
               </div>
-            </div>
-          );
-        })}
+            );
+          })}
       </div>
     );
   };
@@ -2072,62 +2351,96 @@ Support Team`;
     </Transition.Root>
   );
 
-  // Update the handleRefresh function to clear cache
+  // Update the handleRefresh function
   const handleRefresh = async () => {
     const now = Date.now();
     const timeSinceLastFetch = now - lastFetchTimestamp;
     const isFirstFetch = lastFetchTimestamp === 0;
 
-    if (!isFirstFetch && timeSinceLastFetch < MIN_FETCH_INTERVAL) {
+    // Allow refresh if it's the first time after page load or if enough time has passed
+    if (!hasRefreshedOnce || isFirstFetch || timeSinceLastFetch >= MIN_FETCH_INTERVAL) {
+      console.log('=== Starting Refresh ===');
+      setLoading(true);
+      try {
+        console.log('Clearing cache...');
+        clearCache();
+        
+        // Reset ready-to-reply emails in Firebase
+        const db = getFirebaseDB();
+        if (db) {
+          console.log('Resetting ready-to-reply emails in Firebase...');
+          const readyRef = doc(db, 'ready_to_reply', 'latest');
+          await setDoc(readyRef, { 
+            emails: [], 
+            timestamp: now 
+          });
+
+          // Also clear the removed emails tracking
+          const removedRef = doc(db, 'removed_from_ready', 'latest');
+          await setDoc(removedRef, {
+            emailIds: [],
+            timestamp: now
+          });
+        }
+        
+        // Reset states
+        setEmails(prev => prev.filter(e => e.status !== 'processed' && e.status !== 'removed_from_ready'));
+        setEmailQuestions(new Map());
+        setGenericFAQs([]);
+        
+        // Load fresh data
+        await loadEmails(true, 1);
+        
+        setLastFetchTimestamp(Date.now());
+        setHasRefreshedOnce(true);
+        console.log('=== Refresh Complete ===');
+        toast.success('Refreshed successfully');
+      } catch (error) {
+        console.error('Error refreshing:', error);
+        toast.error('Failed to refresh');
+      } finally {
+        setLoading(false);
+      }
+    } else {
       const waitTime = Math.ceil((MIN_FETCH_INTERVAL - timeSinceLastFetch) / 1000);
       toast.error(`Please wait ${waitTime} seconds before refreshing again`);
-      return;
-    }
-
-    console.log('=== Starting Refresh ===');
-    setLoading(true);
-    try {
-      console.log('Clearing cache...');
-      clearCache();
-      
-      // Reset ready-to-reply emails in Firebase
-      const db = getFirebaseDB();
-      if (db) {
-        console.log('Resetting ready-to-reply emails in Firebase...');
-        const readyRef = doc(db, 'ready_to_reply', 'latest');
-        await setDoc(readyRef, { 
-          emails: [], 
-          timestamp: now 
-        });
-
-        // Also clear the removed emails tracking
-        const removedRef = doc(db, 'removed_from_ready', 'latest');
-        await setDoc(removedRef, {
-          emailIds: [],
-          timestamp: now
-        });
-      }
-      
-      // Reset states
-      setEmails(prev => prev.filter(e => e.status !== 'processed' && e.status !== 'removed_from_ready'));
-      setEmailQuestions(new Map());
-      setGenericFAQs([]);
-      
-      // Load fresh data
-      await loadEmails(true, 1);
-      
-      setLastFetchTimestamp(Date.now());
-      console.log('=== Refresh Complete ===');
-      toast.success('Refreshed successfully');
-    } catch (error) {
-      console.error('Error refreshing:', error);
-      toast.error('Failed to refresh');
-    } finally {
-      setLoading(false);
     }
   };
 
-  // Main render function debug
+  const SkeletonLoader = () => {
+    return (
+      <div className="space-y-8">
+        {[1, 2, 3].map((i) => (
+          <div key={i} className="bg-white rounded-lg shadow-sm p-6 space-y-4 animate-pulse">
+            {/* Header */}
+            <div className="flex justify-between items-start">
+              <div className="space-y-2 flex-1">
+                <div className="h-5 bg-gray-200 rounded w-3/4"></div>
+                <div className="h-4 bg-gray-200 rounded w-1/2"></div>
+              </div>
+              <div className="flex gap-1.5">
+                <div className="h-8 w-20 bg-gray-200 rounded"></div>
+                <div className="h-8 w-20 bg-gray-200 rounded"></div>
+              </div>
+            </div>
+            
+            {/* Content */}
+            <div className="space-y-2">
+              <div className="h-4 bg-gray-200 rounded w-full"></div>
+              <div className="h-4 bg-gray-200 rounded w-5/6"></div>
+              <div className="h-4 bg-gray-200 rounded w-4/6"></div>
+            </div>
+
+            {/* Actions */}
+            <div className="pt-2">
+              <div className="h-8 w-32 bg-gray-200 rounded"></div>
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
   const renderMainContent = () => {
     console.log('=== Rendering Main Content ===');
     console.log('Current activeTab:', activeTab);
@@ -2135,7 +2448,7 @@ Support Team`;
     
     if (loading) {
       console.log('Showing loading state');
-      return <div>Loading...</div>;
+      return <SkeletonLoader />;
     }
 
     switch (activeTab) {
@@ -2145,12 +2458,12 @@ Support Team`;
       case 'suggested':
         console.log('Rendering suggested tab');
         return renderSuggestedReplies();
-      case 'faq_expansion':
-        console.log('Rendering FAQ expansion tab');
-        return renderFAQExpansion();
       case 'faq_library':
         console.log('Rendering FAQ library tab');
         return renderFAQLibrary();
+      case 'not_relevant':
+        console.log('Rendering not relevant tab');
+        return renderNotRelevantEmails();
       default:
         console.log('Unknown tab:', activeTab);
         return null;
@@ -2252,7 +2565,7 @@ Support Team`;
                         <Sparkles className="h-4 w-4 mr-1.5 text-purple-400" />
                         AI Generated Reply
                       </div>
-                      {editingReply?.emailId !== email.id && (
+                      {!email.gmailError && editingReply?.emailId !== email.id && (
                         <button
                           onClick={() => handleEditReply(email)}
                           className="flex items-center text-gray-400 hover:text-gray-600"
@@ -2262,7 +2575,17 @@ Support Team`;
                       )}
                     </div>
                     
-                    {editingReply?.emailId === email.id ? (
+                    {email.gmailError ? (
+                      <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+                        <div className="flex items-start">
+                          <XCircleIcon className="h-5 w-5 text-red-400 mt-0.5 mr-2" />
+                          <div>
+                            <h3 className="text-sm font-medium text-red-800">Gmail API Error</h3>
+                            <p className="mt-1 text-sm text-red-700">{email.gmailError}</p>
+                          </div>
+                        </div>
+                      </div>
+                    ) : editingReply?.emailId === email.id ? (
                       <div className="space-y-3">
                         <div className="relative">
                           {/* Rich Text Editor Controls */}
@@ -2347,114 +2670,6 @@ Support Team`;
             ))}
           </div>
         )}
-      </div>
-    );
-  };
-
-  const renderFAQExpansion = () => {
-    // Debug logs to help identify the issue
-    console.log('=== FAQ Expansion Debug ===');
-    console.log('Loading state:', loading);
-    console.log('Emails:', emails.length);
-    console.log('Email questions:', emailQuestions);
-    console.log('Answered FAQs:', answeredFAQs);
-    
-    // Get all questions from all emails
-    const allQuestions = new Set<GenericFAQ>();
-    
-    // Collect questions from all emails
-    Array.from(emailQuestions.entries()).forEach(([emailId, questions]) => {
-      questions.forEach(q => {
-        // Only add if not already answered
-        const isAnswered = answeredFAQs.some(faq => 
-          faq.answer && faq.answer.trim() && calculatePatternSimilarity(faq.question, q.question) > SIMILARITY_THRESHOLD
-        );
-        if (!isAnswered) {
-          allQuestions.add(q);
-        }
-      });
-    });
-
-    // Show loading state if we're still loading initial data
-    if (loading && !emails.length) {
-      return (
-        <div className="flex justify-center items-center h-64">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900" />
-        </div>
-      );
-    }
-
-    // Only show "no questions" message if we have no questions and we're not loading
-    if (!loading && allQuestions.size === 0) {
-      return (
-        <div className="text-center py-8 text-gray-600">
-          <p>No questions to answer yet</p>
-          <p className="text-sm mt-2">Extract questions from emails in the "Unanswered Emails" tab</p>
-        </div>
-      );
-    }
-
-    // Convert to array and sort by emailIds length (most common questions first)
-    const sortedQuestions = Array.from(allQuestions).sort((a, b) => 
-      (b.emailIds?.length || 0) - (a.emailIds?.length || 0)
-    );
-
-    return (
-      <div className="space-y-4">
-        {sortedQuestions.map((faq, index) => {
-          // Find all emails that contain this question
-          const sourceEmails = emails.filter(email => {
-            const emailQs = emailQuestions.get(email.id) || [];
-            return emailQs.some(q => calculatePatternSimilarity(q.question, faq.question) > SIMILARITY_THRESHOLD);
-          });
-
-          return (
-            <div key={index} className="bg-white rounded-xl shadow-sm hover:shadow-md transition-shadow duration-200">
-              <div className="p-6">
-                <div className="flex items-start justify-between">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-3 mb-3">
-                      <PencilIcon className="h-5 w-5 text-blue-600" />
-                      <h3 className="text-lg font-medium text-gray-900">
-                        {faq.question}
-                      </h3>
-                    </div>
-                    
-                    {/* Source emails section */}
-                    <div className="mt-4">
-                      <h4 className="text-sm font-medium text-gray-700 mb-2">
-                        Found in {sourceEmails.length} email{sourceEmails.length !== 1 ? 's' : ''}
-                      </h4>
-                      <div className="space-y-2">
-                        {sourceEmails.map((email, emailIndex) => (
-                          <div key={emailIndex} className="flex items-start gap-2 text-sm text-gray-600">
-                            <div className="w-4 h-4 mt-0.5 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
-                              <span className="text-blue-600 text-xs">{emailIndex + 1}</span>
-                            </div>
-                            <div>
-                              <div className="font-medium">{email.subject}</div>
-                              <div className="text-gray-500">From: {email.sender}</div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-
-                  <button
-                    onClick={() => handleAddToFAQLibrary({
-                      ...faq,
-                      emailIds: sourceEmails.map(e => e.id)
-                    })}
-                    className="flex-shrink-0 inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700"
-                  >
-                    Answer Question
-                  </button>
-                </div>
-              </div>
-            </div>
-          );
-        })}
       </div>
     );
   };
@@ -2637,7 +2852,51 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
     .animate-slide-fade-out {
       animation: slideAndFadeOut 1s ease-in-out forwards;
     }
+
+    /* HTML Email Content Styles */
+    .email-html-content {
+      max-width: 100%;
+      overflow-x: auto;
+    }
+
+    .email-html-content img {
+      max-width: 100%;
+      height: auto;
+    }
+
+    .email-html-content table {
+      max-width: 100%;
+      margin: 1rem 0;
+      border-collapse: collapse;
+    }
+
+    .email-html-content td,
+    .email-html-content th {
+      padding: 0.5rem;
+      border: 1px solid #e5e7eb;
+    }
+
+    .email-html-content a {
+      color: #3b82f6;
+      text-decoration: underline;
+    }
+
+    .email-html-content pre,
+    .email-html-content code {
+      white-space: pre-wrap;
+      background-color: #f3f4f6;
+      padding: 0.2rem 0.4rem;
+      border-radius: 0.25rem;
+    }
+
+    .email-html-content blockquote {
+      border-left: 4px solid #e5e7eb;
+      margin: 1rem 0;
+      padding-left: 1rem;
+      color: #6b7280;
+    }
   `;
+  // ... existing code ...
 
   // Capture globalStyles in a ref to avoid dependency issues
   const globalStylesRef = useRef(globalStyles);
@@ -2772,24 +3031,109 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
     }
   };
 
+  // Add this helper function inside the component
+  const handleShowFullContent = useCallback((emailId: string) => {
+    setEmails(prev => prev.map(e => 
+      e.id === emailId 
+        ? { ...e, showFullContent: !e.showFullContent }
+        : e
+    ));
+  }, []);
+
+  // Add this function to handle moving emails back to relevant
+  const handleMoveBackToRelevant = async (email: ExtendedEmail) => {
+    try {
+      // Remove from not_relevant_emails collection in Firebase
+      const db = getFirebaseDB();
+      if (!db) throw new Error('Firebase DB not initialized');
+
+      const notRelevantRef = doc(db, 'not_relevant_emails', email.id);
+      await deleteDoc(notRelevantRef);
+
+      // Update local state
+      setEmails(prev => prev.map(e => 
+        e.id === email.id ? { ...e, isNotRelevant: false } : e
+      ));
+
+      toast.success('Email moved back to unanswered emails');
+    } catch (error) {
+      console.error('Error moving email back to relevant:', error);
+      toast.error('Failed to move email back');
+    }
+  };
+
+  function renderNotRelevantEmails() {
+    return (
+      <div className="space-y-8">
+        {emails
+          .filter(email => email.isNotRelevant)
+          .map(email => (
+            <div
+              key={email.id}
+              className="bg-white rounded-lg shadow-sm p-6 space-y-4"
+            >
+              <div className="flex justify-between items-start">
+                <div className="space-y-1">
+                  <h3 className="text-lg font-medium text-gray-900">
+                    {email.subject}
+                  </h3>
+                  <div className="text-sm text-gray-500">
+                    From: {email.sender} • {new Date(email.receivedAt).toLocaleString()}
+                  </div>
+                </div>
+                <div className="flex gap-1.5">
+                  <button
+                    onClick={() => copyEmailDebugInfo(email)}
+                    className="flex-shrink-0 inline-flex items-center px-2 py-1 border border-gray-300 text-xs font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+                  >
+                    📋 Copy Debug
+                  </button>
+                  <button
+                    onClick={() => handleMoveBackToRelevant(email)}
+                    title="Add back to relevant"
+                    className="flex-shrink-0 inline-flex items-center px-2 py-1 border border-gray-300 text-xs font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+                  >
+                    ↩️ Move Back
+                  </button>
+                </div>
+              </div>
+
+              {/* Email Content with Thread Support */}
+              {renderEmailContent(email)}
+            </div>
+          ))}
+        {emails.filter(e => e.isNotRelevant).length === 0 && (
+          <div className="text-center text-gray-500">No emails marked as not relevant.</div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <Layout>
-      <div className="max-w-[80%] mx-auto px-4 py-2">
-        <div className="flex items-center justify-between mb-4">
+      <div className="max-w-[58%] mx-auto px-4 py-8">
+        <div className="flex items-center justify-between mb-5">
           <div>
-            <h1 className="text-xl font-semibold text-gray-900 mb-0.5">Customer Support Triage</h1>
-            <p className="text-xs text-gray-500">Manage and respond to customer inquiries efficiently</p>
+            <h1 className="text-base font-semibold text-gray-900 mb-0.5">Customer Support Triage</h1>
+            <p className="text-[11px] text-gray-500">Manage and respond to customer inquiries efficiently</p>
           </div>
-          <button
-            onClick={handleRefresh}
-            className="inline-flex items-center px-3 py-1.5 border border-gray-300 shadow-sm text-xs font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-          >
-            <ClockIcon className="h-3 w-3 mr-1.5" />
-            Refresh
-          </button>
+          <div className="flex items-center gap-3">
+            {lastFetchTimestamp > 0 && (
+              <div className="text-[11px] text-gray-400">
+                Last updated: {new Date(lastFetchTimestamp).toLocaleTimeString()}
+              </div>
+            )}
+            <button
+              onClick={handleRefresh}
+              className="inline-flex items-center px-2 py-1 border border-gray-300 shadow-sm text-[11px] font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+            >
+              <ClockIcon className="h-3 w-3 mr-1" />
+              Refresh
+            </button>
+          </div>
         </div>
         {/* Tabs section */}
-        <div className="border-b border-gray-200 mb-4">
+        <div className="border-b border-gray-200 mb-5">
           <nav className="-mb-px flex space-x-4" aria-label="Tabs">
             {[
               { 
@@ -2800,19 +3144,11 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
                 description: 'Step 1: Extract questions from emails'
               },
               { 
-                id: 'faq_expansion', 
-                label: 'Questions to Answer', 
-                icon: LightbulbIcon, 
-                count: answeredFAQs.filter(faq => !faq.answer).length,
-                description: 'Step 2: Answer extracted questions',
-                highlight: answeredFAQs.filter(faq => !faq.answer).length > 0
-              },
-              { 
                 id: 'suggested', 
                 label: 'Ready to Reply', 
                 icon: CheckCircleIcon, 
                 count: readyToReplyCount,
-                description: 'Step 3: Send auto-replies'
+                description: 'Step 2: Send auto-replies'
               },
               {
                 id: 'faq_library',
@@ -2820,36 +3156,41 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
                 icon: BookOpenIcon,
                 count: answeredFAQs.filter(faq => faq.answer).length,
                 description: 'Browse all answered FAQs'
+              },
+              {
+                id: 'not_relevant',
+                label: 'Not Relevant',
+                icon: XCircleIcon,
+                count: emails.filter(e => e.isNotRelevant).length,
+                description: 'Emails marked as not relevant'
               }
-            ].map(({ id, label, icon: Icon, count, description, highlight }) => (
+            ].map(({ id, label, icon: Icon, count, description }) => (
               <button
                 key={id}
                 onClick={() => setActiveTab(id as any)}
                 className={`
-                  group relative min-w-0 flex-1 overflow-hidden py-2 px-2 text-center text-xs font-medium hover:bg-gray-50 focus:z-10
+                  group relative min-w-0 flex-1 overflow-hidden py-1.5 px-2 text-[11px] font-medium hover:bg-gray-50 focus:z-10
                   ${activeTab === id ? 'border-b-2 border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}
-                  ${highlight ? 'bg-yellow-50' : ''}
                 `}
               >
                 <div className="flex items-center justify-center space-x-1">
-                  <Icon className="h-3.5 w-3.5" />
+                  <Icon className="h-3 w-3" />
                   <span>{label}</span>
                   {count > 0 && (
-                    <span className={`ml-1.5 rounded-full px-1.5 py-0.5 text-xs font-medium 
+                    <span className={`ml-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium 
                       ${activeTab === id ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-600'}`}>
                       {count}
                     </span>
                   )}
                 </div>
-                <span className="mt-0.5 block text-[10px] text-gray-500">{description}</span>
+                <span className="mt-0.5 block text-[9px] text-gray-500">{description}</span>
               </button>
             ))}
           </nav>
         </div>
-        <div className="mt-6">
+        <div className="mt-5 mb-8">
           {renderMainContent()}
         </div>
-        {renderAnswerModal()}
       </div>
     </Layout>
   );

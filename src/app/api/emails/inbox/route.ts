@@ -561,32 +561,47 @@ export async function GET(request: NextRequest) {
     const emailPromises = threadDetails
       .filter(Boolean)
       .map(async (thread) => {
+        // If no messages, skip
         if (!thread?.data.messages || thread.data.messages.length === 0) return null;
 
-        const message = thread.data.messages[0];
-        const headers = message.payload?.headers || [];
-        const getHeader = (name: string) =>
-          headers.find((h) => h.name?.toLowerCase() === name.toLowerCase())?.value || '';
-
-        // Check if this email is marked as not relevant
+        // Check if this thread is marked not relevant
         const isNotRelevant = await isEmailNotRelevant(thread.data.id || '', db);
         if (isNotRelevant) return null;
 
-        const { content, error } = extractEmailBody(message);
+        // Map all messages in the thread
+        const mappedMessages = thread.data.messages.map((message) => {
+          const headers = message.payload?.headers || [];
+          const getHeader = (name: string) =>
+            headers.find((h) => h.name?.toLowerCase() === name.toLowerCase())?.value || '';
+
+          const { content, error } = extractEmailBody(message);
+
+          return {
+            id: message.id || '',
+            subject: getHeader('subject'),
+            sender: getHeader('from'),
+            receivedAt: parseGmailDate(getHeader('date')),
+            content,
+            ...(error && {
+              extractionError: {
+                ...error,
+                timestamp: Date.now()
+              }
+            })
+          };
+        });
+
+        // Use the newest message for the main subject/content display
+        const primaryMessage = mappedMessages[mappedMessages.length - 1];
 
         return {
           id: thread.data.id || '',
           threadId: thread.data.id || '',
-          subject: getHeader('subject'),
-          sender: getHeader('from'),
-          receivedAt: parseGmailDate(getHeader('date')),
-          content,
-          ...(error && {
-            extractionError: {
-              ...error,
-              timestamp: Date.now()
-            }
-          })
+          subject: primaryMessage.subject,
+          sender: primaryMessage.sender,
+          receivedAt: primaryMessage.receivedAt,
+          content: primaryMessage.content,
+          threadMessages: mappedMessages
         };
       });
 

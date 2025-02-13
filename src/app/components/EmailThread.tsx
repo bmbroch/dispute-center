@@ -105,6 +105,7 @@ interface EmailMessageProps {
 
 function EmailMessageContent({ message, showDebug }: EmailMessageProps) {
   const [formattedBody, setFormattedBody] = useState<string>('');
+  const [isExpanded, setIsExpanded] = useState(false);
   const isHtml = message.contentType?.toLowerCase().includes('html');
   
   useEffect(() => {
@@ -125,9 +126,19 @@ function EmailMessageContent({ message, showDebug }: EmailMessageProps) {
   return (
     <div className="mb-4 p-4 bg-white rounded-lg shadow">
       <div 
-        className="pl-11 text-sm text-gray-700 space-y-2 email-content"
+        className={`pl-11 text-sm text-gray-700 space-y-2 email-content ${!isExpanded ? 'max-h-[60px] overflow-hidden relative' : ''}`}
         dangerouslySetInnerHTML={{ __html: formattedBody }}
       />
+      {!isExpanded && (
+        <div className="pl-11 mt-2">
+          <button
+            onClick={() => setIsExpanded(true)}
+            className="text-blue-600 hover:text-blue-800 text-sm font-medium focus:outline-none"
+          >
+            See Full Email
+          </button>
+        </div>
+      )}
       {showDebug && renderDebugInfo(message)}
     </div>
   );

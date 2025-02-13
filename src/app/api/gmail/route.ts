@@ -3,6 +3,64 @@ import { getOAuth2Client } from '@/lib/google/auth';
 import { google, gmail_v1 } from 'googleapis';
 import { isGmailError } from '@/lib/types/gmail';
 
+// Add these functions before processMessagePart
+function cleanQuotedText(content: string, isHtml: boolean): string {
+  if (!content) return '';
+
+  if (isHtml) {
+    // Remove Gmail quote markers and redundant content
+    return content
+      .replace(/<div class="gmail_quote"[\s\S]*?<\/div>/g, '') // Remove Gmail quotes
+      .replace(/<blockquote class="gmail_quote"[\s\S]*?<\/blockquote>/g, '') // Remove blockquotes
+      .replace(/On.*wrote:[\s\S]*$/gm, '') // Remove attribution lines
+      .trim();
+  } else {
+    // Remove plain text quotes
+    return content
+      .replace(/^>.*$/gm, '') // Remove quoted lines
+      .replace(/On.*wrote:[\s\S]*$/gm, '') // Remove attribution lines
+      .trim();
+  }
+}
+
+function processMessagePart(part: gmail_v1.Schema$MessagePart): { text: string; html: string } {
+  let text = '';
+  let html = '';
+
+  // Function to decode base64 content
+  const decodeBase64 = (data: string) => {
+    try {
+      return Buffer.from(data.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString();
+    } catch (error) {
+      console.error('Error decoding base64:', error);
+      return '';
+    }
+  };
+
+  // Function to process a single part
+  const processPart = (part: gmail_v1.Schema$MessagePart) => {
+    if (part.mimeType === 'text/plain' && part.body?.data) {
+      text = cleanQuotedText(decodeBase64(part.body.data), false);
+    } else if (part.mimeType === 'text/html' && part.body?.data) {
+      html = cleanQuotedText(decodeBase64(part.body.data), true);
+    }
+
+    // Recursively process multipart messages
+    if (part.parts) {
+      part.parts.forEach(subPart => {
+        const { text: subText, html: subHtml } = processPart(subPart);
+        if (subText) text = text || subText;
+        if (subHtml) html = html || subHtml;
+      });
+    }
+
+    return { text, html };
+  };
+
+  // Process the main part
+  return processPart(part);
+}
+
 export async function GET(request: NextRequest) {
   const authHeader = request.headers.get('Authorization');
   const disputeEmail = request.headers.get('X-Dispute-Email');
@@ -56,23 +114,17 @@ export async function GET(request: NextRequest) {
           const threadData = await gmail.users.threads.get({
             userId: 'me',
             id: thread.id,
-            format: 'full'
+            format: 'full',  // Ensure we get full message content
+            metadataHeaders: ['From', 'To', 'Subject', 'Date', 'Message-ID', 'References', 'In-Reply-To']
           });
 
           console.log('🔍 STEP 1 - Raw thread data from Gmail API:', {
             threadId: thread.id,
             messageCount: threadData.data.messages?.length || 0,
-            firstMessageHeaders: threadData.data.messages?.[0]?.payload?.headers
+            firstMessageHeaders: threadData.data.messages?.[0]?.payload?.headers,
+            hasMessages: !!threadData.data.messages,
+            messagesWithPayload: threadData.data.messages?.filter(m => !!m.payload).length || 0
           });
-
-          // Get thread metadata from the first message that has valid headers
-          const firstMessage = threadData.data.messages?.[0];
-          if (firstMessage?.payload?.headers) {
-            console.log('🔍 STEP 2 - First message headers:', firstMessage.payload.headers.map(h => ({
-              name: h.name,
-              value: h.value
-            })));
-          }
 
           return threadData.data;
         } catch (error) {
@@ -90,228 +142,114 @@ export async function GET(request: NextRequest) {
 
     // Format threads with complete header info by scanning all messages
     const formattedThreads = validThreads.map(thread => {
-      if (!thread.messages) return null;
+      if (!thread.messages) {
+        console.log('Thread has no messages:', thread.id);
+        return null;
+      }
 
-      // Sort messages chronologically first
+      console.log(`Processing thread ${thread.id} with ${thread.messages.length} messages`);
+
+      // Sort messages chronologically (oldest to newest)
       const sortedMessages = thread.messages.sort(
         (a, b) => parseInt(a.internalDate || '0') - parseInt(b.internalDate || '0')
       );
 
-      // Get the first message
-      const firstMessage = sortedMessages[0];
-      if (!firstMessage?.payload?.headers) return null;
-
-      // Get thread metadata from first message headers
-      const getHeader = (name: string): string => {
-        if (!firstMessage?.payload?.headers) {
-          console.log('Missing payload or headers:', { firstMessage });
-          return '';
-        }
-        const header = firstMessage.payload.headers.find(
-          h => h.name?.toLowerCase() === name.toLowerCase()
-        );
-        const value = header?.value || '';
-        console.log(`Thread header "${name}":`, { found: !!header, value });
-        return value;
-      };
-
-      // Extract thread metadata from the first message
-      const rawSubject = getHeader('subject');
-      const threadSubject = rawSubject.replace(/^Re:\s+/i, '');
-      const threadFrom = getHeader('from');
-      
-      console.log('Thread metadata from first message:', {
-        threadId: thread.id,
-        rawSubject,
-        cleanedSubject: threadSubject,
-        from: threadFrom,
-        messageCount: thread.messages.length
-      });
-
-      // Process all messages
-      const messages = sortedMessages.map(message => {
+      // Process each message in the thread
+      const processedMessages = sortedMessages.map(message => {
         if (!message.payload?.headers) return null;
 
         // Create header map for this specific message
-        const headers = new Map();
-        message.payload.headers.forEach(header => {
-          if (header.name && header.value) {
-            // Store both original case and lowercase versions
-            headers.set(header.name.toLowerCase(), header.value);
-            headers.set(header.name, header.value);  // Keep original case version too
-            console.log(`Setting header: ${header.name} = ${header.value}`);
-          }
-        });
+        const headers = new Map(
+          message.payload.headers.map(header => [
+            header.name?.toLowerCase() || '',
+            header.value || ''
+          ])
+        );
 
-        // Get message-specific headers - try both cases
-        const messageSubject = headers.get('Subject') || headers.get('subject') || '';
-        const messageFrom = headers.get('From') || headers.get('from') || '';
-        const messageTo = headers.get('To') || headers.get('to') || '';
-
-        // Log the actual values we're using
-        console.log('Header extraction:', {
-          messageId: message.id,
-          foundSubject: messageSubject,
-          foundFrom: messageFrom,
-          foundTo: messageTo,
-          allHeaderKeys: Array.from(headers.keys())
-        });
-
-        // Use thread metadata for first message, message-specific for others
-        const isFirstMessage = message.id === firstMessage.id;
-        const finalSubject = (isFirstMessage ? threadSubject : messageSubject.replace(/^Re:\s+/i, '')) || threadSubject || messageSubject;
-        const finalFrom = (isFirstMessage ? threadFrom : messageFrom) || threadFrom || messageFrom;
-
-        console.log('Final header values:', {
-          messageId: message.id,
-          isFirstMessage,
-          finalSubject,
-          finalFrom,
-          threadSubject,
-          threadFrom
-        });
-
-        // Extract message metadata with better logging
-        const messageId = headers.get('message-id') || '';
-        const references = headers.get('references') || '';
-        const inReplyTo = headers.get('in-reply-to') || '';
-        const date = headers.get('date');
-
-        console.log('Extracted headers for message:', message.id, {
-          messageId,
-          from: finalFrom,
-          subject: finalSubject,
-          date,
-          references,
-          inReplyTo,
-          allHeaders: Object.fromEntries(headers)
-        });
-
-        // Only fall back to defaults if we truly have no value
-        const finalDate = date || 
-          (message.internalDate ? new Date(parseInt(message.internalDate)).toISOString() : new Date().toISOString());
-
-        // Process message body
-        let body = '';
-        let contentType = 'text/plain';
-        let htmlContent = '';
-        let plainContent = '';
-
-        const processMessagePart = (part: gmail_v1.Schema$MessagePart) => {
-          console.log('Processing message part:', {
-            mimeType: part.mimeType,
-            hasBody: !!part.body,
-            bodySize: part.body?.data?.length,
-            partCount: part.parts?.length
-          });
-
-          if (part.mimeType?.toLowerCase() === 'text/html' && part.body?.data) {
-            htmlContent = Buffer.from(part.body.data.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString();
-          } else if (part.mimeType?.toLowerCase() === 'text/plain' && part.body?.data) {
-            plainContent = Buffer.from(part.body.data.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString();
-          }
-
-          // Recursively process multipart messages
-          if (part.parts) {
-            part.parts.forEach(processMessagePart);
-          }
-        };
-
-        // Process the message payload
-        processMessagePart(message.payload);
-
-        // Log content processing results
-        console.log('Content processing results:', {
-          messageId: message.id,
-          hasHtmlContent: !!htmlContent,
-          hasPlainContent: !!plainContent,
-          htmlLength: htmlContent.length,
-          plainLength: plainContent.length
-        });
-
-        // Prefer HTML content if available
-        if (htmlContent) {
-          body = htmlContent;
-          contentType = 'text/html';
-        } else {
-          body = plainContent;
-          contentType = 'text/plain';
-        }
-
-        // Clean up quoted text to avoid duplication
-        const originalLength = body.length;
-        if (contentType === 'text/html') {
-          // Remove Gmail quote markers and redundant content
-          body = body
-            .replace(/<div class="gmail_quote"[\s\S]*?<\/div>/g, '') // Remove Gmail quotes
-            .replace(/<blockquote class="gmail_quote"[\s\S]*?<\/blockquote>/g, '') // Remove blockquotes
-            .trim();
-        } else {
-          // Remove plain text quotes
-          body = body
-            .replace(/^>.*$/gm, '') // Remove quoted lines
-            .replace(/On.*wrote:[\s\S]*$/gm, '') // Remove attribution lines
-            .trim();
-        }
-
-        console.log('Content cleanup results:', {
-          messageId: message.id,
-          originalLength,
-          newLength: body.length,
-          contentType
-        });
+        // Extract message content
+        const { text, html } = processMessagePart(message.payload);
+        const content = html || text || message.snippet || '';
 
         return {
           id: message.id || '',
-          threadId: thread.id || '',
-          subject: finalSubject,
-          from: finalFrom,
-          to: messageTo,
-          date: finalDate,
-          body,
-          contentType,
-          messageId,
-          references,
-          inReplyTo
+          subject: headers.get('subject') || 'No Subject',
+          sender: headers.get('from') || '',
+          content: content,
+          receivedAt: headers.get('date') || 
+            (message.internalDate ? new Date(parseInt(message.internalDate)).toISOString() : new Date().toISOString())
         };
       }).filter((msg): msg is NonNullable<typeof msg> => msg !== null);
 
+      // Use the most recent message as the main thread content
+      const latestMessage = processedMessages[processedMessages.length - 1];
+
       return {
         id: thread.id || '',
-        subject: threadSubject,
-        from: threadFrom,
-        messages,
-        messageCount: messages.length
+        threadId: thread.id || '',
+        subject: latestMessage.subject,
+        sender: latestMessage.sender,
+        content: latestMessage.content,
+        receivedAt: latestMessage.receivedAt,
+        threadMessages: processedMessages
       };
     }).filter((thread): thread is NonNullable<typeof thread> => thread !== null);
 
-    // Sort threads by the date of their most recent message
-    formattedThreads.sort((a, b) => {
-      const aDate = new Date(a.messages[a.messages.length - 1].date).getTime();
-      const bDate = new Date(b.messages[b.messages.length - 1].date).getTime();
-      return bDate - aDate;
-    });
+    // Sort threads by the date of their most recent message (newest first)
+    formattedThreads.sort((a, b) => 
+      new Date(b.receivedAt).getTime() - new Date(a.receivedAt).getTime()
+    );
+
+    // Add final debug log before returning
+    console.log('Final formatted threads:', formattedThreads.map(t => ({
+      threadId: t.threadId,
+      messageCount: t.threadMessages.length,
+      messageIds: t.threadMessages.map(m => m.id)
+    })));
 
     return NextResponse.json({
       threads: formattedThreads,
       count: formattedThreads.length
     });
-  } catch (error: any) {
-    console.error('Error fetching emails:', error);
+  } catch (error: unknown) {
+    console.error('Error fetching email threads:', error);
+    
+    if (!isGmailError(error)) {
+      return NextResponse.json({ 
+        error: 'Failed to fetch email threads',
+        details: error instanceof Error ? error.message : 'An unexpected error occurred'
+      }, { status: 500 });
+    }
+    
+    // Check if error is due to invalid credentials
+    if (error.response?.status === 401) {
+      return NextResponse.json({ 
+        error: 'Authentication failed',
+        details: 'Your session has expired. Please sign in again.'
+      }, { status: 401 });
+    }
 
-    // Handle Gmail API errors
-    if (isGmailError(error)) {
+    // Check for rate limiting
+    if (error.response?.status === 429) {
+      return NextResponse.json({
+        error: 'Rate limit exceeded',
+        details: 'Too many requests. Please try again in a few minutes.'
+      }, { status: 429 });
+    }
+
+    // Check for Gmail API specific errors
+    if (error.response?.data?.error) {
+      const apiError = error.response.data.error;
       return NextResponse.json({
         error: 'Gmail API error',
-        details: error.message || 'An error occurred while fetching emails',
-        code: error.response?.status || 500
-      }, { status: error.response?.status || 500 });
+        details: apiError.message || 'An error occurred while fetching emails',
+        code: apiError.code
+      }, { status: error.response.status || 500 });
     }
 
     // Network or other errors
     return NextResponse.json({ 
       error: 'Failed to fetch email threads',
-      details: error.message || 'An unexpected error occurred'
+      details: error.message || 'An unexpected error occurred while fetching emails'
     }, { status: 500 });
   }
 } 

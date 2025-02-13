@@ -9,6 +9,13 @@ export interface Email {
   hasReply?: boolean;
   isReplied?: boolean;
   isNotRelevant?: boolean;
+  thread?: Array<{
+    id: string;
+    sender: string;
+    content: string;
+    receivedAt: string;
+    subject?: string;
+  }>;
   analysis?: {
     suggestedQuestions?: string[];
     sentiment?: string;

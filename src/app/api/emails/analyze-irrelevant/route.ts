@@ -208,7 +208,7 @@ export async function POST(req: Request) {
         const notRelevantRef = db.collection('not_relevant_reasons');
         
         await notRelevantRef.add({
-          emailId: email.id,
+          emailId: email.threadId,
           reason: analysis.reason,
           category: analysis.category,
           confidence: analysis.confidence,

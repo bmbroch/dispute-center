@@ -14,11 +14,32 @@ interface EmailMessage {
   };
 }
 
+const EmailSkeleton = () => (
+  <div className="space-y-6">
+    {[1, 2, 3].map((i) => (
+      <div key={i} className="bg-white shadow rounded-lg overflow-hidden animate-pulse">
+        <div className="p-6">
+          <div className="space-y-3">
+            <div className="h-4 bg-gray-200 rounded w-3/4"></div>
+            <div className="h-3 bg-gray-100 rounded w-1/2"></div>
+            <div className="h-16 bg-gray-50 rounded w-full mt-4"></div>
+            <div className="flex justify-end space-x-3">
+              <div className="h-8 bg-gray-200 rounded w-24"></div>
+              <div className="h-8 bg-gray-100 rounded w-24"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    ))}
+  </div>
+);
+
 export default function EmailList() {
   const { user } = useAuth();
   const [emails, setEmails] = useState<EmailMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [expandedThreads, setExpandedThreads] = useState<string[]>([]);
 
   useEffect(() => {
     const fetchEmails = async () => {
@@ -62,16 +83,7 @@ export default function EmailList() {
   }
 
   if (loading) {
-    return (
-      <div className="p-4">
-        <div className="flex items-center justify-center space-x-2">
-          <div className="w-4 h-4 bg-blue-500 rounded-full animate-pulse"></div>
-          <div className="w-4 h-4 bg-blue-500 rounded-full animate-pulse delay-75"></div>
-          <div className="w-4 h-4 bg-blue-500 rounded-full animate-pulse delay-150"></div>
-        </div>
-        <div className="text-center mt-2">Loading your recent emails...</div>
-      </div>
-    );
+    return <EmailSkeleton />;
   }
 
   if (error) {
@@ -100,19 +112,65 @@ export default function EmailList() {
     return email.payload.headers.find(h => h.name.toLowerCase() === headerName.toLowerCase())?.value || '';
   };
 
+  const toggleThread = (threadId: string) => {
+    setExpandedThreads((prev) =>
+      prev.includes(threadId)
+        ? prev.filter((id) => id !== threadId)
+        : [...prev, threadId]
+    );
+  };
+
   return (
     <div className="container mx-auto p-4">
       <h2 className="text-2xl font-bold mb-4">Your Recent Emails</h2>
-      <div className="space-y-4">
-        {emails.map((email) => (
-          <div key={email.id} className="border rounded-lg p-4 hover:bg-gray-50">
-            <div className="font-semibold">{getHeader(email, 'Subject')}</div>
-            <div className="text-sm text-gray-600">
-              From: {getHeader(email, 'From')}
+      <div className="space-y-6">
+        {emails.map((email) => {
+          const isExpanded = expandedThreads.includes(email.id);
+
+          return (
+            <div
+              key={email.id}
+              className="bg-white shadow rounded-lg overflow-hidden"
+            >
+              <div className="p-6">
+                <h3 className="text-lg font-medium text-gray-900">
+                  {getHeader(email, 'Subject') || 'No Subject'}
+                </h3>
+                <p className="mt-1 text-sm text-gray-500">
+                  From: {getHeader(email, 'From')} •&nbsp;
+                  {new Date(getHeader(email, 'Date') || '').toLocaleString()}
+                </p>
+                <div className="mt-4 text-gray-800 whitespace-pre-wrap">
+                  {email.snippet}
+                </div>
+
+                <button
+                  onClick={() => toggleThread(email.id)}
+                  className="mt-4 inline-flex items-center px-4 py-2 border 
+                    border-transparent text-sm font-medium rounded-md 
+                    shadow-sm text-indigo-600 bg-indigo-50 hover:bg-indigo-100"
+                >
+                  {isExpanded ? 'Hide Thread' : 'Show Thread'}
+                </button>
+              </div>
+
+              {isExpanded && (
+                <div className="px-6 pb-6">
+                  {emails.map((msg) => (
+                    <div key={msg.id} className="border-b border-gray-200 pt-4 pb-4">
+                      <p className="text-sm text-gray-500">
+                        From: {getHeader(msg, 'From')} • {new Date(getHeader(msg, 'Date') || '').toLocaleString()}
+                      </p>
+                      <p className="mt-2 text-gray-700 whitespace-pre-wrap">
+                        {msg.snippet}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
-            <div className="text-sm text-gray-500 mt-2">{email.snippet}</div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
