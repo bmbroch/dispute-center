@@ -579,8 +579,8 @@ const truncateText = (text: string, maxLength: number): string => {
 };
 
 // Add this helper function near the top with other helper functions
-const handleShowFullContent = (emailId: string) => {
-  setEmails(prev => prev.map(e => 
+const handleShowFullContent = (emailId: string): void => {
+  setEmails((prev: ExtendedEmail[]) => prev.map((e: ExtendedEmail) => 
     e.id === emailId 
       ? { ...e, showFullContent: true }
       : e
@@ -3036,7 +3036,7 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
   };
 
   // Add this helper function inside the component
-  const handleShowFullContent = useCallback((emailId: string) => {
+  const handleShowFullContent = useCallback((emailId: string): void => {
     setEmails((prev: ExtendedEmail[]) => prev.map((e: ExtendedEmail) => 
       e.id === emailId 
         ? { ...e, showFullContent: true }
