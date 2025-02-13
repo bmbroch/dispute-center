@@ -11,7 +11,7 @@ import {
   LightbulbIcon,
   ClockIcon,
 } from 'lucide-react';
-import { Email, GenericFAQ } from '@/types/faq';
+import { GenericFAQ } from '@/types/faq';
 import { calculatePatternSimilarity } from '@/lib/utils/similarity';
 
 // Cache configuration
@@ -71,9 +71,47 @@ const EmailSkeleton = () => (
   </div>
 );
 
+interface Email {
+  id: string;
+  threadId: string;
+  subject: string;
+  sender: string;
+  content: string;
+  receivedAt: string;
+  matchedFAQ?: {
+    question: string;
+    answer: string;
+    confidence: number;
+  };
+  status?: 'pending' | 'processed' | 'replied' | 'removed_from_ready';
+  isReplied?: boolean;
+  isNotRelevant?: boolean;
+  suggestedReply?: string;
+  threadMessages?: {
+    id: string;
+    subject: string;
+    sender: string;
+    content: string;
+    receivedAt: string;
+  }[];
+}
+
+interface ExtendedEmail extends Email {
+  questions?: GenericFAQ[];
+  showFullContent?: boolean;
+  isGeneratingReply?: boolean;
+  isMovingToReady?: boolean;
+  emailIds?: string[];
+  irrelevanceReason?: string;
+  category?: 'support' | 'sales' | 'other';
+  aiAnalysis?: boolean;
+  analysis?: any;
+  gmailError?: string;
+}
+
 export default function FAQAutoReplyV3Page() {
   const { user, checkGmailAccess, refreshAccessToken } = useAuth();
-  const [emails, setEmails] = useState<Email[]>([]);
+  const [emails, setEmails] = useState<ExtendedEmail[]>([]);
   const [genericFAQs, setGenericFAQs] = useState<GenericFAQ[]>([]);
   const [activeTab, setActiveTab] = useState<'unanswered' | 'suggested' | 'faq_expansion'>('unanswered');
   const [loading, setLoading] = useState(true);
@@ -204,7 +242,7 @@ export default function FAQAutoReplyV3Page() {
           const emailQuestionsMap = new Map(emailQuestions);
           
           await Promise.all(
-            data.emails.map(async (email: Email) => {
+            data.emails.map(async (email: ExtendedEmail) => {
               try {
                 const response = await fetch('/api/faq/generate-pattern', {
                   method: 'POST',
@@ -312,7 +350,7 @@ export default function FAQAutoReplyV3Page() {
     };
   }, [user?.accessToken, checkGmailAccess, loadEmails]);
 
-  const handleAutoReply = async (email: Email) => {
+  const handleAutoReply = async (email: ExtendedEmail) => {
     try {
       const response = await fetch('/api/emails/auto-reply', {
         method: 'POST',
@@ -330,7 +368,7 @@ export default function FAQAutoReplyV3Page() {
     }
   };
 
-  const handleMarkNotRelevant = async (email: Email) => {
+  const handleMarkNotRelevant = async (email: ExtendedEmail) => {
     try {
       // First, immediately remove the email from the list for better UX
       setEmails(prev => prev.filter(e => e.id !== email.id));

@@ -80,7 +80,7 @@ interface BaseEmail {
   subject: string;
   sender: string;
   content: string;
-  receivedAt: string;
+  receivedAt: string | number;
 }
 
 interface ExtendedEmail extends BaseEmail {
@@ -88,7 +88,11 @@ interface ExtendedEmail extends BaseEmail {
   suggestedReply?: string;
   showFullContent?: boolean;
   isGeneratingReply?: boolean;
-  matchedFAQ?: MatchedFAQ;
+  matchedFAQ?: {
+    question: string;
+    answer: string;
+    confidence: number;
+  };
   status?: 'pending' | 'processed' | 'replied' | 'removed_from_ready';
   isReplied?: boolean;
   isNotRelevant?: boolean;
@@ -104,7 +108,7 @@ interface ExtendedEmail extends BaseEmail {
     subject: string;
     sender: string;
     content: string;
-    receivedAt: string;
+    receivedAt: string | number;
   }[];
 }
 
@@ -1984,17 +1988,17 @@ Support Team`;
   };
 
   const renderEmailContent = (email: ExtendedEmail) => {
-    const isThreadExpanded = expandedThreads.has(email.threadId);
-    const hasThread = email.threadMessages && email.threadMessages.length > 1;
-    
-    // Get the most recent message content
-    const mostRecentContent = hasThread 
+    const hasThread = email.threadMessages && email.threadMessages.length > 0;
+    const content = hasThread && email.threadMessages?.[0]
       ? getCleanContent(email.threadMessages[0].content)
       : getCleanContent(email.content);
 
-    const rawContent = hasThread ? email.threadMessages[0].content : email.content;
-    const isHTML = isHTMLContent(rawContent);
+    const rawContent = hasThread && email.threadMessages?.[0]
+      ? email.threadMessages[0].content 
+      : email.content;
 
+    const isThreadExpanded = expandedThreads.has(email.threadId);
+    
     return (
       <div className="space-y-4">
         {/* Show More/Less Button at the top */}
@@ -2024,13 +2028,13 @@ Support Team`;
               )}
               
               {/* Content */}
-              {isHTML ? (
+              {isHTMLContent(rawContent) ? (
                 <div 
                   className="email-html-content"
-                  dangerouslySetInnerHTML={{ __html: mostRecentContent }}
+                  dangerouslySetInnerHTML={{ __html: content }}
                 />
               ) : (
-                <div className="whitespace-pre-wrap">{mostRecentContent}</div>
+                <div className="whitespace-pre-wrap">{content}</div>
               )}
             </div>
           </div>
@@ -2785,7 +2789,7 @@ Support Team`;
       loadingCache,
       loadingMore
     });
-  }, [genericFAQs, answeredFAQs, emailQuestions, activeTab, loading, loadingFAQs, loadingCache, loadingMore]);
+  }, [genericFAQs, answeredFAQs, emailQuestions, activeTab, loading, loadingFAQs, loadingCache, loadingMore, emails]);
 
   // Add this useEffect for the countdown timer
   useEffect(() => {
@@ -3035,7 +3039,7 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
   const handleShowFullContent = useCallback((emailId: string) => {
     setEmails(prev => prev.map(e => 
       e.id === emailId 
-        ? { ...e, showFullContent: !e.showFullContent }
+        ? { ...e, showFullContent: true }
         : e
     ));
   }, []);

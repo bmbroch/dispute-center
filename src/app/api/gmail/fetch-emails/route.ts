@@ -186,7 +186,7 @@ export async function POST(request: NextRequest) {
     const token = authHeader.replace('Bearer ', '');
 
     // Initialize Gmail client
-    const oauth2Client = await getOAuth2Client(token);
+    const oauth2Client = await getOAuth2Client({ access_token: token });
     const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
 
     // Get query parameters from request body with defaults
