@@ -182,8 +182,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'No authorization header' }, { status: 401 });
     }
 
+    // Extract the token from the Authorization header
+    const token = authHeader.replace('Bearer ', '');
+
     // Initialize Gmail client
-    const oauth2Client = await getOAuth2Client(authHeader);
+    const oauth2Client = await getOAuth2Client(token);
     const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
 
     // Get query parameters from request body with defaults

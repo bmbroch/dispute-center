@@ -1,13 +1,41 @@
 import React, { useState } from 'react';
 import { XCircleIcon } from 'lucide-react';
 import { Email, GenericFAQ } from '@/types/faq';
-import { Email as EmailType } from '@/types/email';
+
+interface ExtendedEmail {
+  id: string;
+  threadId: string;
+  subject: string;
+  sender: string;
+  content: string;
+  receivedAt: string;
+  questions?: GenericFAQ[];
+  suggestedReply?: string;
+  showFullContent?: boolean;
+  isGeneratingReply?: boolean;
+  matchedFAQ?: {
+    question: string;
+    answer: string;
+    confidence: number;
+  };
+  status?: 'pending' | 'processed' | 'replied' | 'removed_from_ready';
+  isReplied?: boolean;
+  isNotRelevant?: boolean;
+  isMovingToReady?: boolean;
+  threadMessages?: {
+    id: string;
+    subject: string;
+    sender: string;
+    content: string;
+    receivedAt: string;
+  }[];
+}
 
 interface EmailListProps {
-  emails: EmailType[];
+  emails: ExtendedEmail[];
   emailQuestions: Map<string, GenericFAQ[]>;
-  onAutoReply: (email: EmailType) => void;
-  onMarkNotRelevant: (email: EmailType) => void;
+  onAutoReply: (email: ExtendedEmail) => void;
+  onMarkNotRelevant: (email: ExtendedEmail) => void;
   showNotRelevantButton?: boolean;
 }
 
@@ -51,7 +79,7 @@ export function EmailList({
     <div className="space-y-6">
       {emails.map((email) => {
         const isExpanded = expandedThreads.includes(email.threadId);
-        const hasThread = email.thread && email.thread.length > 1;
+        const hasThread = email.threadMessages && email.threadMessages.length > 1;
 
         return (
           <div
@@ -66,7 +94,7 @@ export function EmailList({
                   </h3>
                   <p className="mt-1 text-sm text-gray-500">
                     From: {email.sender || 'Unknown Sender'} • {formatDate(email.receivedAt)}
-                    {hasThread && email.thread && ` • ${email.thread.length} messages in thread`}
+                    {hasThread && email.threadMessages && ` • ${email.threadMessages.length} messages in thread`}
                   </p>
                 </div>
                 <div className="flex space-x-3">
@@ -100,7 +128,7 @@ export function EmailList({
                           onClick={() => toggleThread(email.threadId)}
                           className="mt-2 text-blue-600 hover:text-blue-800 text-sm font-medium focus:outline-none"
                         >
-                          See Full Thread ({email.thread?.length} messages)
+                          See Full Thread ({email.threadMessages?.length} messages)
                         </button>
                       )}
                     </div>
@@ -111,7 +139,7 @@ export function EmailList({
               </div>
               {isExpanded && hasThread && (
                 <div className="mt-6 space-y-4 border-t pt-4">
-                  {email.thread?.slice(0, -1).map((threadMessage, index) => (
+                  {email.threadMessages?.slice(0, -1).map((threadMessage, index) => (
                     <div key={threadMessage.id} className="pl-4 border-l-2 border-gray-200">
                       <div className="text-sm text-gray-500">
                         From: {threadMessage.sender} • {formatDate(threadMessage.receivedAt)}

@@ -80,7 +80,7 @@ interface BaseEmail {
   subject: string;
   sender: string;
   content: string;
-  receivedAt: number | string;  // Allow both number and string
+  receivedAt: string;
 }
 
 interface ExtendedEmail extends BaseEmail {
@@ -97,14 +97,14 @@ interface ExtendedEmail extends BaseEmail {
   irrelevanceReason?: string;
   category?: 'support' | 'sales' | 'other';
   aiAnalysis?: boolean;
-  analysis?: any; // TODO: Define proper type for analysis
+  analysis?: any;
   gmailError?: string;
   threadMessages?: {
     id: string;
     subject: string;
     sender: string;
     content: string;
-    receivedAt: number | string;
+    receivedAt: string;
   }[];
 }
 
@@ -586,7 +586,7 @@ const handleShowFullContent = (emailId: string) => {
 export default function FAQAutoReplyV2() {
   console.log('=== Component Render Start ===');
   const { user, checkGmailAccess, refreshAccessToken } = useAuth();
-  const [emails, setEmails] = useState<Email[]>([]); // Explicitly initialize as empty array
+  const [emails, setEmails] = useState<ExtendedEmail[]>([]); // Explicitly initialize as empty array
   const [potentialFAQs, setPotentialFAQs] = useState<PotentialFAQ[]>([]);
   const [genericFAQs, setGenericFAQs] = useState<GenericFAQ[]>([]);
   const [activeTab, setActiveTab] = useState<'unanswered' | 'suggested' | 'faq_library' | 'not_relevant'>('unanswered');
