@@ -1125,9 +1125,9 @@ export default function FAQAutoReplyV2() {
           });
           
           // Update emails state to include ready-to-reply
-          setEmails(prev => {
-            const existingEmailIds = new Set(prev.map(e => e.id));
-            const newEmails = [...prev];
+          setEmails((prevEmails: ExtendedEmail[]) => {
+            const existingEmailIds = new Set(prevEmails.map(e => e.id));
+            const newEmails = [...prevEmails];
             
             firebaseReadyToReply.forEach((readyEmail: ExtendedEmail) => {
               if (!existingEmailIds.has(readyEmail.id)) {
@@ -1152,10 +1152,10 @@ export default function FAQAutoReplyV2() {
         // Then load regular emails
         const firebaseEmails = await loadEmailsFromFirebase();
         if (firebaseEmails && firebaseEmails.length > 0) {
-          setEmails(prev => {
-            const existingEmailIds = new Set(prev.map(e => e.id));
+          setEmails((prevEmails: ExtendedEmail[]) => {
+            const existingEmailIds = new Set(prevEmails.map(e => e.id));
             return [
-              ...prev,
+              ...prevEmails,
               ...firebaseEmails.filter((e: ExtendedEmail) => !existingEmailIds.has(e.id))
             ];
           });
@@ -1177,7 +1177,7 @@ export default function FAQAutoReplyV2() {
     return () => {
       isSubscribed.current = false;
     };
-  }, [emails, loadEmails, isSubscribed]); // Added emails to dependency array
+  }, [loadEmails, isSubscribed]); // Remove emails from dependency array since we're using functional updates
 
   // Update the FAQ loading effect
   useEffect(() => {

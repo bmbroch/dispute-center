@@ -22,7 +22,7 @@ interface EmailResponse {
 interface ProcessedMessagePart {
   mimeType: string;
   content?: string;
-  filename?: string;
+  filename?: string | undefined;
   parts?: ProcessedMessagePart[];
   text?: string;
   html?: string;
@@ -151,8 +151,8 @@ const processMessagePart = (part: Schema$MessagePart): ProcessedMessagePart => {
 
   const result: ProcessedMessagePart = {
     mimeType: part.mimeType || 'unknown',
-    content: part.body?.data ? Buffer.from(part.body.data, 'base64').toString() : undefined,
-    filename: part.filename,
+    content: part.body?.data ? decodeBase64UrlSafe(part.body.data) : undefined,
+    filename: part.filename || undefined,
     parts: part.parts?.map(processMessagePart)
   };
 
@@ -171,7 +171,7 @@ interface GmailErrorResponse {
 }
 
 // Fix Credentials type error
-const credentials: Credentials = JSON.parse(process.env.GMAIL_CREDENTIALS || '{}');
+const credentials = JSON.parse(process.env.GMAIL_CREDENTIALS || '{}') as Credentials;
 
 export async function POST(request: NextRequest) {
   try {

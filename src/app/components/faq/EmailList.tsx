@@ -18,11 +18,11 @@ interface EmailThread {
   from: string;
   content: string;
   receivedAt: string;
-  length: number;
+  messages: ThreadMessage[];
   snippet?: string;
 }
 
-interface ExtendedEmail extends EmailType {
+interface ExtendedEmail extends Omit<EmailType, 'thread'> {
   thread?: EmailThread;
   threadMessages?: ThreadMessage[];
   matchedFAQ?: any;
@@ -80,7 +80,7 @@ export function EmailList({
         }
 
         const isExpanded = expandedThreads.includes(email.threadId);
-        const hasThread = email.thread.length > 1;
+        const hasThread = email.thread.messages.length > 1;
 
         return (
           <div
@@ -95,7 +95,7 @@ export function EmailList({
                   </h3>
                   <p className="mt-1 text-sm text-gray-500">
                     From: {email.thread.from || 'Unknown'} • {formatDate(email.receivedAt)}
-                    {hasThread && ` • ${email.thread.length} messages in thread`}
+                    {hasThread && ` • ${email.thread.messages.length} messages in thread`}
                   </p>
                 </div>
                 <div className="flex space-x-3">
@@ -132,7 +132,7 @@ export function EmailList({
                           }}
                           className="mt-2 text-blue-600 hover:text-blue-800 text-sm font-medium focus:outline-none"
                         >
-                          See Full Thread ({email.thread.length} messages)
+                          See Full Thread ({email.thread.messages.length} messages)
                         </button>
                       )}
                     </div>
@@ -143,7 +143,7 @@ export function EmailList({
               </div>
               {isExpanded && hasThread && (
                 <div className="mt-6 space-y-4 border-t pt-4">
-                  {email.thread.slice(0, -1).map((threadMessage, index) => (
+                  {email.threadMessages?.map((threadMessage: ThreadMessage, index: number) => (
                     <div key={threadMessage.id} className="pl-4 border-l-2 border-gray-200">
                       <div className="text-sm text-gray-500">
                         From: {threadMessage.from} • {formatDate(threadMessage.receivedAt)}
