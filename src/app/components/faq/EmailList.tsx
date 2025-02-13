@@ -50,8 +50,12 @@ export function EmailList({
   return (
     <div className="space-y-6">
       {emails.map((email) => {
+        if (!email.thread) {
+          return null;
+        }
+
         const isExpanded = expandedThreads.includes(email.threadId);
-        const hasThread = email.thread && email.thread.length > 1;
+        const hasThread = email.thread.length > 1;
 
         return (
           <div
@@ -62,10 +66,10 @@ export function EmailList({
               <div className="flex items-center justify-between">
                 <div className="flex-1">
                   <h3 className="text-lg font-medium text-gray-900">
-                    {email.subject || 'No Subject'}
+                    {email.thread.subject || 'No Subject'}
                   </h3>
                   <p className="mt-1 text-sm text-gray-500">
-                    From: {email.sender || 'Unknown Sender'} • {formatDate(email.receivedAt)}
+                    From: {email.thread.from || 'Unknown'} • {formatDate(email.receivedAt)}
                     {hasThread && ` • ${email.thread.length} messages in thread`}
                   </p>
                 </div>
@@ -90,14 +94,17 @@ export function EmailList({
               </div>
               <div className="mt-4">
                 <div className="prose prose-sm max-w-none">
-                  {email.content ? (
+                  {email.thread.snippet ? (
                     <div>
                       <div className={`text-gray-700 whitespace-pre-wrap ${!isExpanded ? 'max-h-[60px] overflow-hidden relative' : ''}`}>
-                        {email.content}
+                        {email.thread.snippet}
                       </div>
                       {!isExpanded && hasThread && (
                         <button
-                          onClick={() => toggleThread(email.threadId)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleThread(email.threadId);
+                          }}
                           className="mt-2 text-blue-600 hover:text-blue-800 text-sm font-medium focus:outline-none"
                         >
                           See Full Thread ({email.thread.length} messages)
@@ -105,7 +112,7 @@ export function EmailList({
                       )}
                     </div>
                   ) : (
-                    <p className="text-gray-500 italic">No content available</p>
+                    <p className="text-gray-500 italic">No preview available</p>
                   )}
                 </div>
               </div>
@@ -114,7 +121,7 @@ export function EmailList({
                   {email.thread.slice(0, -1).map((threadMessage, index) => (
                     <div key={threadMessage.id} className="pl-4 border-l-2 border-gray-200">
                       <div className="text-sm text-gray-500">
-                        From: {threadMessage.sender} • {formatDate(threadMessage.receivedAt)}
+                        From: {threadMessage.from} • {formatDate(threadMessage.receivedAt)}
                       </div>
                       <div className="mt-2 text-gray-700 whitespace-pre-wrap">
                         {threadMessage.content}

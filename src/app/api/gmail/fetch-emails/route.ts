@@ -18,6 +18,13 @@ interface EmailResponse {
   snippet?: string;
 }
 
+interface ProcessedMessagePart {
+  mimeType: string;
+  content?: string;
+  filename?: string;
+  parts?: ProcessedMessagePart[];
+}
+
 // Add batch processing constants
 const BATCH_SIZE = 10;
 const MAX_RETRIES = 3;
@@ -128,65 +135,53 @@ const fetchMessageBatch = async (gmail: gmail_v1.Gmail, messageIds: string[], us
   return results;
 };
 
-// Update the message processing function
-const processMessagePart = (part: Schema$MessagePart) => {
+// Update the message processing function with return type
+const processMessagePart = (part: Schema$MessagePart): ProcessedMessagePart => {
   console.log('Processing message part:', {
     mimeType: part.mimeType,
     hasBody: !!part.body,
+    bodySize: part.body?.size,
     hasData: !!part.body?.data,
-    hasAttachment: !!part.filename,
-    partId: part.partId,
     hasParts: !!part.parts,
-    partsCount: part.parts?.length
+    numParts: part.parts?.length
   });
 
-  if (!part.mimeType) {
-    console.log('Part missing MIME type, skipping');
-    return { text: '', html: '' };
-  }
+  const result: ProcessedMessagePart = {
+    mimeType: part.mimeType || 'unknown'
+  };
 
-  const mimeType = part.mimeType.toLowerCase();
-  let text = '';
-  let html = '';
-
-  // Handle multipart messages
-  if (mimeType.startsWith('multipart/')) {
-    console.log('Processing multipart message:', {
-      type: mimeType,
-      partsCount: part.parts?.length || 0
-    });
-
-    if (part.parts) {
-      // Process all parts and combine results
-      const results = part.parts.map(processMessagePart);
-      return results.reduce((acc, curr) => ({
-        text: acc.text + (curr.text ? '\n' + curr.text : ''),
-        html: acc.html + curr.html
-      }), { text: '', html: '' });
-    }
-  }
-
-  // Handle content
   if (part.body?.data) {
-    const content = decodeBase64UrlSafe(part.body.data);
-    if (mimeType === 'text/plain') {
-      text = content;
-    } else if (mimeType === 'text/html') {
-      html = content;
-    }
+    result.content = Buffer.from(part.body.data, 'base64').toString();
   }
 
-  // Handle nested parts
+  if (part.filename) {
+    result.filename = part.filename;
+  }
+
   if (part.parts) {
-    const nestedResults = part.parts.map(processMessagePart);
-    nestedResults.forEach(result => {
-      text += result.text;
-      html += result.html;
-    });
+    result.parts = part.parts.map(processMessagePart);
   }
 
-  return { text, html };
+  return result;
 };
+
+// Fix the results initialization and reduce function
+const results: ProcessedMessagePart[] = [];
+const processedParts = part.parts?.reduce((acc: ProcessedMessagePart[], curr: Schema$MessagePart) => {
+  const processed = processMessagePart(curr);
+  return [...acc, processed];
+}, []) || [];
+
+// Update GmailErrorResponse interface
+interface GmailErrorResponse {
+  code: number;
+  status: string;
+  statusText: string;
+  message?: string;
+}
+
+// Fix Credentials type error
+const credentials: Credentials = JSON.parse(process.env.GMAIL_CREDENTIALS || '{}');
 
 export async function POST(request: NextRequest) {
   try {
