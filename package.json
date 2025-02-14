@@ -2,6 +2,9 @@
   "name": "template-2",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": "20.x"
+  },
   "scripts": {
     "dev": "next dev -p 3002",
     "prebuild": "NODE_ENV=production ts-node -P tsconfig.build.json scripts/prebuild.ts",
@@ -10,6 +13,7 @@
     "start": "next start -p 3002",
     "lint": "next lint",
     "type-check": "tsc --noEmit",
+    "check-all": "npm run type-check && npm run lint && next build",
     "pre-deploy-check": "npm run type-check && npm run lint && npm run build",
     "validate": "node scripts/validate-deployment.js",
     "predeploy": "npm run validate",

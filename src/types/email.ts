@@ -1,3 +1,5 @@
+import { GenericFAQ } from './faq';
+
 export interface Email {
   id: string;
   threadId: string;
@@ -46,4 +48,44 @@ export interface Email {
   status?: 'pending' | 'processed' | 'replied';
   irrelevanceReason?: string;
   emailIds?: string[];
+}
+
+export interface ThreadMessage {
+  id: string;
+  threadId: string;
+  subject: string;
+  sender: string;
+  content: string;
+  receivedAt: number;
+}
+
+export interface BaseEmail {
+  id: string;
+  threadId: string;
+  subject: string;
+  sender: string;
+  content: string;
+  receivedAt: string | number;
+}
+
+export interface ExtendedEmail extends BaseEmail {
+  status?: 'pending' | 'processed' | 'replied' | 'removed_from_ready';
+  matchedFAQ?: {
+    question: string;
+    answer: string;
+    confidence: number;
+  };
+  questions?: GenericFAQ[];
+  suggestedReply?: string;
+  showFullContent?: boolean;
+  isGeneratingReply?: boolean;
+  isNotRelevant?: boolean;
+  isReplied?: boolean;
+  isMovingToReady?: boolean;
+  irrelevanceReason?: string;
+  threadMessages?: ThreadMessage[];
+  gmailError?: {
+    message: string;
+    details?: any;
+  };
 } 

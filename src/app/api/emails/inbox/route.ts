@@ -22,17 +22,16 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 const DEFAULT_CACHE_DAYS = 30; // Default to 30 days if not configured
 const CACHE_EXPIRY = (parseInt(process.env.EMAIL_ANALYSIS_CACHE_DAYS || '') || DEFAULT_CACHE_DAYS) * 24 * 60 * 60 * 1000;
 
-// Add these constants at the top with other configurations
-const BATCH_SIZE = 5; // Process 5 emails at a time
+// Update these constants at the top
+const BATCH_SIZE = 20; // Reduced from 100 to 20 for smaller batches
 const RATE_LIMIT_DELAY = 1000; // 1 second between API calls
-const TARGET_SUPPORT_EMAILS = 5; // Lowered from 20 to 5 until we fix analysis issues
-const MAX_EMAILS_TO_PROCESS = 25; // Lowered from 100 to 25 until we fix analysis issues
+const MAX_EMAILS_TO_PROCESS = 100; // Reduced maximum emails to process
 
-// Add these rate limiting constants at the top
+// Update the Gmail rate limiting constants
 const GMAIL_RATE_LIMIT = {
-  REQUESTS_PER_MINUTE: 250, // Gmail API quota is 250 requests per minute per user
-  BATCH_SIZE: 10, // Process 10 threads at a time
-  DELAY_BETWEEN_BATCHES: 1000, // 1 second between batches
+  REQUESTS_PER_MINUTE: 250,
+  BATCH_SIZE: 20, // Reduced batch size for thread processing
+  DELAY_BETWEEN_BATCHES: 1000,
 };
 
 // Update the rate limiting constants
@@ -97,18 +96,27 @@ interface CachedAnalysis {
 
 type AnalysisResult = EmailAnalysis | CachedAnalysis;
 
+interface ThreadMessage {
+  id: string;
+  threadId: string;
+  subject: string;
+  sender: string;
+  content: string;
+  receivedAt: number;
+}
+
 interface EmailResponse {
   id: string;
   threadId: string;
   subject: string;
   sender: string;
+  content: string;
   receivedAt: number;
-  content: string | null;
-  extractionError?: {
+  threadMessages: ThreadMessage[];
+  extractionError: {
     message: string;
     details?: any;
-    timestamp: number;
-  };
+  } | undefined;
 }
 
 // Add this helper function to process emails in batches
@@ -472,153 +480,144 @@ async function getGmailClient(accessToken: string): Promise<gmail_v1.Gmail | nul
   }
 }
 
-// Update the GET function to handle pagination better
+// Update the GET function to fetch more threads
 export async function GET(request: NextRequest) {
   try {
-    // Enhanced rate limiting check - allow first request
-    const now = Date.now();
-    const timeSinceLastRequest = now - lastRequestTime;
-    const isFirstRequest = lastRequestTime === 0;
-    
-    if (!isFirstRequest && timeSinceLastRequest < RATE_LIMITS.MIN_TIME_BETWEEN_FETCHES) {
-      return NextResponse.json(
-        { 
-          error: 'Rate limit exceeded', 
-          retryAfter: RATE_LIMITS.MIN_TIME_BETWEEN_FETCHES - timeSinceLastRequest,
-          message: `Please wait ${Math.ceil((RATE_LIMITS.MIN_TIME_BETWEEN_FETCHES - timeSinceLastRequest) / 1000)} seconds before refreshing again`
-        },
-        { status: 429 }
-      );
-    }
+    // Get pagination parameters from URL
+    const searchParams = new URL(request.url).searchParams;
+    const page = parseInt(searchParams.get('page') || '1');
+    const limit = parseInt(searchParams.get('limit') || '20'); // Default limit reduced to 20
+    const pageToken = searchParams.get('pageToken') || undefined;
 
-    lastRequestTime = now;
-
-    // Get the access token from the Authorization header first
-    const authHeader = request.headers.get('Authorization');
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return NextResponse.json({ error: 'No access token provided' }, { status: 401 });
+    // Get access token from Authorization header
+    const authHeader = request.headers.get('authorization');
+    if (!authHeader?.startsWith('Bearer ')) {
+      return NextResponse.json({ error: 'Missing or invalid authorization header' }, { status: 401 });
     }
     const accessToken = authHeader.split(' ')[1];
 
-    // Initialize Firebase Admin and Firestore
-    const app = getFirebaseAdmin();
-    if (!app) {
-      throw new Error('Failed to initialize Firebase Admin');
-    }
-    const db = getFirestore(app);
-
-    // Get Gmail client with access token
+    // Initialize Gmail client
     const gmail = await getGmailClient(accessToken);
     if (!gmail) {
-      return NextResponse.json(
-        { error: 'Failed to initialize Gmail client' },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: 'Failed to initialize Gmail client' }, { status: 500 });
     }
 
-    // Get pagination parameters from headers correctly
-    const page = parseInt(request.headers.get('x-page') || '1');
-    const forceRefresh = request.headers.get('x-force-refresh') === 'true';
-    const pageSize = 10;
-
-    // List threads with pagination and exponential backoff
-    let retryCount = 0;
-    const maxRetries = 3;
-    const baseDelay = 2000; // Start with 2 second delay
-
-    const fetchThreads = async () => {
-      try {
-        return await gmail.users.threads.list({
-          userId: 'me',
-          maxResults: pageSize,
-          pageToken: page > 1 ? `${(page - 1) * pageSize}` : undefined,
-        });
-      } catch (error) {
-        if (retryCount < maxRetries) {
-          retryCount++;
-          const delay = Math.min(baseDelay * Math.pow(2, retryCount), 10000); // Max 10 second delay
-          console.log(`Retrying Gmail API call in ${delay}ms (attempt ${retryCount}/${maxRetries})`);
-          await new Promise(resolve => setTimeout(resolve, delay));
-          return fetchThreads();
-        }
-        throw error;
-      }
-    };
-
-    const threadsResponse = await fetchThreads();
-
-    if (!threadsResponse.data.threads || threadsResponse.data.threads.length === 0) {
-      return NextResponse.json({ emails: [], hasMore: false });
+    // Initialize Firestore
+    const firebaseApp = getFirebaseAdmin();
+    if (!firebaseApp) {
+      return NextResponse.json({ error: 'Failed to initialize Firebase Admin' }, { status: 500 });
     }
+    const db = firebaseApp.firestore();
+
+    // Fetch threads with pagination, removing the time window restriction
+    const response = await gmail.users.threads.list({
+      userId: 'me',
+      maxResults: limit,
+      pageToken: pageToken,
+      q: 'in:inbox -label:automated-reply', // Removed time window restriction
+    });
+
+    const threads = response.data.threads || [];
+    const nextPageToken = response.data.nextPageToken;
 
     // Process threads with rate limiting
-    const threadDetails = await processThreadsWithRateLimit(
-      gmail,
-      threadsResponse.data.threads
-    );
+    const processedThreads = await Promise.all(
+      threads.map(async (thread) => {
+        try {
+          const threadDetails = await gmail.users.threads.get({
+            userId: 'me',
+            id: thread.id!,
+            format: 'full', // Get full message details
+          });
 
-    // Process the thread details into emails and filter out not relevant ones
-    const emailPromises = threadDetails
-      .filter(Boolean)
-      .map(async (thread) => {
-        // If no messages, skip
-        if (!thread?.data.messages || thread.data.messages.length === 0) return null;
+          // Get the most recent message from the thread
+          const messages = threadDetails.data.messages || [];
+          const mostRecentMessage = messages[messages.length - 1];
 
-        // Check if this thread is marked not relevant
-        const isNotRelevant = await isEmailNotRelevant(thread.data.id || '', db);
-        if (isNotRelevant) return null;
+          if (!mostRecentMessage || !mostRecentMessage.payload) {
+            return null;
+          }
 
-        // Map all messages in the thread
-        const mappedMessages = thread.data.messages.map((message) => {
-          const headers = message.payload?.headers || [];
-          const getHeader = (name: string) =>
-            headers.find((h) => h.name?.toLowerCase() === name.toLowerCase())?.value || '';
+          // Extract email content
+          const { content, error: extractionError } = extractEmailBody(mostRecentMessage);
 
-          const { content, error } = extractEmailBody(message);
+          // Get thread messages for context
+          const threadMessages = messages.map(message => {
+            const { content: messageContent } = extractEmailBody(message);
+            return {
+              id: message.id!,
+              threadId: thread.id!,
+              subject: message.payload?.headers?.find(h => h.name === 'Subject')?.value || 'No Subject',
+              sender: message.payload?.headers?.find(h => h.name === 'From')?.value || 'Unknown Sender',
+              content: messageContent || '',
+              receivedAt: parseInt(message.internalDate || '0'),
+            };
+          }).reverse(); // Reverse to get oldest first
 
           return {
-            id: message.id || '',
-            subject: getHeader('subject'),
-            sender: getHeader('from'),
-            receivedAt: parseGmailDate(getHeader('date')),
-            content,
-            ...(error && {
-              extractionError: {
-                ...error,
-                timestamp: Date.now()
-              }
-            })
+            id: mostRecentMessage.id!,
+            threadId: thread.id!,
+            subject: mostRecentMessage.payload.headers?.find(h => h.name === 'Subject')?.value || 'No Subject',
+            sender: mostRecentMessage.payload.headers?.find(h => h.name === 'From')?.value || 'Unknown Sender',
+            content: content || '',
+            receivedAt: parseInt(mostRecentMessage.internalDate || '0'),
+            threadMessages,
+            extractionError
           };
-        });
+        } catch (error) {
+          console.error(`Error processing thread ${thread.id}:`, error);
+          return null;
+        }
+      })
+    );
 
-        // Use the newest message for the main subject/content display
-        const primaryMessage = mappedMessages[mappedMessages.length - 1];
+    // Filter out failed threads first
+    const validThreads = processedThreads.filter((thread): thread is EmailResponse => {
+      if (!thread) return false;
+      return (
+        typeof thread.id === 'string' &&
+        typeof thread.threadId === 'string' &&
+        typeof thread.subject === 'string' &&
+        typeof thread.sender === 'string' &&
+        typeof thread.content === 'string' &&
+        typeof thread.receivedAt === 'number' &&
+        Array.isArray(thread.threadMessages)
+      );
+    });
 
-        return {
-          id: thread.data.id || '',
-          threadId: thread.data.id || '',
-          subject: primaryMessage.subject,
-          sender: primaryMessage.sender,
-          receivedAt: primaryMessage.receivedAt,
-          content: primaryMessage.content,
-          threadMessages: mappedMessages
-        };
+    // Check not relevant status for all threads in parallel
+    const notRelevantChecks = await Promise.all(
+      validThreads.map(async thread => ({
+        thread,
+        isNotRelevant: await isEmailNotRelevant(thread.id, db)
+      }))
+    );
+
+    // Filter out not relevant threads
+    const finalThreads = notRelevantChecks
+      .filter(({ isNotRelevant }) => !isNotRelevant)
+      .map(({ thread }) => thread)
+      .sort((a, b) => {
+        if (!a || !b) return 0;
+        return b.receivedAt - a.receivedAt;
       });
 
-    const emails = (await Promise.all(emailPromises)).filter(Boolean);
-
-    // Check for more pages
-    const hasMore = threadsResponse.data.nextPageToken !== undefined;
-
+    // Return response with pagination info
     return NextResponse.json({
-      emails,
-      hasMore,
+      emails: finalThreads,
+      hasMore: Boolean(nextPageToken),
+      nextPage: nextPageToken ? page + 1 : null,
+      nextPageToken: nextPageToken,
+      total: response.data.resultSizeEstimate || 0,
+      currentPage: page,
+      pageSize: limit
     });
+
   } catch (error) {
-    console.error('Error in GET /api/emails/inbox:', error);
+    console.error('Error fetching emails:', error);
     return NextResponse.json(
-      { error: 'Failed to fetch emails' },
-      { status: 500 }
+      { error: 'Failed to fetch emails', details: error instanceof Error ? error.message : 'Unknown error' },
+      { status: error instanceof Error && error.message.includes('quota') ? 429 : 500 }
     );
   }
 }
