@@ -9,7 +9,7 @@ export function Sidebar() {
   const pathname = usePathname();
   const { user, signOut, signIn } = useAuth();
   const [isOpen, setIsOpen] = useState(false);
-  
+
   const isActive = (path: string) => pathname === path;
 
   const handleSignOut = async () => {
@@ -56,7 +56,7 @@ export function Sidebar() {
 
       {/* Overlay */}
       {isOpen && (
-        <div 
+        <div
           className="fixed inset-0 bg-black/50 z-40 md:hidden"
           onClick={() => setIsOpen(false)}
         />
@@ -126,7 +126,7 @@ export function Sidebar() {
 
         {/* Navigation Links */}
         <div className="p-4 flex-1">
-          <Link 
+          <Link
             href="/"
             className={`flex items-center gap-3 px-4 py-3 rounded-lg text-gray-700 ${
               isActive('/') ? 'bg-red-100 text-red-600' : 'hover:bg-gray-50'
@@ -136,7 +136,7 @@ export function Sidebar() {
             <span className="font-medium">Home</span>
           </Link>
 
-          <Link 
+          <Link
             href="/knowledge"
             className={`flex items-center gap-3 px-4 py-3 rounded-lg text-gray-700 mt-2 ${
               isActive('/knowledge') ? 'bg-red-100 text-red-600' : 'hover:bg-gray-50'
@@ -146,7 +146,7 @@ export function Sidebar() {
             <span className="font-medium">Knowledge Base</span>
           </Link>
 
-          <Link 
+          <Link
             href="/dispute"
             className={`flex items-center gap-3 px-4 py-3 rounded-lg text-gray-700 mt-2 ${
               isActive('/dispute') ? 'bg-red-100 text-red-600' : 'hover:bg-gray-50'
@@ -156,10 +156,10 @@ export function Sidebar() {
             <span className="font-medium">Dispute Resolution</span>
           </Link>
 
-          <Link 
-            href="/faq_autoreply"
+          <Link
+            href="/faq_autoreply_v2"
             className={`flex items-center gap-3 px-4 py-3 rounded-lg text-gray-700 mt-2 ${
-              isActive('/faq_autoreply') ? 'bg-red-100 text-red-600' : 'hover:bg-gray-50'
+              isActive('/faq_autoreply_v2') ? 'bg-red-100 text-red-600' : 'hover:bg-gray-50'
             }`}
           >
             <MessageSquareQuote className="w-5 h-5" />
@@ -170,7 +170,7 @@ export function Sidebar() {
         {/* Bottom section with other navigation items */}
         {user ? (
           <div className="mt-auto p-4 space-y-2">
-            <Link 
+            <Link
               href="/account"
               className={`flex items-center gap-3 px-4 py-3 rounded-lg text-gray-700 ${
                 isActive('/account') ? 'bg-gray-100' : 'hover:bg-gray-50'
@@ -180,7 +180,7 @@ export function Sidebar() {
               <span className="font-medium">Account</span>
             </Link>
 
-            <Link 
+            <Link
               href="/subscription"
               className={`flex items-center gap-3 px-4 py-3 rounded-lg text-gray-700 ${
                 isActive('/subscription') ? 'bg-gray-100' : 'hover:bg-gray-50'
@@ -190,7 +190,7 @@ export function Sidebar() {
               <span className="font-medium">Subscription</span>
             </Link>
 
-            <Link 
+            <Link
               href="/settings"
               className={`flex items-center gap-3 px-4 py-3 rounded-lg text-gray-700 ${
                 isActive('/settings') ? 'bg-gray-100' : 'hover:bg-gray-50'
@@ -200,7 +200,7 @@ export function Sidebar() {
               <span className="font-medium">Settings</span>
             </Link>
 
-            <Link 
+            <Link
               href="/support"
               className={`flex items-center gap-3 px-4 py-3 rounded-lg text-gray-700 ${
                 isActive('/support') ? 'bg-gray-100' : 'hover:bg-gray-50'
@@ -249,4 +249,4 @@ export function Sidebar() {
       </div>
     </>
   );
-} 
+}
