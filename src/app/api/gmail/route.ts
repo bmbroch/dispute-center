@@ -64,9 +64,9 @@ function processMessagePart(part: gmail_v1.Schema$MessagePart): { text: string; 
 export async function GET(request: NextRequest) {
   const authHeader = request.headers.get('Authorization');
   const disputeEmail = request.headers.get('X-Dispute-Email');
-  
+
   if (!authHeader || !disputeEmail) {
-    return NextResponse.json({ 
+    return NextResponse.json({
       error: 'Missing required headers',
       details: !authHeader ? 'Authorization header is missing' : 'X-Dispute-Email header is missing'
     }, { status: 401 });
@@ -175,7 +175,7 @@ export async function GET(request: NextRequest) {
           subject: headers.get('subject') || 'No Subject',
           sender: headers.get('from') || '',
           content: content,
-          receivedAt: headers.get('date') || 
+          receivedAt: headers.get('date') ||
             (message.internalDate ? new Date(parseInt(message.internalDate)).toISOString() : new Date().toISOString())
         };
       }).filter((msg): msg is NonNullable<typeof msg> => msg !== null);
@@ -195,7 +195,7 @@ export async function GET(request: NextRequest) {
     }).filter((thread): thread is NonNullable<typeof thread> => thread !== null);
 
     // Sort threads by the date of their most recent message (newest first)
-    formattedThreads.sort((a, b) => 
+    formattedThreads.sort((a, b) =>
       new Date(b.receivedAt).getTime() - new Date(a.receivedAt).getTime()
     );
 
@@ -212,17 +212,17 @@ export async function GET(request: NextRequest) {
     });
   } catch (error: unknown) {
     console.error('Error fetching email threads:', error);
-    
+
     if (!isGmailError(error)) {
-      return NextResponse.json({ 
+      return NextResponse.json({
         error: 'Failed to fetch email threads',
         details: error instanceof Error ? error.message : 'An unexpected error occurred'
       }, { status: 500 });
     }
-    
+
     // Check if error is due to invalid credentials
     if (error.response?.status === 401) {
-      return NextResponse.json({ 
+      return NextResponse.json({
         error: 'Authentication failed',
         details: 'Your session has expired. Please sign in again.'
       }, { status: 401 });
@@ -247,9 +247,9 @@ export async function GET(request: NextRequest) {
     }
 
     // Network or other errors
-    return NextResponse.json({ 
+    return NextResponse.json({
       error: 'Failed to fetch email threads',
       details: error.message || 'An unexpected error occurred while fetching emails'
     }, { status: 500 });
   }
-} 
+}

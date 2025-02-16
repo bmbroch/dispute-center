@@ -7,15 +7,14 @@ import { useAuth } from '@/lib/hooks/useAuth';
 export interface EmailMessage {
   id: string;
   threadId: string;
+  subject: string;
+  from: string;
+  content: string;
+  date: string;
+  contentType?: string;
   historyId: string;
   internalDate: string;
   snippet: string;
-  subject: string;
-  from: string;
-  to: string;
-  date: string;
-  body: string;
-  contentType: string;
   references: string;
   inReplyTo: string;
   messageId: string;
@@ -34,7 +33,8 @@ export interface EmailMessage {
 
 export interface EmailThread {
   id: string;
-  historyId: string;
+  threadId: string;
+  subject: string;
   messages: EmailMessage[];
 }
 
@@ -54,7 +54,12 @@ const decodeHtmlEntities = (text: string) => {
   return textArea.value;
 };
 
-export default function EmailCorrespondence({ 
+// Add this helper function at the top level
+const isValidThread = (thread: EmailThread): boolean => {
+  return Boolean(thread && thread.messages && Array.isArray(thread.messages));
+};
+
+export default function EmailCorrespondence({
   customerEmail,
   firstName,
   disputeId,
@@ -72,78 +77,72 @@ export default function EmailCorrespondence({
 
   // Memoize threads to prevent unnecessary re-renders
   const sortedThreads = useMemo(() => {
+    if (!threads || !Array.isArray(threads)) {
+      return [];
+    }
+
     return [...threads].sort((a, b) => {
+      if (!a.messages?.length || !b.messages?.length) {
+        return 0;
+      }
       const aDate = new Date(a.messages[a.messages.length - 1].date);
       const bDate = new Date(b.messages[b.messages.length - 1].date);
       return bDate.getTime() - aDate.getTime();
     });
   }, [threads]);
 
-  // Enhanced content processing to handle images
-  const processEmailContent = useCallback((message: EmailMessage) => {
-    if (processedContent[message.id]) {
-      return processedContent[message.id];
-    }
+  // Update the threads transformation
+  const transformApiThread = useCallback((thread: any): EmailThread | null => {
+    if (!thread) return null;
 
-    const isHtml = message.contentType.includes('html');
-    let content = message.body || message.snippet || '';
+    // Create a message object from the thread data
+    const mainMessage: EmailMessage = {
+      id: thread.id || thread.threadId,
+      threadId: thread.threadId,
+      subject: thread.subject,
+      from: thread.sender,
+      content: thread.content,
+      date: thread.receivedAt,
+      contentType: 'text/html',
+      historyId: thread.historyId ?? '',
+      internalDate: thread.internalDate ?? '',
+      snippet: thread.snippet ?? '',
+      references: thread.references ?? '',
+      inReplyTo: thread.inReplyTo ?? '',
+      messageId: thread.messageId ?? ''
+    };
 
-    if (!content.trim()) {
-      return '<div class="text-gray-500 italic">No content available</div>';
-    }
+    // Transform thread messages if they exist
+    const threadMessages: EmailMessage[] = (thread.threadMessages?.map((msg: any): EmailMessage => ({
+      id: msg.id || `${thread.threadId}-${msg.receivedAt}`,
+      threadId: thread.threadId,
+      subject: msg.subject,
+      from: msg.sender,
+      content: msg.content,
+      date: msg.receivedAt,
+      contentType: 'text/html',
+      historyId: msg.historyId ?? '',
+      internalDate: msg.internalDate ?? '',
+      snippet: msg.snippet ?? '',
+      references: msg.references ?? '',
+      inReplyTo: msg.inReplyTo ?? '',
+      messageId: msg.messageId ?? ''
+    })) || []);
 
-    // Process inline images if they exist
-    if (message.attachments?.length) {
-      message.attachments.forEach(attachment => {
-        if (attachment.isInline && attachment.data) {
-          // Replace content ID references with actual image data
-          const cidRef = `cid:${attachment.contentId}`;
-          const imgData = `data:${attachment.mimeType};base64,${attachment.data}`;
-          content = content.replace(cidRef, imgData);
-        }
-      });
-    }
+    // Combine main message with thread messages if not already included
+    const allMessages = threadMessages.some((msg: EmailMessage) => msg.id === mainMessage.id)
+      ? threadMessages
+      : [mainMessage, ...threadMessages];
 
-    // Simple and fast HTML sanitization while preserving image tags
-    if (isHtml) {
-      content = content
-        .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
-        .replace(/on\w+="[^"]*"/g, '')
-        .replace(/javascript:/gi, '')
-        // Preserve image dimensions but add max-width
-        .replace(/<img([^>]*)>/gi, (match, attributes) => {
-          // Add loading="lazy" and class for styling
-          return `<img ${attributes} loading="lazy" class="email-image">`;
-        });
-    } else {
-      content = content
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#039;')
-        .replace(/\n/g, '<br>');
-    }
-
-    // Cache the processed content
-    setProcessedContent(prev => ({
-      ...prev,
-      [message.id]: content
-    }));
-
-    return content;
-  }, [processedContent]);
-
-  // Handle thread expansion
-  const toggleThread = useCallback((threadId: string) => {
-    setExpandedThreads(prev => 
-      prev.includes(threadId) 
-        ? prev.filter(id => id !== threadId)
-        : [...prev, threadId]
-    );
+    return {
+      id: thread.threadId,
+      threadId: thread.threadId,
+      subject: thread.subject,
+      messages: allMessages
+    };
   }, []);
 
-  // Memoize the email fetch function
+  // Update the email fetch function
   const fetchEmails = useCallback(async () => {
     if (!user?.accessToken || !customerEmail) return;
 
@@ -163,7 +162,13 @@ export default function EmailCorrespondence({
       }
 
       const data = await response.json();
-      setThreads(data.threads || []);
+
+      // Transform the API response into the expected format
+      const transformedThreads = (data.threads || [])
+        .map(transformApiThread)
+        .filter(Boolean);
+
+      setThreads(transformedThreads);
     } catch (err) {
       console.error('Error fetching emails:', err);
       setError({
@@ -173,7 +178,7 @@ export default function EmailCorrespondence({
     } finally {
       setIsLoading(false);
     }
-  }, [user?.accessToken, customerEmail]);
+  }, [user?.accessToken, customerEmail, transformApiThread]);
 
   // Only fetch if we don't have initial threads
   useEffect(() => {
@@ -237,7 +242,7 @@ export default function EmailCorrespondence({
     const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
     const diffHours = Math.floor((diffTime % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
     const diffMinutes = Math.floor((diffTime % (1000 * 60 * 60)) / (1000 * 60));
-    
+
     if (diffDays > 0) {
       return `⏰ ${diffDays} day${diffDays === 1 ? '' : 's'} later`;
     }
@@ -257,7 +262,7 @@ export default function EmailCorrespondence({
     const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
     const diffHours = Math.floor((diffTime % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
     const diffMinutes = Math.floor((diffTime % (1000 * 60 * 60)) / (1000 * 60));
-    
+
     if (diffDays > 0) {
       return `${diffDays} day${diffDays === 1 ? '' : 's'} ago`;
     }
@@ -303,6 +308,14 @@ export default function EmailCorrespondence({
     );
   };
 
+  const toggleThread = useCallback((threadId: string) => {
+    setExpandedThreads(prev =>
+      prev.includes(threadId)
+        ? prev.filter(id => id !== threadId)
+        : [...prev, threadId]
+    );
+  }, []);
+
   if (isLoading) {
     return (
       <div className="flex justify-center items-center py-8">
@@ -311,7 +324,7 @@ export default function EmailCorrespondence({
     );
   }
 
-  if (threads.length === 0) {
+  if (sortedThreads.every(thread => !thread.messages || thread.messages.length === 0)) {
     return (
       <div className="text-center text-gray-500 py-4">
         <p>No email correspondence found for this customer.</p>
@@ -364,14 +377,18 @@ export default function EmailCorrespondence({
       )}
       <div className="space-y-6">
         {showEmailHistory && sortedThreads.map((thread) => {
+          if (!isValidThread(thread)) return null;
+
           const latestMessage = thread.messages[thread.messages.length - 1];
+          if (!latestMessage) return null;
+
           const isExpanded = expandedThreads.includes(thread.id);
           const showFollowUpButton = isLastMessageFromCurrentUser(thread.messages);
 
           return (
             <div key={thread.id} className="bg-white rounded-lg shadow">
               {/* Thread Header */}
-              <div 
+              <div
                 className="flex items-center justify-between px-4 py-3 border-b border-gray-200 cursor-pointer hover:bg-gray-50"
                 onClick={() => toggleThread(thread.id)}
               >
@@ -407,10 +424,11 @@ export default function EmailCorrespondence({
               {isExpanded && (
                 <div className="divide-y divide-gray-100">
                   {[...thread.messages].reverse().map((message, index) => {
+                    if (!message) return null;
                     const isFromCustomer = message.from.toLowerCase().includes(customerEmail.toLowerCase());
-                    
+
                     return (
-                      <div 
+                      <div
                         key={message.id}
                         className={`p-4 ${isFromCustomer ? 'bg-blue-50' : 'bg-white'}`}
                       >
@@ -433,9 +451,9 @@ export default function EmailCorrespondence({
                             Reply
                           </button>
                         </div>
-                        <div 
+                        <div
                           className="email-content prose max-w-none"
-                          dangerouslySetInnerHTML={{ __html: processEmailContent(message) }}
+                          dangerouslySetInnerHTML={{ __html: message.content }}
                         />
                         {message.attachments && message.attachments.length > 0 && (
                           <div className="mt-4 space-y-2">
@@ -463,4 +481,4 @@ export default function EmailCorrespondence({
       </div>
     </div>
   );
-} 
+}

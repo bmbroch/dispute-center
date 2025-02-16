@@ -65,11 +65,11 @@ interface EmailComposerProps {
   initialTemplate?: string | null;
 }
 
-export default function EmailComposer({ 
+export default function EmailComposer({
   customerEmail,
   firstName,
-  onClose, 
-  onEmailSent, 
+  onClose,
+  onEmailSent,
   replyToMessage,
   threads,
   initialTemplate
@@ -102,7 +102,7 @@ export default function EmailComposer({
       try {
         setIsLoading(true);
         console.log('Fetching templates for user:', user.email);
-        
+
         const response = await fetch('/api/settings/email-templates', {
           method: 'GET',
           headers: {
@@ -115,7 +115,7 @@ export default function EmailComposer({
           console.error('Network error:', error);
           throw error;
         });
-        
+
         if (!response.ok) {
           const errorText = await response.text();
           console.error('API error:', {
@@ -128,7 +128,7 @@ export default function EmailComposer({
 
         const data = await response.json();
         console.log('Templates received:', data);
-        
+
         // Set templates, falling back to defaults if none found
         const templatesData = (data && data.length > 0) ? data : DEFAULT_TEMPLATES;
         setTemplates(templatesData);
@@ -148,19 +148,19 @@ export default function EmailComposer({
         const templateToUse = templatesData[templateIndex] || templatesData[0];
         setSelectedTemplate(templateToUse);
         setSubject(templateToUse.subject);
-        
+
         const formattedFirstName = firstName || (() => {
           const nameFromEmail = customerEmail.split('@')[0].split(/[^a-zA-Z]/)[0];
           return nameFromEmail.charAt(0).toUpperCase() + nameFromEmail.slice(1).toLowerCase();
         })();
-        
+
         const processedBody = templateToUse.body.replace(/\{\{firstName\}\}/g, formattedFirstName);
         setContent(processedBody);
-        
+
         if (editorRef.current) {
           editorRef.current.setContent(processedBody);
         }
-        
+
         hasInitializedRef.current = true;
       }
     }
@@ -171,10 +171,10 @@ export default function EmailComposer({
   // Handle reply message
   useEffect(() => {
     if (replyToMessage) {
-      setSubject(replyToMessage.subject.startsWith('Re:') 
-        ? replyToMessage.subject 
+      setSubject(replyToMessage.subject.startsWith('Re:')
+        ? replyToMessage.subject
         : `Re: ${replyToMessage.subject}`);
-      
+
       // Start with empty content for replies
       setContent('');
       hasInitializedRef.current = true;
@@ -194,25 +194,12 @@ export default function EmailComposer({
     });
   };
 
-  const formatThreadHistory = () => {
-    if (!replyToMessage) return '';
-    
-    // Get all messages from the thread in chronological order
-    const threadMessages = replyToMessage.threadId ? 
-      threads?.find(t => t.id === replyToMessage.threadId)?.messages || [] : 
-      [replyToMessage];
-    
-    // Sort messages by date (newest first for display)
-    const sortedMessages = [...threadMessages].sort((a, b) => 
-      new Date(b.date).getTime() - new Date(a.date).getTime()
-    );
-
-    // Take only the immediate parent message for the quote
-    const immediateParent = sortedMessages[0];
-    if (!immediateParent) return '';
-
+  const formatThreadHistory = (threadHistory?: string): string => {
+    if (!threadHistory) {
+      return '';
+    }
     // Clean the content while preserving important HTML formatting
-    const cleanContent = immediateParent.body
+    const cleanContent = threadHistory
       // Remove any existing quotes to prevent nesting
       .replace(/<div[^>]*class="gmail_quote"[^>]*>[\s\S]*?<\/div>/gi, '')
       .replace(/<div[^>]*>On [^<]*wrote:<\/div>/gi, '')
@@ -226,8 +213,8 @@ export default function EmailComposer({
 
     if (!cleanContent) return '';
 
-    const date = formatDate(immediateParent.date);
-    const from = immediateParent.from;
+    const date = formatDate(replyToMessage?.date || '');
+    const from = replyToMessage?.from || '';
 
     // Return formatted content with preserved HTML and images
     return `<div class="gmail_quote" style="margin:0 0 0 .8ex;border-left:1px #ccc solid;padding-left:1ex">
@@ -243,22 +230,22 @@ export default function EmailComposer({
     }
 
     setSelectedTemplate(template);
-    setSubject(replyToMessage ? 
+    setSubject(replyToMessage ?
       (replyToMessage.subject.startsWith('Re:') ? replyToMessage.subject : `Re: ${replyToMessage.subject}`) :
       template.subject
     );
-    
+
     // Use provided firstName or fall back to email-based name if not provided
     const formattedFirstName = firstName || (() => {
       const nameFromEmail = customerEmail.split('@')[0].split(/[^a-zA-Z]/)[0];
       return nameFromEmail.charAt(0).toUpperCase() + nameFromEmail.slice(1).toLowerCase();
     })();
-    
+
     const processedBody = template.body.replace(/\{\{firstName\}\}/g, formattedFirstName);
-    
+
     // Set the content state immediately
     setContent(processedBody);
-    
+
     // Also try to update the editor if it's available
     if (editorRef.current) {
       editorRef.current.setContent(processedBody);
@@ -312,25 +299,25 @@ export default function EmailComposer({
       }
 
       // Format the email with proper structure
-      const threadHistory = formatThreadHistory();
+      const threadHistoryToAppend = formatThreadHistory(replyToMessage ? replyToMessage.content : '');
       const fullEmailContent = `<div dir="ltr" style="font-family:Arial,sans-serif;font-size:14px">
 ${tempDiv.innerHTML}
-${threadHistory ? `<br>${threadHistory}` : ''}
+${threadHistoryToAppend ? `<br>${threadHistoryToAppend}` : ''}
 </div>`;
 
       let currentAccessToken = user.accessToken;
 
       const sendEmail = async (token: string) => {
         // Get all messages in the thread for proper threading
-        const threadMessages = replyToMessage?.threadId ? 
-          threads?.find(t => t.id === replyToMessage.threadId)?.messages || [] : 
+        const threadMessages = replyToMessage?.threadId ?
+          threads?.find(t => t.id === replyToMessage.threadId)?.messages || [] :
           [];
-        
+
         // Sort messages chronologically (oldest first) for References header
-        const sortedMessages = [...threadMessages].sort((a, b) => 
+        const sortedMessages = [...threadMessages].sort((a, b) =>
           new Date(a.date).getTime() - new Date(b.date).getTime()
         );
-        
+
         // Build References header - should include all previous message IDs
         const messageIds = sortedMessages
           .map(msg => msg.messageId)
@@ -351,7 +338,7 @@ ${threadHistory ? `<br>${threadHistory}` : ''}
             messageId: replyToMessage?.messageId,
             references: messageIds,
             inReplyTo: replyToMessage?.messageId,
-            originalContent: replyToMessage?.body,
+            originalContent: replyToMessage?.content,
             inlineImages // Add inline images to the request
           })
         });
@@ -570,4 +557,4 @@ ${threadHistory ? `<br>${threadHistory}` : ''}
       </div>
     </div>
   );
-} 
+}

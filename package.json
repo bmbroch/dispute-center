@@ -85,7 +85,8 @@
     "node-loader": "^2.1.0",
     "os-browserify": "^0.3.0",
     "path-browserify": "^1.0.1",
-    "typescript": "5.7.3"
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7.3"
   },
   "lint-staged": {
     "*.{ts,tsx}": [

@@ -109,9 +109,35 @@ const DisputeTable: React.FC<DisputeTableProps> = ({ onDisputeCountChange }) => 
 
             if (emailResponse.ok) {
               const { threads } = await emailResponse.json();
+
+              // Transform threads so they have a "messages" array
+              // instead of "threadMessages". Also fill any missing fields
+              // to match the EmailThread interface used by <EmailCorrespondence>.
+              const transformedThreads = (threads || []).map((thread: any) => {
+                // If a thread already has a "messages" array, keep it as-is;
+                // otherwise transform its "threadMessages" to "messages".
+                const messages = thread.threadMessages?.map((msg: any) => ({
+                  id: msg.id,
+                  threadId: thread.threadId || thread.id,
+                  from: msg.sender || '',
+                  subject: msg.subject || '',
+                  content: msg.content || '',
+                  date: msg.receivedAt || '',
+                  // Include extra fields as needed
+                })) || [];
+
+                return {
+                  id: thread.id || thread.threadId,
+                  threadId: thread.threadId || thread.id,
+                  messages,
+                  // Keep or map any other fields needed by EmailCorrespondence:
+                  historyId: thread.historyId || '',
+                };
+              });
+
               return {
                 ...dispute,
-                emailThreads: threads || []
+                emailThreads: transformedThreads
               };
             }
           } catch (error) {
@@ -190,7 +216,7 @@ const DisputeTable: React.FC<DisputeTableProps> = ({ onDisputeCountChange }) => 
     }
 
     // Get all messages from all threads
-    const allMessages = dispute.emailThreads.flatMap(thread => thread.messages);
+    const allMessages = dispute.emailThreads.flatMap(thread => thread.messages || []);
 
     // Sort all messages by date in descending order
     const sortedMessages = allMessages.sort((a, b) => {
@@ -199,10 +225,14 @@ const DisputeTable: React.FC<DisputeTableProps> = ({ onDisputeCountChange }) => 
       return dateB - dateA;
     });
 
-    if (sortedMessages.length === 0) return null;
+    if (sortedMessages.length === 0 || !sortedMessages[0]) return null;
 
     // Get the most recent message
     const lastMessage = sortedMessages[0];
+
+    // Add null check for lastMessage.from
+    if (!lastMessage.from) return null;
+
     const isFromCustomer = lastMessage.from.toLowerCase().includes(dispute.customerEmail?.toLowerCase() || '');
 
     return {
