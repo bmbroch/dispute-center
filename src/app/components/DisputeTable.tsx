@@ -49,11 +49,11 @@ const getTimeAgo = (date: string) => {
   const now = new Date();
   const past = new Date(date);
   const diff = now.getTime() - past.getTime();
-  
+
   const minutes = Math.floor(diff / (1000 * 60));
   const hours = Math.floor(minutes / 60);
   const days = Math.floor(hours / 24);
-  
+
   if (days > 0) return `${days}d ago`;
   if (hours > 0) return `${hours}h ago`;
   if (minutes > 0) return `${minutes}m ago`;
@@ -76,21 +76,21 @@ const DisputeTable: React.FC<DisputeTableProps> = ({ onDisputeCountChange }) => 
   const [showNewEmail, setShowNewEmail] = useState<string | null>(null);
   const { user } = useAuth();
   const [sortConfig, setSortConfig] = useState<SortConfig>({ key: 'created', direction: 'desc' });
-  
+
   const fetchDisputes = useCallback(async () => {
     if (!user?.email) return;
-    
+
     try {
       setIsLoading(true);
       const response = await fetch(`/api/stripe/disputes?userEmail=${encodeURIComponent(user.email || '')}`);
       if (!response.ok) throw new Error('Failed to fetch disputes');
-      
+
       const { success, data, error } = await response.json();
-      
+
       if (!success) {
         throw new Error(error || 'Failed to fetch disputes');
       }
-      
+
       // Ensure data is an array
       const disputesArray = Array.isArray(data) ? data : [];
 
@@ -120,7 +120,7 @@ const DisputeTable: React.FC<DisputeTableProps> = ({ onDisputeCountChange }) => 
           return dispute;
         })
       );
-      
+
       setDisputes(disputesWithEmails);
       onDisputeCountChange(disputesWithEmails.length);
       setIsLoading(false);
@@ -141,49 +141,49 @@ const DisputeTable: React.FC<DisputeTableProps> = ({ onDisputeCountChange }) => 
       setIsLoading(false);
     }
   }, [user?.email, user?.accessToken, onDisputeCountChange]);
-  
+
   useEffect(() => {
     fetchDisputes();
-    
+
     const interval = setInterval(fetchDisputes, POLLING_INTERVAL);
     return () => clearInterval(interval);
   }, [fetchDisputes]);
-  
+
   const sortedDisputes = useMemo(() => {
     if (!Array.isArray(disputes)) {
       console.error('Disputes is not an array:', disputes);
       return [];
     }
-    
+
     return [...disputes].sort((a, b) => {
       if (!a || !b) return 0;
-      
+
       switch (sortConfig.key) {
         case 'created':
           const dateA = new Date(a.created * 1000);
           const dateB = new Date(b.created * 1000);
-          return sortConfig.direction === 'asc' 
+          return sortConfig.direction === 'asc'
             ? dateA.getTime() - dateB.getTime()
             : dateB.getTime() - dateA.getTime();
-        
+
         case 'amount':
           const amountA = typeof a.amount === 'number' ? a.amount : 0;
           const amountB = typeof b.amount === 'number' ? b.amount : 0;
           return sortConfig.direction === 'asc'
             ? amountA - amountB
             : amountB - amountA;
-        
+
         case 'status':
           return sortConfig.direction === 'asc'
             ? (a.status || '').localeCompare(b.status || '')
             : (b.status || '').localeCompare(a.status || '');
-        
+
         default:
           return 0;
       }
     });
   }, [disputes, sortConfig]);
-  
+
   const getLastEmailInfo = (dispute: DisputeWithMeta) => {
     if (!dispute.emailThreads || dispute.emailThreads.length === 0) {
       return null;
@@ -265,9 +265,9 @@ const DisputeTable: React.FC<DisputeTableProps> = ({ onDisputeCountChange }) => 
       if (emailResponse.ok) {
         const { threads } = await emailResponse.json();
         // Update only the specific dispute's email threads
-        setDisputes(prevDisputes => 
-          prevDisputes.map(d => 
-            d.id === disputeId 
+        setDisputes(prevDisputes =>
+          prevDisputes.map(d =>
+            d.id === disputeId
               ? { ...d, emailThreads: threads || [] }
               : d
           )
@@ -346,7 +346,7 @@ const DisputeTable: React.FC<DisputeTableProps> = ({ onDisputeCountChange }) => 
       </div>
     );
   }
-  
+
   return (
     <div className="container mx-auto px-4 py-8">
       {error && !error.includes('chrome-extension') && (
@@ -409,12 +409,11 @@ const DisputeTable: React.FC<DisputeTableProps> = ({ onDisputeCountChange }) => 
               <Fragment key={dispute.id}>
                 <tr>
                   <td className="px-6 py-4 whitespace-nowrap">
-                    <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                      dispute.status === 'needs_response' ? 'bg-red-100 text-red-800' :
-                      dispute.status === 'warning_needs_response' ? 'bg-orange-100 text-orange-800' :
-                      dispute.status === 'won' ? 'bg-green-100 text-green-800' :
-                      'bg-gray-100 text-gray-800'
-                    }`}>
+                    <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${dispute.status === 'needs_response' ? 'bg-red-100 text-red-800' :
+                        dispute.status === 'warning_needs_response' ? 'bg-orange-100 text-orange-800' :
+                          dispute.status === 'won' ? 'bg-green-100 text-green-800' :
+                            'bg-gray-100 text-gray-800'
+                      }`}>
                       {dispute.status}
                     </span>
                   </td>
@@ -513,7 +512,7 @@ const DisputeTable: React.FC<DisputeTableProps> = ({ onDisputeCountChange }) => 
                         onClick={() => {
                           const isExpanded = expandedDisputes.includes(dispute.id);
                           setExpandedDisputes(
-                            isExpanded 
+                            isExpanded
                               ? expandedDisputes.filter(id => id !== dispute.id)
                               : [...expandedDisputes, dispute.id]
                           );
@@ -580,4 +579,4 @@ const DisputeTable: React.FC<DisputeTableProps> = ({ onDisputeCountChange }) => 
   );
 };
 
-export default DisputeTable; 
+export default DisputeTable;

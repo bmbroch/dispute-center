@@ -54,10 +54,10 @@ interface AnsweredFAQ {
 }
 
 interface FAQ {
-    question: string;
-    answer: string;
-    emailIds: string[];
-    // ... other properties ...
+  question: string;
+  answer: string;
+  emailIds: string[];
+  // ... other properties ...
 }
 
 interface CacheData {
@@ -100,8 +100,8 @@ const loadFromCache = (key: string): CacheData | null => {
     if (!cached) return null;
 
     const { data, timestamp } = JSON.parse(cached);
-    const duration = key === CACHE_KEYS.ANSWERED_FAQS 
-      ? ANSWERED_FAQS_CACHE_DURATION 
+    const duration = key === CACHE_KEYS.ANSWERED_FAQS
+      ? ANSWERED_FAQS_CACHE_DURATION
       : CACHE_DURATION;
 
     if (Date.now() - timestamp > duration) {
@@ -149,8 +149,8 @@ const isCacheValid = (key: string) => {
     if (!cached) return false;
 
     const { timestamp } = JSON.parse(cached);
-    const duration = key === CACHE_KEYS.ANSWERED_FAQS 
-      ? ANSWERED_FAQS_CACHE_DURATION 
+    const duration = key === CACHE_KEYS.ANSWERED_FAQS
+      ? ANSWERED_FAQS_CACHE_DURATION
       : CACHE_DURATION;
 
     return Date.now() - timestamp < duration;
@@ -214,10 +214,10 @@ const loadEmailsFromFirebase = async () => {
     // Then get cached emails
     const cacheRef = doc(db, FIREBASE_CACHE_COLLECTION, 'latest');
     const cacheDoc = await getDoc(cacheRef);
-    
+
     if (cacheDoc.exists()) {
       const { emails, timestamp } = cacheDoc.data();
-      
+
       // Check if cache is still valid
       if (Date.now() - timestamp < FIREBASE_CACHE_DURATION) {
         // Get all not relevant email IDs
@@ -227,7 +227,7 @@ const loadEmailsFromFirebase = async () => {
         const sortedEmails = emails.map((email: ExtendedEmail) => {
           // Mark email as not relevant if it's in the not_relevant_emails collection
           const isNotRelevant = notRelevantIds.has(email.id);
-          
+
           if (email.threadMessages && email.threadMessages.length > 0) {
             // Sort thread messages by receivedAt in descending order
             email.threadMessages.sort((a, b) => {
@@ -235,7 +235,7 @@ const loadEmailsFromFirebase = async () => {
               const bTime = typeof b.receivedAt === 'string' ? new Date(b.receivedAt).getTime() : Number(b.receivedAt);
               return bTime - aTime;
             });
-            
+
             // Update the email's content and receivedAt with the most recent message
             const mostRecent = email.threadMessages[0];
             return {
@@ -267,7 +267,7 @@ const loadEmailsFromFirebase = async () => {
         return combinedEmails;
       }
     }
-    
+
     // If cache is invalid, at least return the not relevant emails
     return notRelevantEmails.length > 0 ? notRelevantEmails : null;
   } catch (error) {
@@ -335,14 +335,14 @@ const loadQuestionsFromFirebase = async () => {
     const questionsRef = collection(db, FIREBASE_QUESTIONS_COLLECTION);
     const querySnapshot = await getDocs(questionsRef);
     const questionsMap = new Map<string, GenericFAQ[]>();
-    
+
     querySnapshot.forEach((doc) => {
       const data = doc.data();
       if (data.questions) {
         questionsMap.set(doc.id, data.questions);
       }
     });
-    
+
     return questionsMap;
   } catch (error) {
     console.error('Error loading questions from Firebase:', error);
@@ -411,9 +411,9 @@ const getCachedQuestionsFromFirebase = async (emailId: string) => {
     const db = getFirebaseDB();
     const docRef = getDocRef(db, FIREBASE_COLLECTIONS.CACHED_QUESTIONS, emailId);
     if (!docRef) return null;
-    
+
     const docSnap = await getDoc(docRef);
-    
+
     if (docSnap.exists()) {
       const data = docSnap.data();
       // Check if cache is still valid (24 hours)
@@ -446,15 +446,15 @@ const extractQuestionsFromEmail = async (email: ExtendedEmail) => {
     });
 
     if (!response.ok) throw new Error('Failed to extract questions');
-    
+
     const questions = await response.json();
-    
+
     // Group similar questions before saving to cache
     const groupedQuestions = groupSimilarPatterns(questions);
-    
+
     // Save grouped questions to Firebase cache
     await saveExtractedQuestionsToFirebase(email.id, groupedQuestions);
-    
+
     return groupedQuestions;
   } catch (error) {
     console.error('Error extracting questions:', error);
@@ -465,24 +465,24 @@ const extractQuestionsFromEmail = async (email: ExtendedEmail) => {
 // Add this before the component definition
 const groupSimilarPatterns = (patterns: GenericFAQ[]): GenericFAQ[] => {
   const groups: GenericFAQ[] = [];
-  
+
   patterns.forEach(pattern => {
     // First try to find a group with very similar question
     const similarGroup = groups.find(group => {
       // Check if questions are essentially asking for the same thing
       const baseQuestion1 = group.question.toLowerCase().replace(/{email}|{username}/g, '').trim();
       const baseQuestion2 = pattern.question.toLowerCase().replace(/{email}|{username}/g, '').trim();
-      
+
       // If both questions contain same key action words, treat them as similar
       const keyWords1 = new Set(baseQuestion1.match(/\b(cancel|end|stop|terminate|discontinue)\b/g) || []);
       const keyWords2 = new Set(baseQuestion2.match(/\b(cancel|end|stop|terminate|discontinue)\b/g) || []);
-      
+
       const hasCommonKeyWord = [...keyWords1].some(word => keyWords2.has(word));
       const similarity = calculatePatternSimilarity(baseQuestion1, baseQuestion2);
-      
+
       return hasCommonKeyWord && similarity > SIMILARITY_THRESHOLD;
     });
-    
+
     if (similarGroup) {
       // Add as a pattern variation rather than a separate question
       if (!similarGroup.similarPatterns) {
@@ -501,7 +501,7 @@ const groupSimilarPatterns = (patterns: GenericFAQ[]): GenericFAQ[] => {
       });
     }
   });
-  
+
   return groups;
 };
 
@@ -528,7 +528,7 @@ const isHTMLContent = (content: string): boolean => {
     '<style',
     '<script'
   ];
-  
+
   const lowerContent = content.toLowerCase();
   return htmlIndicators.some(indicator => lowerContent.includes(indicator.toLowerCase()));
 };
@@ -537,11 +537,11 @@ const sanitizeHTML = (html: string): string => {
   // Basic sanitization to extract text from HTML
   // Remove style/script tags and their contents
   let sanitized = html.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-                     .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-                     .replace(/<[^>]+>/g, ' ') // Replace any remaining tags with space
-                     .replace(/\s+/g, ' ') // Replace multiple spaces with single space
-                     .trim();
-  
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+    .replace(/<[^>]+>/g, ' ') // Replace any remaining tags with space
+    .replace(/\s+/g, ' ') // Replace multiple spaces with single space
+    .trim();
+
   // Decode HTML entities
   const textarea = document.createElement('textarea');
   textarea.innerHTML = sanitized;
@@ -559,11 +559,11 @@ const getCleanContent = (content: string) => {
   // Split into lines
   const lines = content.split('\n');
   let cleanContent = [];
-  
+
   // Process each line
   for (const line of lines) {
     const trimmedLine = line.trim();
-    
+
     // Stop at common email reply indicators
     if (
       trimmedLine.match(/^On .+wrote:/) ||  // "On ... wrote:"
@@ -577,15 +577,15 @@ const getCleanContent = (content: string) => {
     ) {
       break;
     }
-    
+
     // Skip empty signature indicators
     if (trimmedLine === '--' || trimmedLine === '__') {
       continue;
     }
-    
+
     cleanContent.push(line);
   }
-  
+
   // Join lines back together and trim any trailing whitespace
   return cleanContent.join('\n').trim();
 };
@@ -593,7 +593,7 @@ const getCleanContent = (content: string) => {
 const sanitizeAndFormatHTML = (content: string): string => {
   // First clean the content
   const cleanContent = getCleanContent(content);
-  
+
   // Basic sanitization to prevent XSS
   let sanitized = cleanContent
     .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '') // Remove scripts
@@ -665,9 +665,9 @@ export default function FAQAutoReplyV2() {
   const [loadError, setLoadError] = useState<string | null>(null);
 
   // Add readyToReplyCount calculation
-  const readyToReplyCount = useMemo(() => emails.filter(e => 
-    e.status === 'processed' && 
-    e.matchedFAQ && 
+  const readyToReplyCount = useMemo(() => emails.filter(e =>
+    e.status === 'processed' &&
+    e.matchedFAQ &&
     !e.isReplied &&
     e.suggestedReply
   ).length, [emails]);
@@ -679,10 +679,10 @@ export default function FAQAutoReplyV2() {
   const calculatePatternSimilarity = useCallback((pattern1: string, pattern2: string): number => {
     const words1 = new Set(pattern1.toLowerCase().split(/\s+/));
     const words2 = new Set(pattern2.toLowerCase().split(/\s+/));
-    
+
     const intersection = new Set([...words1].filter(x => words2.has(x)));
     const union = new Set([...words1, ...words2]);
-    
+
     return intersection.size / union.size;
   }, []);
 
@@ -692,15 +692,15 @@ export default function FAQAutoReplyV2() {
   // Add this helper function to get all related questions for a FAQ
   const getRelatedQuestions = useCallback((faq: GenericFAQ): string[] => {
     const allQuestions = new Set<string>();
-    
+
     // Add the main question
     allQuestions.add(faq.question);
-    
+
     // Add similar patterns if they exist
     if (faq.similarPatterns) {
       faq.similarPatterns.forEach(pattern => allQuestions.add(pattern));
     }
-    
+
     // Look through all emails' questions to find similar ones
     emails.forEach(email => {
       const questions = emailQuestions.get(email.id) || [];
@@ -710,31 +710,31 @@ export default function FAQAutoReplyV2() {
         }
       });
     });
-    
+
     return Array.from(allQuestions);
   }, [emails, emailQuestions, calculatePatternSimilarity]);
 
   // Update groupSimilarPatterns to be more aggressive in consolidating similar questions
   const groupSimilarPatterns = useCallback((patterns: GenericFAQ[]): GenericFAQ[] => {
     const groups: GenericFAQ[] = [];
-    
+
     patterns.forEach(pattern => {
       // First try to find a group with very similar question
       const similarGroup = groups.find(group => {
         // Check if questions are essentially asking for the same thing
         const baseQuestion1 = group.question.toLowerCase().replace(/{email}|{username}/g, '').trim();
         const baseQuestion2 = pattern.question.toLowerCase().replace(/{email}|{username}/g, '').trim();
-        
+
         // If both questions contain same key action words, treat them as similar
         const keyWords1 = new Set(baseQuestion1.match(/\b(cancel|end|stop|terminate|discontinue)\b/g) || []);
         const keyWords2 = new Set(baseQuestion2.match(/\b(cancel|end|stop|terminate|discontinue)\b/g) || []);
-        
+
         const hasCommonKeyWord = [...keyWords1].some(word => keyWords2.has(word));
         const similarity = calculatePatternSimilarity(baseQuestion1, baseQuestion2);
-        
+
         return hasCommonKeyWord && similarity > SIMILARITY_THRESHOLD;
       });
-      
+
       if (similarGroup) {
         // Add as a pattern variation rather than a separate question
         if (!similarGroup.similarPatterns) {
@@ -753,7 +753,7 @@ export default function FAQAutoReplyV2() {
         });
       }
     });
-    
+
     return groups;
   }, [calculatePatternSimilarity]);
 
@@ -767,29 +767,29 @@ export default function FAQAutoReplyV2() {
   const findMatchingAnsweredFAQ = useCallback((question: string): AnsweredFAQ | null => {
     console.log('Finding match for question:', question);
     console.log('Current answeredFAQs:', answeredFAQs);
-    
+
     // First try exact match
-    const exactMatch = answeredFAQs.find(faq => 
+    const exactMatch = answeredFAQs.find(faq =>
       faq.question.toLowerCase() === question.toLowerCase()
     );
-    
+
     if (exactMatch) {
       console.log('Found exact match:', exactMatch);
       return exactMatch;
     }
-    
+
     // Then try similarity match
     const similarMatch = answeredFAQs.find(faq => {
       const similarity = calculatePatternSimilarity(faq.question, question);
       console.log(`Similarity between "${faq.question}" and "${question}": ${similarity}`);
       return similarity > SIMILARITY_THRESHOLD;
     });
-    
+
     if (similarMatch) {
       console.log('Found similar match:', similarMatch);
       return similarMatch;
     }
-    
+
     console.log('No match found for question:', question);
     return null;
   }, [answeredFAQs, calculatePatternSimilarity]);
@@ -798,7 +798,7 @@ export default function FAQAutoReplyV2() {
   const checkEmailAnsweredStatus = useCallback((email: ExtendedEmail) => {
     console.log(`Checking status for email ${email.id}`);
     const questions = emailQuestions.get(email.id) || [];
-    
+
     if (questions.length === 0) {
       console.log('No questions found for email');
       return null;
@@ -806,9 +806,9 @@ export default function FAQAutoReplyV2() {
 
     // Check if all questions have matching answered FAQs
     const questionsWithAnswers = questions.map(q => {
-      const matchedFAQ = answeredFAQs.find(faq => 
-        faq.answer && 
-        faq.answer.trim() !== '' && 
+      const matchedFAQ = answeredFAQs.find(faq =>
+        faq.answer &&
+        faq.answer.trim() !== '' &&
         calculatePatternSimilarity(faq.question, q.question) > SIMILARITY_THRESHOLD
       );
       return { question: q, matchedFAQ };
@@ -861,13 +861,13 @@ export default function FAQAutoReplyV2() {
       }
 
       const data = await response.json();
-      
+
       if (data.emails) {
         setEmails(prevEmails => {
           if (skipCache) {
             return data.emails as ExtendedEmail[];
           }
-          const newEmails = data.emails.filter((email: ExtendedEmail) => 
+          const newEmails = data.emails.filter((email: ExtendedEmail) =>
             !prevEmails.some(prevEmail => prevEmail.id === email.id)
           );
           return [...prevEmails, ...newEmails] as ExtendedEmail[];
@@ -891,16 +891,16 @@ export default function FAQAutoReplyV2() {
   useEffect(() => {
     const initialize = async () => {
       if (!isSubscribed.current) return;
-      
+
       try {
         setLoading(true);
-        
+
         // First try to load from local cache
         const cachedData = loadFromCache(CACHE_KEYS.EMAILS);
         if (cachedData?.emails) {
           setEmails(cachedData.emails as ExtendedEmail[]);
         }
-        
+
         // Then try Firebase cache
         const firebaseEmails = await loadEmailsFromFirebase();
         if (firebaseEmails && firebaseEmails.length > 0) {
@@ -923,7 +923,7 @@ export default function FAQAutoReplyV2() {
         const db = getFirebaseDB();
         if (db) {
           const allEmails = [...(cachedData?.emails || []), ...(firebaseEmails || [])];
-          const uniqueEmails = Array.from(new Set(allEmails.map(e => e.id))).map(id => 
+          const uniqueEmails = Array.from(new Set(allEmails.map(e => e.id))).map(id =>
             allEmails.find(e => e.id === id)
           ).filter((e): e is ExtendedEmail => e !== undefined);
 
@@ -938,7 +938,7 @@ export default function FAQAutoReplyV2() {
 
           const emailQuestionsResults = await Promise.all(emailQuestionsPromises);
           const validResults = emailQuestionsResults.filter((result): result is [string, GenericFAQ[]] => result !== null);
-          
+
           if (validResults.length > 0) {
             console.log(`Found cached questions for ${validResults.length} emails`);
             setEmailQuestions(prev => {
@@ -950,10 +950,10 @@ export default function FAQAutoReplyV2() {
             });
           }
         }
-        
+
         // Finally, load fresh emails
         await loadEmails(true);
-        
+
       } catch (error) {
         console.error('Error initializing:', error);
         toast.error('Failed to load emails');
@@ -972,30 +972,30 @@ export default function FAQAutoReplyV2() {
   // Update the FAQ loading effect
   useEffect(() => {
     console.log('=== FAQ Loading Debug - Start ===');
-    
+
     const loadFAQs = async () => {
       try {
         setLoadingFAQs(true);
-        
+
         // Only fetch from API - remove cache logic to ensure fresh data
         console.log('Fetching FAQs from API');
         const response = await fetch('/api/faq/list');
         if (!response.ok) {
           throw new Error('Failed to fetch FAQs');
         }
-        
+
         const data = await response.json();
         console.log('API Response:', data);
 
         if (data.faqs) {
           // Only include FAQs that have both a question and an answer
-          const validFAQs = data.faqs.filter((faq: AnsweredFAQ) => 
-            faq.question && 
-            faq.answer && 
-            faq.answer.trim() !== '' && 
+          const validFAQs = data.faqs.filter((faq: AnsweredFAQ) =>
+            faq.question &&
+            faq.answer &&
+            faq.answer.trim() !== '' &&
             faq.question.trim() !== ''
           );
-          
+
           console.log(`Loaded ${validFAQs.length} valid FAQs from API`);
           setAnsweredFAQs(validFAQs);
         } else {
@@ -1011,7 +1011,7 @@ export default function FAQAutoReplyV2() {
     };
 
     loadFAQs();
-    
+
     return () => {
       console.log('Cleaning up FAQ loading effect');
     };
@@ -1027,7 +1027,7 @@ export default function FAQAutoReplyV2() {
         if (questions.length === 0) return email;
 
         const matchedFAQ = checkEmailAnsweredStatus(email);
-        
+
         if (matchedFAQ) {
           const updatedEmail = {
             ...email,
@@ -1040,9 +1040,9 @@ export default function FAQAutoReplyV2() {
           faqMatches[email.id] = matchedFAQ;
           saveToCache(CACHE_KEYS.FAQ_MATCHES, { matches: faqMatches, timestamp: Date.now() });
 
-          const needsNewReply = !email.suggestedReply || 
-                              !email.matchedFAQ || 
-                              email.matchedFAQ.question !== matchedFAQ.question;
+          const needsNewReply = !email.suggestedReply ||
+            !email.matchedFAQ ||
+            email.matchedFAQ.question !== matchedFAQ.question;
 
           if (needsNewReply) {
             try {
@@ -1055,8 +1055,8 @@ export default function FAQAutoReplyV2() {
                   content: email.content,
                   matchedFAQ: matchedFAQ,
                   questions: questions,
-                  answeredFAQs: answeredFAQs.filter(faq => 
-                    questions.some(q => 
+                  answeredFAQs: answeredFAQs.filter(faq =>
+                    questions.some(q =>
                       calculatePatternSimilarity(q.question, faq.question) > SIMILARITY_THRESHOLD
                     )
                   )
@@ -1073,7 +1073,7 @@ export default function FAQAutoReplyV2() {
                 // Cache the ready to reply email
                 const readyToReplyEmails = loadFromCache(CACHE_KEYS.READY_TO_REPLY)?.emails || [];
                 const updatedReadyToReply = [...readyToReplyEmails, emailWithReply];
-                saveToCache(CACHE_KEYS.READY_TO_REPLY, { 
+                saveToCache(CACHE_KEYS.READY_TO_REPLY, {
                   emails: updatedReadyToReply,
                   timestamp: Date.now()
                 });
@@ -1112,12 +1112,12 @@ export default function FAQAutoReplyV2() {
         method: 'POST',
         body: JSON.stringify({ emailId: email.id }),
       });
-      
+
       if (response.ok) {
         // Remove from ready to reply cache
         const readyToReplyEmails = loadFromCache(CACHE_KEYS.READY_TO_REPLY)?.emails || [];
         const updatedReadyToReply = readyToReplyEmails.filter(e => e.id !== email.id);
-        saveToCache(CACHE_KEYS.READY_TO_REPLY, { 
+        saveToCache(CACHE_KEYS.READY_TO_REPLY, {
           emails: updatedReadyToReply,
           timestamp: Date.now()
         });
@@ -1254,8 +1254,8 @@ export default function FAQAutoReplyV2() {
         emailIds.forEach(emailId => {
           const emailQuestions = updated.get(emailId) || [];
           const updatedQuestions = emailQuestions.map(q => {
-            if (q.question === selectedFAQ?.question || 
-                (selectedFAQ?.similarPatterns && selectedFAQ.similarPatterns.includes(q.question))) {
+            if (q.question === selectedFAQ?.question ||
+              (selectedFAQ?.similarPatterns && selectedFAQ.similarPatterns.includes(q.question))) {
               return {
                 ...q,
                 answer: answer.trim(),
@@ -1270,9 +1270,9 @@ export default function FAQAutoReplyV2() {
       });
 
       // Update genericFAQs to remove answered questions
-      setGenericFAQs(prev => 
-        prev.filter(faq => 
-          faq.question !== selectedFAQ.question && 
+      setGenericFAQs(prev =>
+        prev.filter(faq =>
+          faq.question !== selectedFAQ.question &&
           !selectedFAQ.similarPatterns?.includes(faq.question)
         )
       );
@@ -1283,16 +1283,16 @@ export default function FAQAutoReplyV2() {
           const emailIds = selectedFAQ?.emailIds || [];
           if (emailIds.includes(email.id)) {
             const questions = emailQuestions.get(email.id) || [];
-            const allAnswered = questions.every(q => 
-              answeredFAQs.some(faq => 
+            const allAnswered = questions.every(q =>
+              answeredFAQs.some(faq =>
                 calculatePatternSimilarity(faq.question, q.question) > SIMILARITY_THRESHOLD ||
                 (selectedFAQ?.similarPatterns && selectedFAQ.similarPatterns.includes(q.question))
               )
             );
-            
+
             if (allAnswered) {
               const bestMatch = questions.reduce((best, current) => {
-                const matchedFAQ = findMatchingAnsweredFAQ(current.question) || 
+                const matchedFAQ = findMatchingAnsweredFAQ(current.question) ||
                   (current.question === selectedFAQ?.question ? {
                     question: selectedFAQ?.question,
                     answer: answer.trim(),
@@ -1324,16 +1324,16 @@ export default function FAQAutoReplyV2() {
         });
 
         // Save ready to reply emails to Firebase
-        const readyToReplyEmails = updatedEmails.filter(email => 
-          email.status === 'processed' && 
-          email.matchedFAQ && 
+        const readyToReplyEmails = updatedEmails.filter(email =>
+          email.status === 'processed' &&
+          email.matchedFAQ &&
           !email.isReplied
         );
-        
+
         if (readyToReplyEmails.length > 0) {
           console.log('Saving ready to reply emails to Firebase:', readyToReplyEmails.length);
           saveReadyToReplyToFirebase(readyToReplyEmails);
-          
+
           // Also save to local cache
           saveToCache(CACHE_KEYS.READY_TO_REPLY, {
             emails: readyToReplyEmails,
@@ -1363,7 +1363,7 @@ export default function FAQAutoReplyV2() {
 
   const handleMarkNotRelevant = async (email: ExtendedEmail) => {
     // Immediately mark locally as isNotRelevant
-    setEmails(prev => prev.map(e => 
+    setEmails(prev => prev.map(e =>
       e.id === email.id ? { ...e, isNotRelevant: true } : e
     ));
 
@@ -1394,7 +1394,7 @@ export default function FAQAutoReplyV2() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           email: {
             threadId: email.threadId,
             subject: email.subject || 'No Subject',
@@ -1409,7 +1409,7 @@ export default function FAQAutoReplyV2() {
       }
 
       const analysis: IrrelevanceAnalysis = await response.json();
-      
+
       // Update the Firebase document with the analysis reason
       await setDoc(notRelevantRef, {
         reason: analysis.reason
@@ -1452,10 +1452,10 @@ export default function FAQAutoReplyV2() {
       toast.error('No email content to analyze');
       return;
     }
-    
+
     // Update loading state for this specific email
     setAnalyzingEmails(prev => new Set([...prev, email.id]));
-    
+
     try {
       console.log('Making API request to extract questions...');
       const response = await fetch('/api/knowledge/extract-questions', {
@@ -1469,7 +1469,7 @@ export default function FAQAutoReplyV2() {
       });
 
       console.log('API response status:', response.status);
-      
+
       if (!response.ok) {
         const errorText = await response.text();
         console.error('API error:', {
@@ -1477,7 +1477,7 @@ export default function FAQAutoReplyV2() {
           statusText: response.statusText,
           errorText
         });
-        
+
         let errorData;
         try {
           errorData = JSON.parse(errorText);
@@ -1485,23 +1485,23 @@ export default function FAQAutoReplyV2() {
           console.error('Failed to parse error response:', e);
           errorData = { error: 'Failed to parse error response' };
         }
-        
+
         throw new Error(errorData.error || `API error: ${response.status} ${response.statusText}`);
       }
 
       const data = await response.json();
       console.log('API response data:', data);
-      
+
       if (!data.questions) {
         console.error('Invalid response format:', data);
         throw new Error(data.error || 'Invalid response from question extraction');
       }
 
       console.log('Processing extracted questions:', data.questions);
-      
+
       const questionObjects = data.questions.map((q: any) => {
         console.log('Processing question:', q);
-        
+
         if (typeof q === 'object' && q !== null) {
           console.log('Question is an object:', q);
           return {
@@ -1512,7 +1512,7 @@ export default function FAQAutoReplyV2() {
             requiresCustomerSpecificInfo: q.requiresCustomerSpecificInfo || false
           };
         }
-        
+
         console.log('Question is a string:', q);
         return {
           question: q,
@@ -1548,8 +1548,8 @@ export default function FAQAutoReplyV2() {
 
       // Update the email object with the questions
       console.log('Updating emails state...');
-      setEmails(prev => prev.map(e => 
-        e.id === email.id 
+      setEmails(prev => prev.map(e =>
+        e.id === email.id
           ? { ...e, questions: questionObjects }
           : e
       ));
@@ -1577,8 +1577,8 @@ export default function FAQAutoReplyV2() {
   const generateContextualReply = async (email: ExtendedEmail) => {
     try {
       // Set loading state
-      setEmails(prev => prev.map(e => 
-        e.id === email.id 
+      setEmails(prev => prev.map(e =>
+        e.id === email.id
           ? { ...e, isGeneratingReply: true, gmailError: undefined }
           : e
       ));
@@ -1596,7 +1596,7 @@ export default function FAQAutoReplyV2() {
           questions: emailQuestions.get(email.id) || [],
           answeredFAQs: answeredFAQs.filter(faq => {
             const emailQuestionsList = emailQuestions.get(email.id) || [];
-            return emailQuestionsList.some(q => 
+            return emailQuestionsList.some(q =>
               calculatePatternSimilarity(q.question, faq.question) > SIMILARITY_THRESHOLD
             );
           })
@@ -1608,10 +1608,10 @@ export default function FAQAutoReplyV2() {
       }
 
       const data = await response.json();
-      
+
       // Update email with generated reply and cache it
-      setEmails(prev => prev.map(e => 
-        e.id === email.id 
+      setEmails(prev => prev.map(e =>
+        e.id === email.id
           ? { ...e, suggestedReply: data.reply, isGeneratingReply: false }
           : e
       ));
@@ -1630,8 +1630,8 @@ export default function FAQAutoReplyV2() {
       console.error('Error generating reply:', error);
       toast.error('Failed to generate contextual reply');
       // Reset loading state on error
-      setEmails(prev => prev.map(e => 
-        e.id === email.id 
+      setEmails(prev => prev.map(e =>
+        e.id === email.id
           ? { ...e, isGeneratingReply: false }
           : e
       ));
@@ -1647,14 +1647,14 @@ export default function FAQAutoReplyV2() {
 
   const handleSaveReply = async (emailId: string) => {
     if (!editingReply) return;
-    
+
     setEmails(prev => prev.map(e => {
       if (e.id === emailId) {
         return { ...e, suggestedReply: editingReply.reply };
       }
       return e;
     }));
-    
+
     setEditingReply(null);
   };
 
@@ -1674,8 +1674,8 @@ Support Team`;
   };
 
   const toggleEmailContent = useCallback((emailId: string) => {
-    setEmails(prev => prev.map(e => 
-      e.id === emailId 
+    setEmails(prev => prev.map(e =>
+      e.id === emailId
         ? { ...e, showFullContent: !e.showFullContent }
         : e
     ));
@@ -1700,10 +1700,10 @@ Support Team`;
       const questions = emailQuestions.get(email.id) || [];
       if (questions.length === 0) return email;
 
-      const answeredQuestions = questions.filter(q => 
-        answeredFAQs.some(faq => 
-          faq.answer && 
-          faq.answer.trim() !== '' && 
+      const answeredQuestions = questions.filter(q =>
+        answeredFAQs.some(faq =>
+          faq.answer &&
+          faq.answer.trim() !== '' &&
           calculatePatternSimilarity(faq.question, q.question) > SIMILARITY_THRESHOLD
         )
       );
@@ -1713,7 +1713,7 @@ Support Team`;
 
       if (isComplete && !email.matchedFAQ && !email.isReplied && !email.isNotRelevant) {
         const bestMatch = answeredQuestions.reduce((best, current) => {
-          const matchedFAQ = answeredFAQs.find(faq => 
+          const matchedFAQ = answeredFAQs.find(faq =>
             calculatePatternSimilarity(faq.question, current.question) > SIMILARITY_THRESHOLD
           );
           if (!matchedFAQ) return best;
@@ -1745,7 +1745,7 @@ Support Team`;
   const renderEmailContent = (email: ExtendedEmail) => {
     const questions = emailQuestions.get(email.id) || [];
     const hasQuestions = questions.length > 0;
-    
+
     return (
       <div>
         {email.content && (
@@ -1765,27 +1765,27 @@ Support Team`;
   };
 
   const renderTabs = () => {
-    const readyToReplyCount = emails.filter(e => 
-      e.status === 'processed' && 
-      e.matchedFAQ && 
+    const readyToReplyCount = emails.filter(e =>
+      e.status === 'processed' &&
+      e.matchedFAQ &&
       !e.isReplied &&
       e.suggestedReply
     ).length;
 
     const tabData = [
-      { 
-        id: 'unanswered', 
-        label: 'Unanswered', 
+      {
+        id: 'unanswered',
+        label: 'Unanswered',
         mobileLabel: 'New',
-        icon: MessageCircleIcon, 
+        icon: MessageCircleIcon,
         count: emails.filter(e => !e.isReplied && !e.isNotRelevant && !e.matchedFAQ).length,
         description: 'Match FAQs to incoming customer emails'
       },
-      { 
-        id: 'suggested', 
-        label: 'Ready to Reply', 
+      {
+        id: 'suggested',
+        label: 'Ready to Reply',
         mobileLabel: 'Ready',
-        icon: CheckCircleIcon, 
+        icon: CheckCircleIcon,
         count: readyToReplyCount,
         description: 'Review and send auto-generated responses'
       },
@@ -1832,7 +1832,7 @@ Support Team`;
                   <span className="sm:hidden ml-1">{mobileLabel}</span>
                   {count > 0 && (
                     <span className={`
-                      ml-1 sm:ml-2 rounded-full px-1.5 py-0.5 text-xs font-medium 
+                      ml-1 sm:ml-2 rounded-full px-1.5 py-0.5 text-xs font-medium
                       transition-colors duration-200
                       ${activeTab === id ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-600 group-hover:bg-gray-200'}
                     `}>
@@ -1846,12 +1846,12 @@ Support Team`;
               </button>
             ))}
           </div>
-          
+
           {/* Second row: Descriptions */}
           <div className="hidden sm:flex justify-between w-full py-1.5 bg-gray-50 rounded-b-lg">
             {tabData.map(({ id, description }) => (
-              <div 
-                key={id} 
+              <div
+                key={id}
                 className={`
                   flex-1 px-2 text-center transition-colors duration-200
                   ${activeTab === id ? 'text-gray-700' : 'text-gray-500'}
@@ -1878,22 +1878,22 @@ Support Team`;
 
   const shouldShowDate = (currentEmail: ExtendedEmail, index: number, emails: ExtendedEmail[]) => {
     if (index === 0) return true;
-    
+
     const currentDate = new Date(currentEmail.receivedAt);
     const prevEmail = emails[index - 1];
     const prevDate = new Date(prevEmail.receivedAt);
-    
+
     return currentDate.toDateString() !== prevDate.toDateString();
   };
 
   const renderEmailTimeline = (email: ExtendedEmail, index: number, allEmails: ExtendedEmail[]) => {
     const date = new Date(email.receivedAt);
-    const formattedTime = date.toLocaleTimeString('en-US', { 
+    const formattedTime = date.toLocaleTimeString('en-US', {
       hour: 'numeric',
       minute: '2-digit',
-      hour12: true 
+      hour12: true
     });
-    const formattedDate = date.toLocaleDateString('en-US', { 
+    const formattedDate = date.toLocaleDateString('en-US', {
       month: 'short',
       day: 'numeric'
     });
@@ -1913,8 +1913,8 @@ Support Team`;
   };
 
   const renderUnansweredEmails = () => {
-    const filteredEmails = emails.filter(email => 
-      !email.isReplied && 
+    const filteredEmails = emails.filter(email =>
+      !email.isReplied &&
       !email.isNotRelevant &&
       (!email.matchedFAQ || !(email.id && ((emailQuestions.get(email.id)?.length ?? 0) > 0))) &&
       email.status !== 'processed'
@@ -2022,9 +2022,9 @@ Support Team`;
                 ) : hasQuestions ? (
                   <div className="flex flex-wrap gap-2 mt-2">
                     {questions.map((question, index) => {
-                      const matchedFAQ = answeredFAQs.find(faq => 
-                        faq.answer && 
-                        faq.answer.trim() !== '' && 
+                      const matchedFAQ = answeredFAQs.find(faq =>
+                        faq.answer &&
+                        faq.answer.trim() !== '' &&
                         calculatePatternSimilarity(faq.question, question.question) > SIMILARITY_THRESHOLD
                       );
                       const isAnswered = !!matchedFAQ;
@@ -2035,8 +2035,8 @@ Support Team`;
                           className={`
                             group relative inline-flex items-center px-2 py-1 rounded-full text-xs font-medium
                             transition-all duration-200 hover:shadow-md
-                            ${isAnswered 
-                              ? 'bg-green-100 text-green-800 hover:bg-green-200 border border-green-200' 
+                            ${isAnswered
+                              ? 'bg-green-100 text-green-800 hover:bg-green-200 border border-green-200'
                               : 'bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200'}
                           `}
                         >
@@ -2165,7 +2165,7 @@ Support Team`;
                 <div className="bg-yellow-50 rounded-lg p-6 mt-6">
                   <h4 className="text-sm font-medium text-yellow-800 mb-2">AI Learning Note</h4>
                   <p className="text-sm text-yellow-700">
-                    This FAQ pattern will help the AI identify and respond to similar questions in the future. 
+                    This FAQ pattern will help the AI identify and respond to similar questions in the future.
                     The more generic and well-defined the pattern, the better the AI can match it to new emails.
                   </p>
                 </div>
@@ -2224,7 +2224,7 @@ Support Team`;
                 <div className="h-8 w-20 bg-gray-200 rounded"></div>
               </div>
             </div>
-            
+
             {/* Content */}
             <div className="space-y-2">
               <div className="h-4 bg-gray-200 rounded w-full"></div>
@@ -2279,16 +2279,16 @@ Support Team`;
     // Get list of removed email IDs
     const removedEmailsCache = loadFromCache('removed_from_ready_emails') as RemovedEmailsCache | null;
     const removedEmailIds = new Set(removedEmailsCache?.emails || []);
-    
+
     // Only show emails that are processed, have a matched FAQ, haven't been replied to, and haven't been removed
-    const readyToReplyEmails = emails.filter(e => 
-      e.status === 'processed' && 
-      e.matchedFAQ && 
+    const readyToReplyEmails = emails.filter(e =>
+      e.status === 'processed' &&
+      e.matchedFAQ &&
       !e.isReplied &&
       e.suggestedReply &&
       !removedEmailIds.has(e.id)
     );
-    
+
     return (
       <div className="space-y-8">
         {readyToReplyEmails.length === 0 ? (
@@ -2368,7 +2368,7 @@ Support Team`;
                       </button>
                     )}
                   </div>
-                  
+
                   <div className="relative">
                     <div className="absolute -left-2 top-3 w-1 h-[calc(100%-24px)] bg-purple-100 rounded-full"></div>
                     <div className="bg-purple-50 rounded-lg p-4 pl-6">
@@ -2413,7 +2413,7 @@ Support Team`;
   const renderFAQLibrary = () => {
     console.log('=== Rendering FAQ Library ===');
     console.log('Current FAQs:', answeredFAQs);
-    
+
     if (loadingFAQs) {
       return (
         <div className="flex justify-center items-center h-64">
@@ -2423,10 +2423,10 @@ Support Team`;
     }
 
     // Filter to only show FAQs with actual answers
-    const validFAQs = answeredFAQs.filter(faq => 
-      faq.answer && 
-      faq.answer.trim() !== '' && 
-      faq.question && 
+    const validFAQs = answeredFAQs.filter(faq =>
+      faq.answer &&
+      faq.answer.trim() !== '' &&
+      faq.question &&
       faq.question.trim() !== ''
     );
 
@@ -2694,7 +2694,7 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
 
       const readyRef = doc(db, 'ready_to_reply', 'latest');
       const readyDoc = await getDoc(readyRef);
-      
+
       if (readyDoc.exists()) {
         const { emails, timestamp } = readyDoc.data();
         if (Date.now() - timestamp < FIREBASE_CACHE_DURATION) {
@@ -2724,14 +2724,14 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
       }));
 
       // Get current ready to reply emails excluding the removed one
-      const readyToReplyEmails = emails.filter(e => 
-        e.id !== email.id && 
-        e.status === 'processed' && 
-        e.matchedFAQ && 
+      const readyToReplyEmails = emails.filter(e =>
+        e.id !== email.id &&
+        e.status === 'processed' &&
+        e.matchedFAQ &&
         !e.isReplied &&
         e.suggestedReply
       );
-      
+
       // Update Firebase cache
       await saveReadyToReplyToFirebase(readyToReplyEmails);
 
@@ -2769,8 +2769,8 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
 
   // Add this helper function inside the component
   const handleShowFullContent = useCallback((emailId: string): void => {
-    setEmails((prev: ExtendedEmail[]) => prev.map((e: ExtendedEmail) => 
-      e.id === emailId 
+    setEmails((prev: ExtendedEmail[]) => prev.map((e: ExtendedEmail) =>
+      e.id === emailId
         ? { ...e, showFullContent: true }
         : e
     ));
@@ -2784,7 +2784,7 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
         isNotRelevant: false,
         irrelevanceReason: undefined
       };
-      
+
       setEmails((prevEmails: ExtendedEmail[]) =>
         prevEmails.map((e) => (e.id === email.id ? updatedEmail : e))
       );
@@ -2796,7 +2796,7 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
 
   function renderNotRelevantEmails() {
     const notRelevantEmails = emails.filter(email => email.isNotRelevant);
-    
+
     return (
       <div className="space-y-8 relative pl-[4.5rem]">
         {notRelevantEmails.map((email, index) => (
@@ -2985,19 +2985,19 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
   // Update the email state management
   const handleEmailUpdate = (email: ExtendedEmail | null) => {
     if (!email) return;
-    
-    setEmails(prevEmails => 
-      prevEmails.map(e => 
-        e.id === email.id 
-          ? { ...e, ...email, status: (email.status || e.status || 'pending') as ExtendedEmail['status'] } 
+
+    setEmails(prevEmails =>
+      prevEmails.map(e =>
+        e.id === email.id
+          ? { ...e, ...email, status: (email.status || e.status || 'pending') as ExtendedEmail['status'] }
           : e
       )
     );
   };
 
   const filterReadyEmails = (emails: ExtendedEmail[]) => {
-    return emails.filter(email => 
-      email.id && 
+    return emails.filter(email =>
+      email.id &&
       (!email.matchedFAQ || !(email.id && ((emailQuestions.get(email.id)?.length ?? 0) > 0))) &&
       !email.isNotRelevant &&
       !email.isReplied
@@ -3036,4 +3036,4 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
       {renderAnswerModal()}
     </Layout>
   );
-} 
+}
