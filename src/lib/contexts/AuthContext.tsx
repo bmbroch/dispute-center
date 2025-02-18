@@ -69,7 +69,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setLoading(true);
         const savedTokens = localStorage.getItem('auth_tokens');
         const savedUserInfo = localStorage.getItem('user_info');
-        
+
         if (!savedTokens) {
           setLoading(false);
           return;
@@ -77,7 +77,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         const tokens = JSON.parse(savedTokens);
         const userInfo = savedUserInfo ? JSON.parse(savedUserInfo) : null;
-        
+
         // Validate token structure
         if (!tokens.access_token) {
           throw new Error('Invalid token structure');
@@ -85,7 +85,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         // Set the tokens in the service
         googleAuthService.setTokens(tokens);
-        
+
         try {
           // Try to get user info with current token
           const freshUserInfo = await googleAuthService.getUserInfo();
@@ -119,7 +119,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 refreshToken: newTokens.refresh_token || tokens.refresh_token,
               };
               setUser(newUser);
-              
+
               // Save the new tokens and user info
               localStorage.setItem('auth_tokens', JSON.stringify({
                 access_token: newTokens.access_token,
@@ -175,7 +175,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const signIn = async () => {
     try {
       const { tokens, userInfo } = await googleAuthService.signInWithPopup();
-      
+
       // Save auth state
       localStorage.setItem('auth_tokens', JSON.stringify(tokens));
       localStorage.setItem('user_info', JSON.stringify({
@@ -183,7 +183,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         name: userInfo.name,
         picture: userInfo.picture,
       }));
-      
+
       setUser({
         email: userInfo.email,
         name: userInfo.name,
@@ -286,15 +286,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider 
-      value={{ 
-        user, 
-        loading, 
-        error, 
-        signIn, 
-        signOut: handleSignOut, 
+    <AuthContext.Provider
+      value={{
+        user,
+        loading,
+        error,
+        signIn,
+        signOut: handleSignOut,
         refreshAccessToken,
-        checkGmailAccess 
+        checkGmailAccess
       }}
     >
       {children}

@@ -67,3 +67,4 @@ new_service_account_key.json
 *.local
 local/
 temp/
+.env*.local

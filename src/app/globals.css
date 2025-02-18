@@ -2,6 +2,8 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Your custom styles here */
+
 :root {
   --foreground-rgb: 0, 0, 0;
   --background-start-rgb: 214, 219, 220;
@@ -180,7 +182,7 @@ body {
   .email-content {
     color: #e5e7eb;
   }
-  
+
   .email-content p,
   .email-content div,
   .email-content li,
@@ -188,27 +190,27 @@ body {
   .email-content th {
     color: #e5e7eb;
   }
-  
+
   .email-content pre,
   .email-content code {
     background: #374151;
     color: #e5e7eb;
   }
-  
+
   .email-content blockquote {
     border-left-color: #4b5563;
     color: #9ca3af;
   }
-  
+
   .email-content a {
     color: #60a5fa;
   }
-  
+
   .gmail_quote {
     border-left-color: #4b5563;
     color: #9ca3af;
   }
-  
+
   .gmail_attr {
     color: #9ca3af;
   }

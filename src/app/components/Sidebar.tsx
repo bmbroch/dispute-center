@@ -70,14 +70,12 @@ export function Sidebar() {
         } md:translate-x-0`}
       >
         {/* Logo */}
-        <div className="p-4 border-b border-gray-200 flex justify-between items-center">
-          <h1 className="text-2xl font-bold text-gray-900">SubHub</h1>
-          <button
-            onClick={() => setIsOpen(false)}
-            className="p-2 rounded-lg hover:bg-gray-100 md:hidden"
-          >
-            <X className="w-5 h-5 text-gray-600" />
-          </button>
+        <div className="p-4 border-b border-gray-200">
+          <div className="flex items-center">
+            <h1 className="text-xl font-semibold text-gray-900">
+              SubHub
+            </h1>
+          </div>
         </div>
 
         {/* User Profile Section - Only shown when logged in */}
@@ -128,42 +126,42 @@ export function Sidebar() {
         <div className="p-4 flex-1">
           <Link
             href="/"
-            className={`flex items-center gap-3 px-4 py-3 rounded-lg text-gray-700 ${
+            className={`flex items-center gap-3 px-4 py-3 rounded-lg text-gray-700 font-medium ${
               isActive('/') ? 'bg-red-100 text-red-600' : 'hover:bg-gray-50'
             }`}
           >
             <Home className="w-5 h-5" />
-            <span className="font-medium">Home</span>
+            <span>Home</span>
           </Link>
 
           <Link
             href="/knowledge"
-            className={`flex items-center gap-3 px-4 py-3 rounded-lg text-gray-700 mt-2 ${
+            className={`flex items-center gap-3 px-4 py-3 rounded-lg text-gray-700 font-medium mt-2 ${
               isActive('/knowledge') ? 'bg-red-100 text-red-600' : 'hover:bg-gray-50'
             }`}
           >
             <BookOpen className="w-5 h-5" />
-            <span className="font-medium">Knowledge Base</span>
+            <span>Knowledge Base</span>
           </Link>
 
           <Link
             href="/dispute"
-            className={`flex items-center gap-3 px-4 py-3 rounded-lg text-gray-700 mt-2 ${
+            className={`flex items-center gap-3 px-4 py-3 rounded-lg text-gray-700 font-medium mt-2 ${
               isActive('/dispute') ? 'bg-red-100 text-red-600' : 'hover:bg-gray-50'
             }`}
           >
             <Scale className="w-5 h-5" />
-            <span className="font-medium">Dispute Resolution</span>
+            <span>Dispute Resolution</span>
           </Link>
 
           <Link
             href="/faq_autoreply_v2"
-            className={`flex items-center gap-3 px-4 py-3 rounded-lg text-gray-700 mt-2 ${
+            className={`flex items-center gap-3 px-4 py-3 rounded-lg text-gray-700 font-medium mt-2 ${
               isActive('/faq_autoreply_v2') ? 'bg-red-100 text-red-600' : 'hover:bg-gray-50'
             }`}
           >
             <MessageSquareQuote className="w-5 h-5" />
-            <span className="font-medium">FAQ Auto Reply</span>
+            <span>FAQ Auto Reply</span>
           </Link>
         </div>
 
@@ -172,57 +170,57 @@ export function Sidebar() {
           <div className="mt-auto p-4 space-y-2">
             <Link
               href="/account"
-              className={`flex items-center gap-3 px-4 py-3 rounded-lg text-gray-700 ${
+              className={`flex items-center gap-3 px-4 py-3 rounded-lg text-gray-700 font-medium ${
                 isActive('/account') ? 'bg-gray-100' : 'hover:bg-gray-50'
               }`}
             >
               <User className="w-5 h-5" />
-              <span className="font-medium">Account</span>
+              <span>Account</span>
             </Link>
 
             <Link
               href="/subscription"
-              className={`flex items-center gap-3 px-4 py-3 rounded-lg text-gray-700 ${
+              className={`flex items-center gap-3 px-4 py-3 rounded-lg text-gray-700 font-medium ${
                 isActive('/subscription') ? 'bg-gray-100' : 'hover:bg-gray-50'
               }`}
             >
               <CreditCard className="w-5 h-5" />
-              <span className="font-medium">Subscription</span>
+              <span>Subscription</span>
             </Link>
 
             <Link
               href="/settings"
-              className={`flex items-center gap-3 px-4 py-3 rounded-lg text-gray-700 ${
+              className={`flex items-center gap-3 px-4 py-3 rounded-lg text-gray-700 font-medium ${
                 isActive('/settings') ? 'bg-gray-100' : 'hover:bg-gray-50'
               }`}
             >
               <Settings className="w-5 h-5" />
-              <span className="font-medium">Settings</span>
+              <span>Settings</span>
             </Link>
 
             <Link
               href="/support"
-              className={`flex items-center gap-3 px-4 py-3 rounded-lg text-gray-700 ${
+              className={`flex items-center gap-3 px-4 py-3 rounded-lg text-gray-700 font-medium ${
                 isActive('/support') ? 'bg-gray-100' : 'hover:bg-gray-50'
               }`}
             >
               <HelpCircle className="w-5 h-5" />
-              <span className="font-medium">Support</span>
+              <span>Support</span>
             </Link>
 
             <button
               onClick={handleSignOut}
-              className="flex items-center gap-3 px-4 py-3 rounded-lg text-gray-700 hover:bg-gray-50 w-full"
+              className="flex items-center gap-3 px-4 py-3 rounded-lg text-gray-700 font-medium hover:bg-gray-50 w-full"
             >
               <LogOut className="w-5 h-5" />
-              <span className="font-medium">Sign Out</span>
+              <span>Sign Out</span>
             </button>
           </div>
         ) : (
           <div className="mt-auto p-4">
             <button
               onClick={handleSignIn}
-              className="w-full flex items-center justify-center gap-3 px-4 py-3 border border-gray-300 rounded-lg text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors"
+              className="w-full flex items-center justify-center gap-3 px-4 py-3 border border-gray-300 rounded-lg text-gray-700 font-medium bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors"
             >
               <svg className="w-5 h-5" viewBox="0 0 24 24">
                 <path

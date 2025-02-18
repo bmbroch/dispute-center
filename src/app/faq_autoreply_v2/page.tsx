@@ -257,18 +257,40 @@ const loadEmailsFromFirebase = async () => {
           return bTime - aTime;
         });
 
-        // Combine not relevant emails with sorted emails, ensuring no duplicates
-        const existingIds = new Set(sortedEmails.map((e: ExtendedEmail) => e.id));
+        // Deduplicate emails by threadId, keeping only the most recent one
+        const threadMap = new Map<string, ExtendedEmail>();
+        sortedEmails.forEach((email: ExtendedEmail) => {
+          const threadId = email.threadId;
+          if (!threadId) return;
+
+          if (!threadMap.has(threadId) ||
+            (typeof email.receivedAt === 'string' ? new Date(email.receivedAt).getTime() : Number(email.receivedAt)) >
+            (typeof threadMap.get(threadId)!.receivedAt === 'string' ? new Date(threadMap.get(threadId)!.receivedAt).getTime() : Number(threadMap.get(threadId)!.receivedAt))) {
+            threadMap.set(threadId, email);
+          }
+        });
+
+        const deduplicatedEmails = Array.from(threadMap.values());
+
+        // Combine not relevant emails with deduplicated emails, ensuring no duplicates by threadId
+        const existingThreadIds = new Set(deduplicatedEmails.map((e: ExtendedEmail) => e.threadId));
         const combinedEmails = [
-          ...sortedEmails,
-          ...notRelevantEmails.filter((e: ExtendedEmail) => !existingIds.has(e.id))
+          ...deduplicatedEmails,
+          ...notRelevantEmails.filter((e: ExtendedEmail) => !existingThreadIds.has(e.threadId))
         ];
 
         return combinedEmails;
       }
+    } else {
+      // Create the email_cache collection with an empty array if it doesn't exist
+      await setDoc(cacheRef, {
+        emails: [],
+        timestamp: Date.now()
+      });
+      console.log('Created email_cache collection with empty array');
     }
 
-    // If cache is invalid, at least return the not relevant emails
+    // If cache is invalid or empty, at least return the not relevant emails
     return notRelevantEmails.length > 0 ? notRelevantEmails : null;
   } catch (error) {
     console.error('Error loading emails from Firebase:', error);
@@ -281,9 +303,28 @@ const saveEmailsToFirebase = async (emails: Email[]) => {
     const db = getFirebaseDB();
     if (!db) return;
 
+    // Sanitize emails before saving to Firebase
+    const sanitizedEmails = emails.map(email => ({
+      id: email.id,
+      threadId: email.threadId,
+      subject: email.subject || '',
+      sender: email.sender || '',
+      content: email.content || '',
+      receivedAt: email.receivedAt || Date.now(),
+      isReplied: 'isReplied' in email ? email.isReplied : false,
+      isNotRelevant: 'isNotRelevant' in email ? email.isNotRelevant : false,
+      status: 'status' in email ? email.status : 'new',
+      matchedFAQ: email.matchedFAQ ? {
+        question: email.matchedFAQ.question || '',
+        answer: email.matchedFAQ.answer || '',
+        confidence: email.matchedFAQ.confidence || 0
+      } : null,
+      suggestedReply: email.suggestedReply || ''
+    }));
+
     const cacheRef = doc(db, FIREBASE_CACHE_COLLECTION, 'latest');
     await setDoc(cacheRef, {
-      emails,
+      emails: sanitizedEmails,
       timestamp: Date.now()
     });
   } catch (error) {
@@ -842,17 +883,18 @@ export default function FAQAutoReplyV2() {
   }, [emailQuestions, answeredFAQs, calculatePatternSimilarity]);
 
   // Update the loadEmails function to handle the new pagination
-  const loadEmails = useCallback(async (skipCache: boolean = false, pageNumber?: number) => {
+  const loadEmails = useCallback(async () => {
     if (!user?.accessToken) {
       toast.error('Please sign in to access emails');
       return;
     }
 
+    setIsLoading(true);
     try {
-      setIsLoading(true);
-      const response = await fetch(`/api/emails/inbox${nextPageToken ? `?pageToken=${nextPageToken}` : ''}`, {
+      const response = await fetch('/api/emails/inbox', {
         headers: {
-          'Authorization': `Bearer ${user.accessToken}`
+          'Authorization': `Bearer ${user.accessToken}`,
+          'X-Page-Token': nextPageToken || ''
         }
       });
 
@@ -861,16 +903,24 @@ export default function FAQAutoReplyV2() {
       }
 
       const data = await response.json();
+      console.log('Loaded emails:', data);
 
-      if (data.emails) {
+      if (data.emails && data.emails.length > 0) {
         setEmails(prevEmails => {
-          if (skipCache) {
-            return data.emails as ExtendedEmail[];
-          }
-          const newEmails = data.emails.filter((email: ExtendedEmail) =>
-            !prevEmails.some(prevEmail => prevEmail.id === email.id)
-          );
-          return [...prevEmails, ...newEmails] as ExtendedEmail[];
+          const newEmails = [...prevEmails, ...data.emails] as ExtendedEmail[];
+          // Convert ExtendedEmail to Email before saving to Firebase
+          const emailsForCache = newEmails.map(email => ({
+            id: email.id,
+            threadId: email.threadId,
+            subject: email.subject,
+            sender: email.sender,
+            content: email.content,
+            receivedAt: typeof email.receivedAt === 'number' ? new Date(email.receivedAt).toISOString() : email.receivedAt,
+            threadMessages: email.threadMessages
+          }));
+          // Save the converted emails to Firebase cache
+          saveEmailsToFirebase(emailsForCache);
+          return newEmails;
         });
         setNextPageToken(data.nextPageToken);
         setHasMore(!!data.nextPageToken);
@@ -952,7 +1002,7 @@ export default function FAQAutoReplyV2() {
         }
 
         // Finally, load fresh emails
-        await loadEmails(true);
+        await loadEmails();
 
       } catch (error) {
         console.error('Error initializing:', error);
@@ -1098,11 +1148,11 @@ export default function FAQAutoReplyV2() {
       console.error('Error updating emails:', error);
     });
 
-  }, [answeredFAQs, checkEmailAnsweredStatus, emailQuestions, calculatePatternSimilarity]);
+  }, [answeredFAQs, checkEmailAnsweredStatus, emailQuestions, calculatePatternSimilarity, emails]);
 
   const handleLoadMore = () => {
     if (!isLoading && hasMore) {
-      loadEmails(false);
+      loadEmails();
     }
   };
 
@@ -1749,12 +1799,12 @@ Support Team`;
     return (
       <div>
         {email.content && (
-          <div className="whitespace-pre-wrap">{email.content}</div>
+          <div className="whitespace-pre-wrap text-gray-800 [&_*]:text-gray-800">{email.content}</div>
         )}
         {hasQuestions && (
           <div className="mt-4">
             {questions.map((question, index) => (
-              <div key={`${email.id}-q-${index}`} className="text-sm text-gray-600">
+              <div key={`${email.id}-question-${index}`} className="text-sm text-gray-600">
                 {question.question}
               </div>
             ))}
@@ -1943,7 +1993,7 @@ Support Team`;
 
           return (
             <div
-              key={email.id}
+              key={`unanswered-${email.id}-${index}`}
               className="bg-white rounded-lg shadow-sm pt-4 pb-6 px-6 space-y-4 relative"
               style={{ marginBottom: '2rem' }}
             >
@@ -1966,135 +2016,10 @@ Support Team`;
                   </button>
                 </div>
               </div>
-
-              {/* Email Content with Thread Support */}
               {renderEmailContent(email)}
-
-              <div className="mt-3">
-                <div className="flex items-center justify-between">
-                  <h4 className="text-xs font-medium text-gray-900">Questions:</h4>
-                  {!isAnalyzing && (
-                    <div className="flex items-center gap-2">
-                      {hasQuestions ? (
-                        <button
-                          onClick={() => handleCreateFAQ(email)}
-                          className="inline-flex items-center p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-full transition-colors"
-                          title="Re-analyze email"
-                        >
-                          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                          </svg>
-                        </button>
-                      ) : (
-                        <button
-                          onClick={() => handleCreateFAQ(email)}
-                          disabled={isAnalyzing}
-                          className="inline-flex items-center px-3 py-1.5 border border-transparent text-xs font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50"
-                        >
-                          {isAnalyzing ? (
-                            <>
-                              <svg className="animate-spin -ml-1 mr-2 h-3 w-3 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                              </svg>
-                              Analyzing...
-                            </>
-                          ) : (
-                            <>
-                              <LightbulbIcon className="h-3 w-3 mr-1.5" />
-                              Extract Questions
-                            </>
-                          )}
-                        </button>
-                      )}
-                    </div>
-                  )}
-                </div>
-
-                {/* Show loading state or questions */}
-                {isAnalyzing ? (
-                  <div className="flex items-center justify-center py-4">
-                    <svg className="animate-spin h-5 w-5 text-gray-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                  </div>
-                ) : hasQuestions ? (
-                  <div className="flex flex-wrap gap-2 mt-2">
-                    {questions.map((question, index) => {
-                      const matchedFAQ = answeredFAQs.find(faq =>
-                        faq.answer &&
-                        faq.answer.trim() !== '' &&
-                        calculatePatternSimilarity(faq.question, question.question) > SIMILARITY_THRESHOLD
-                      );
-                      const isAnswered = !!matchedFAQ;
-                      return (
-                        <button
-                          key={index}
-                          onClick={() => handleAddToFAQLibrary(question)}
-                          className={`
-                            group relative inline-flex items-center px-2 py-1 rounded-full text-xs font-medium
-                            transition-all duration-200 hover:shadow-md
-                            ${isAnswered
-                              ? 'bg-green-100 text-green-800 hover:bg-green-200 border border-green-200'
-                              : 'bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200'}
-                          `}
-                        >
-                          {isAnswered ? (
-                            <CheckCircleIcon className="h-3 w-3 mr-1" />
-                          ) : (
-                            <PencilIcon className="h-3 w-3 mr-1" />
-                          )}
-                          {truncateQuestion(question.question)}
-                          {isAnswered && (
-                            <div className="absolute -top-1 -right-1 h-3 w-3 bg-green-500 rounded-full border-2 border-white flex items-center justify-center">
-                              <CheckCircleIcon className="h-2 w-2 text-white" />
-                            </div>
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <div className="text-xs text-gray-500 py-2">
-                    No questions extracted yet
-                  </div>
-                )}
-              </div>
             </div>
           );
         })}
-
-        {/* Load More Button */}
-        {hasMore && !loadingMore && (
-          <div className="flex justify-center mt-8">
-            <button
-              onClick={() => loadEmails(false, page + 1)}
-              className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-            >
-              {loadingMore ? (
-                <>
-                  <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-gray-700" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                  </svg>
-                  Loading...
-                </>
-              ) : (
-                'Load 5 More'
-              )}
-            </button>
-          </div>
-        )}
-
-        {/* Loading More Indicator */}
-        {loadingMore && (
-          <div className="flex justify-center mt-8">
-            <div className="animate-pulse flex space-x-4">
-              <div className="h-4 w-24 bg-gray-200 rounded"></div>
-            </div>
-          </div>
-        )}
       </div>
     );
   };
@@ -2198,7 +2123,7 @@ Support Team`;
   const handleRefresh = async () => {
     try {
       setIsLoading(true);
-      await loadEmails(true);
+      await loadEmails();
       toast.success('Emails refreshed successfully');
     } catch (error) {
       console.error('Error refreshing emails:', error);
@@ -2661,7 +2586,11 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
           subject: email.subject,
           sender: email.sender,
           content: email.content,
-          receivedAt: typeof email.receivedAt === 'string' ? Date.parse(email.receivedAt) : email.receivedAt
+          receivedAt: typeof email.receivedAt === 'string'
+            ? Date.parse(email.receivedAt)
+            : typeof email.receivedAt === 'number'
+              ? email.receivedAt
+              : new Date().getTime()
         };
 
         return {
@@ -2801,7 +2730,7 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
       <div className="space-y-8 relative pl-[4.5rem]">
         {notRelevantEmails.map((email, index) => (
           <div
-            key={email.id}
+            key={`not-relevant-${email.id}-${index}`}
             className="bg-white rounded-lg shadow-sm p-6 space-y-4 relative"
             style={{ marginBottom: '2rem' }}
           >
@@ -2825,8 +2754,6 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
                 </button>
               </div>
             </div>
-
-            {/* Email Content with Thread Support */}
             {renderEmailContent(email)}
           </div>
         ))}
@@ -2855,7 +2782,7 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
           <>
             {emails.map((email, index) => (
               <div
-                key={email.id}
+                key={`all-${email.id}-${index}`}
                 className="bg-white rounded-lg shadow-sm pt-4 pb-6 px-6 space-y-4 relative"
                 style={{ marginBottom: '2rem' }}
               >
@@ -2868,67 +2795,11 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
                     <div className="text-sm text-gray-500">
                       From: {email.sender}
                     </div>
-                    {/* Add status indicators */}
-                    <div className="flex gap-2 mt-2">
-                      {email.isReplied && (
-                        <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                          <CheckCircleIcon className="h-3 w-3 mr-1" />
-                          Replied
-                        </span>
-                      )}
-                      {email.isNotRelevant && (
-                        <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
-                          <XCircleIcon className="h-3 w-3 mr-1" />
-                          Not Relevant
-                        </span>
-                      )}
-                      {email.matchedFAQ && (
-                        <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                          <BookOpenIcon className="h-3 w-3 mr-1" />
-                          FAQ Matched
-                        </span>
-                      )}
-                    </div>
                   </div>
                 </div>
-
-                {/* Email Content with Thread Support */}
                 {renderEmailContent(email)}
-
-                {/* Show matched FAQ if exists */}
-                {email.matchedFAQ && (
-                  <div className="mt-4 bg-blue-50 rounded-lg p-4">
-                    <h4 className="text-sm font-medium text-blue-900 mb-2">Matched FAQ:</h4>
-                    <p className="text-sm text-blue-800">{email.matchedFAQ.question}</p>
-                    {email.matchedFAQ.answer && (
-                      <p className="text-sm text-blue-700 mt-2">{email.matchedFAQ.answer}</p>
-                    )}
-                  </div>
-                )}
               </div>
             ))}
-
-            {/* Load More Button */}
-            {hasMore && !loadingMore && (
-              <div className="flex justify-center mt-8">
-                <button
-                  onClick={() => loadEmails(false, page + 1)}
-                  className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-                >
-                  {loadingMore ? (
-                    <>
-                      <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-gray-700" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                      </svg>
-                      Loading...
-                    </>
-                  ) : (
-                    'Load 5 More'
-                  )}
-                </button>
-              </div>
-            )}
           </>
         )}
       </div>
@@ -2940,7 +2811,7 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
     <div className="flex justify-center mt-4 mb-8">
       <button
         className="bg-blue-500 hover:bg-blue-600 text-white font-semibold py-2 px-4 rounded"
-        onClick={() => loadEmails(false)}
+        onClick={() => loadEmails()}
         disabled={isLoading}
       >
         {isLoading ? 'Loading...' : 'Load More'}

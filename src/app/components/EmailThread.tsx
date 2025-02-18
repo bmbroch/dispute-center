@@ -47,12 +47,12 @@ function formatDate(dateString: string): string {
 async function parseEmailBody(body: string): Promise<string> {
   // Check if content is HTML
   const isHTML = /<[a-z][\s\S]*>/i.test(body);
-  
+
   if (isHTML) {
     // Sanitize HTML content
     const cleanHtml = DOMPurify.sanitize(body, {
       ALLOWED_TAGS: [
-        'div', 'span', 'p', 'br', 'strong', 'em', 'blockquote', 
+        'div', 'span', 'p', 'br', 'strong', 'em', 'blockquote',
         'a', 'ul', 'ol', 'li', 'img', 'table', 'tr', 'td', 'th'
       ],
       ALLOWED_ATTR: ['href', 'class', 'style', 'target', 'src', 'alt', 'width', 'height'],
@@ -90,7 +90,7 @@ function parseEmailAddress(from: string): { name: string; email: string } {
   // "john@example.com"
   const match = from.match(/(?:"?([^"]*)"?\s)?(?:<?(.+@[^>]+)>?)/);
   if (!match) return { name: from, email: from };
-  
+
   const [, name, email] = match;
   return {
     name: name?.trim() || email.split('@')[0],
@@ -107,7 +107,7 @@ function EmailMessageContent({ message, showDebug }: EmailMessageProps) {
   const [formattedBody, setFormattedBody] = useState<string>('');
   const [isExpanded, setIsExpanded] = useState(false);
   const isHtml = message.contentType?.toLowerCase().includes('html');
-  
+
   useEffect(() => {
     const formatBody = async () => {
       const sanitizedBody = isHtml ? DOMPurify.sanitize(message.body, {
@@ -115,17 +115,17 @@ function EmailMessageContent({ message, showDebug }: EmailMessageProps) {
         ALLOWED_TAGS: ['p', 'br', 'b', 'i', 'em', 'strong', 'a', 'ul', 'ol', 'li', 'blockquote'],
         ALLOWED_ATTR: ['href', 'target']
       }) : message.body;
-      
+
       const formatted = await parseEmailBody(sanitizedBody || '');
       setFormattedBody(formatted);
     };
-    
+
     formatBody();
   }, [message.body, isHtml]);
 
   return (
     <div className="mb-4 p-4 bg-white rounded-lg shadow">
-      <div 
+      <div
         className={`pl-11 text-sm text-gray-700 space-y-2 email-content ${!isExpanded ? 'max-h-[60px] overflow-hidden relative' : ''}`}
         dangerouslySetInnerHTML={{ __html: formattedBody }}
       />
@@ -272,4 +272,4 @@ export default function EmailThread({ email, onClose }: EmailThreadProps) {
       </div>
     </div>
   );
-} 
+}

@@ -68,8 +68,8 @@ export function EmailList({
   };
 
   const toggleThread = (threadId: string) => {
-    setExpandedThreads(prev => 
-      prev.includes(threadId) 
+    setExpandedThreads(prev =>
+      prev.includes(threadId)
         ? prev.filter(id => id !== threadId)
         : [...prev, threadId]
     );
@@ -182,4 +182,4 @@ export function EmailList({
       })}
     </div>
   );
-} 
+}

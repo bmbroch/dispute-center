@@ -88,4 +88,4 @@ export interface ExtendedEmail extends BaseEmail {
     message: string;
     details?: any;
   };
-} 
+}

@@ -136,12 +136,12 @@ async function processBatch(emails: any[], faqs: any[]) {
       const response = await openai.chat.completions.create({
         model: "gpt-4",
         messages: [
-          { 
-            role: "system", 
-            content: "You are an expert at matching customer support emails to FAQ patterns. Compare the email content to the given FAQ questions and determine the best match. Return a JSON object with bestMatch and confidence fields." 
+          {
+            role: "system",
+            content: "You are an expert at matching customer support emails to FAQ patterns. Compare the email content to the given FAQ questions and determine the best match. Return a JSON object with bestMatch and confidence fields."
           },
-          { 
-            role: "user", 
+          {
+            role: "user",
             content: JSON.stringify({
               email: {
                 subject: email.subject,
@@ -185,14 +185,14 @@ async function getEmailAnalysis(email: { threadId: string; subject: string; cont
     // Check cache first
     const analysisRef = db.collection('email_analyses').doc(email.threadId);
     const analysisDoc = await analysisRef.get();
-    
+
     if (!forceRefresh && analysisDoc.exists) {
       const cachedAnalysis = analysisDoc.data() as CachedAnalysis | undefined;
       if (!cachedAnalysis) {
         console.debug(`Invalid cache data for thread ${email.threadId}`);
       } else {
         const cacheAge = Date.now() - new Date(cachedAnalysis.timestamp).getTime();
-        
+
         // Return cached analysis if it's not expired
         if (cacheAge < CACHE_EXPIRY) {
           console.debug(`Using cached analysis for thread: ${email.threadId}`);
@@ -234,7 +234,7 @@ async function getEmailAnalysis(email: { threadId: string; subject: string; cont
             2. Match with existing FAQs if possible
             3. Generate suggested questions for new FAQs if needed
             4. Analyze sentiment and key points
-            
+
             Return a JSON object with:
             {
               "suggestedQuestions": string[],
@@ -331,12 +331,12 @@ async function getEmailAnalysis(email: { threadId: string; subject: string; cont
 // Modify processBatchWithRateLimit to handle errors better
 async function processBatchWithRateLimit(emails: any[], db: FirebaseFirestore.Firestore) {
   const results = [];
-  
+
   // Process in smaller batches
   for (let i = 0; i < emails.length; i += BATCH_SIZE) {
     const batch = emails.slice(i, i + BATCH_SIZE);
     console.log(`Processing batch ${i / BATCH_SIZE + 1} of ${Math.ceil(emails.length / BATCH_SIZE)}`);
-    
+
     // Process each email in the batch
     const batchResults = await Promise.all(
       batch.map(async (email) => {
@@ -353,14 +353,14 @@ async function processBatchWithRateLimit(emails: any[], db: FirebaseFirestore.Fi
         }
       })
     );
-    
+
     // Filter out null results
     const validResults = batchResults.filter(Boolean);
     results.push(...validResults);
-    
+
     console.log(`Batch ${i / BATCH_SIZE + 1} complete: ${validResults.length}/${batch.length} successful`);
   }
-  
+
   return results;
 }
 
@@ -377,7 +377,7 @@ function isCustomerSupportEmail(subject: string, content: string): boolean {
   const lowerContent = content.toLowerCase();
 
   // Quick check for obvious support keywords
-  return supportKeywords.some(keyword => 
+  return supportKeywords.some(keyword =>
     lowerSubject.includes(keyword) || lowerContent.includes(keyword)
   );
 }
@@ -387,7 +387,7 @@ async function getCachedEmailQuestions(threadId: string, db: FirebaseFirestore.F
   try {
     const emailAnalysisRef = db.collection('email_analyses').doc(threadId);
     const doc = await emailAnalysisRef.get();
-    
+
     if (doc.exists) {
       const data = doc.data();
       return data?.questions || null;
@@ -407,7 +407,7 @@ async function processThreadsWithRateLimit(
 ) {
   const results = [];
   const batches = [];
-  
+
   // Split threads into batches
   for (let i = 0; i < threads.length; i += GMAIL_RATE_LIMIT.BATCH_SIZE) {
     batches.push(threads.slice(i, i + GMAIL_RATE_LIMIT.BATCH_SIZE));
@@ -431,13 +431,13 @@ async function processThreadsWithRateLimit(
     );
 
     results.push(...batchResults.filter(Boolean));
-    
+
     // Add delay between batches to respect rate limits
     if (batches.indexOf(batch) < batches.length - 1) {
       await sleep(GMAIL_RATE_LIMIT.DELAY_BETWEEN_BATCHES);
     }
   }
-  
+
   return results;
 }
 
@@ -460,7 +460,7 @@ async function getGmailClient(accessToken: string): Promise<gmail_v1.Gmail | nul
       access_token: accessToken,
       token_type: 'Bearer'
     });
-    
+
     if (!oauth2Client) {
       console.error('Failed to initialize OAuth2 client');
       return null;
@@ -624,7 +624,7 @@ export async function GET(request: NextRequest) {
 
 // Simple confidence calculation function
 function calculateConfidence(subject: string, content: string, faqQuestion: string): number {
-  const normalizeText = (text: string) => 
+  const normalizeText = (text: string) =>
     text.toLowerCase().replace(/[^\w\s]/g, '').trim();
 
   const subjectNormalized = normalizeText(subject);
@@ -694,7 +694,7 @@ function extractEmailBody(message: gmail_v1.Schema$Message): { content: string |
 
     // Try to find text content in the message
     const content = findTextContent(message.payload);
-    
+
     if (content) {
       return { content };
     }
@@ -755,4 +755,4 @@ function parseGmailDate(dateStr: string): string {
     console.error('Error parsing date:', error);
     return new Date().toISOString();
   }
-} 
+}
