@@ -1,7 +1,29 @@
 ---
-description:
-globs:
+description: Project Development Rules
+globs: *.tsx,*.ts
 ---
+
+# Local Development Environment Setup
+
+## Port Configuration
+- Always run the development server on port 3002
+- Before starting the server, ensure no process is running on port 3002
+
+## Starting the Development Server
+1. First, kill any existing process on port 3002:
+   ```bash
+   sudo lsof -i :3002 | grep LISTEN | awk '{print $2}' | xargs kill -9
+   ```
+
+2. Use Vercel Dev to run the project:
+   ```bash
+   vercel dev --listen 3002
+   ```
+
+## Important Notes
+- Do NOT use `npm run dev` - always use `vercel dev` for local development
+- If you encounter any port conflicts, follow step 1 above to clear the port
+- Make sure you have Vercel CLI installed globally (`npm i -g vercel`)
 
 # Your rule content
 

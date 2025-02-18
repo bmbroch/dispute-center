@@ -17,9 +17,6 @@ const nextConfig = {
         pathname: '/**',
       },
     ],
-  },
-  experimental: {
-    optimizeFonts: true
   }
 };
 
