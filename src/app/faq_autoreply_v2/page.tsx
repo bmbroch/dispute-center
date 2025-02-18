@@ -673,45 +673,57 @@ const sanitizeAndFormatHTML = (content: string): string => {
 };
 
 export default function FAQAutoReplyV2() {
-  console.log('=== Component Render Start ===');
+  // Remove individual loading states
+  const [loadingState, setLoadingState] = useState({
+    isLoading: true,
+    loadingFAQs: false,
+    loadingCache: false,
+    loadingMore: false,
+    analyzing: false,
+    hasInitialized: false
+  });
+
+  const [emailState, setEmailState] = useState({
+    emails: [] as ExtendedEmail[],
+    hasMore: true,
+    page: 1,
+    nextPageToken: null as string | null,
+    totalEmails: 0
+  });
+
+  // Add initialization lock ref
+  const initializationLock = useRef(false);
+
   const { user, checkGmailAccess, refreshAccessToken, loading: authLoading } = useAuth();
-  const [emails, setEmails] = useState<ExtendedEmail[]>([]);
   const [potentialFAQs, setPotentialFAQs] = useState<PotentialFAQ[]>([]);
   const [genericFAQs, setGenericFAQs] = useState<GenericFAQ[]>([]);
   const [activeTab, setActiveTab] = useState<'unanswered' | 'suggested' | 'faq_library' | 'not_relevant' | 'all'>('unanswered');
-  const [loading, setLoading] = useState(true);
-  const [loadingFAQs, setLoadingFAQs] = useState(true);
-  const [initialized, setInitialized] = useState(false);
-  const [analyzing, setAnalyzing] = useState(false);
-  // Add new state for tracking loading states per email
   const [analyzingEmails, setAnalyzingEmails] = useState<Set<string>>(new Set());
   const [isAnalysisEnabled, setIsAnalysisEnabled] = useState(false);
   const [showAnswerModal, setShowAnswerModal] = useState(false);
   const [selectedFAQ, setSelectedFAQ] = useState<GenericFAQ | null>(null);
   const [answer, setAnswer] = useState('');
   const [emailQuestions, setEmailQuestions] = useState<Map<string, GenericFAQ[]>>(new Map());
-  const [loadingCache, setLoadingCache] = useState(true);
-  const [hasMore, setHasMore] = useState(true);
-  const [page, setPage] = useState(1);
-  const [loadingMore, setLoadingMore] = useState(false);
   const [answeredFAQs, setAnsweredFAQs] = useState<AnsweredFAQ[]>([]);
   const [editingReply, setEditingReply] = useState<EditingReply | null>(null);
   const [lastFetchTimestamp, setLastFetchTimestamp] = useState<number>(0);
   const [timeUntilNextRefresh, setTimeUntilNextRefresh] = useState<number>(0);
   const [expandedThreads, setExpandedThreads] = useState<Set<string>>(new Set());
   const [hasRefreshedOnce, setHasRefreshedOnce] = useState(false);
-  const [nextPageToken, setNextPageToken] = useState<string | null>(null);
   const [totalEmails, setTotalEmails] = useState<number>(0);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  // Add readyToReplyCount calculation
-  const readyToReplyCount = useMemo(() => emails.filter(e =>
-    e.status === 'processed' &&
-    e.matchedFAQ &&
-    !e.isReplied &&
-    e.suggestedReply
-  ).length, [emails]);
+  // Memoize readyToReplyCount calculation
+  const readyToReplyCount = useMemo(() =>
+    emailState.emails.filter(e =>
+      e.status === 'processed' &&
+      e.matchedFAQ &&
+      !e.isReplied &&
+      e.suggestedReply
+    ).length,
+    [emailState.emails]
+  );
 
   // Move isSubscribed ref before the useEffect
   const isSubscribed = useRef(true);
@@ -743,7 +755,7 @@ export default function FAQAutoReplyV2() {
     }
 
     // Look through all emails' questions to find similar ones
-    emails.forEach(email => {
+    emailState.emails.forEach((email: ExtendedEmail) => {
       const questions = emailQuestions.get(email.id) || [];
       questions.forEach(q => {
         if (calculatePatternSimilarity(q.question, faq.question) > SIMILARITY_THRESHOLD) {
@@ -753,7 +765,7 @@ export default function FAQAutoReplyV2() {
     });
 
     return Array.from(allQuestions);
-  }, [emails, emailQuestions, calculatePatternSimilarity]);
+  }, [emailState.emails, emailQuestions, calculatePatternSimilarity]);
 
   // Update groupSimilarPatterns to be more aggressive in consolidating similar questions
   const groupSimilarPatterns = useCallback((patterns: GenericFAQ[]): GenericFAQ[] => {
@@ -835,17 +847,14 @@ export default function FAQAutoReplyV2() {
     return null;
   }, [answeredFAQs, calculatePatternSimilarity]);
 
-  // Add this helper function to check if all email questions have been answered
+  // Memoize the checkEmailAnsweredStatus function
   const checkEmailAnsweredStatus = useCallback((email: ExtendedEmail) => {
-    console.log(`Checking status for email ${email.id}`);
     const questions = emailQuestions.get(email.id) || [];
 
     if (questions.length === 0) {
-      console.log('No questions found for email');
       return null;
     }
 
-    // Check if all questions have matching answered FAQs
     const questionsWithAnswers = questions.map(q => {
       const matchedFAQ = answeredFAQs.find(faq =>
         faq.answer &&
@@ -856,10 +865,8 @@ export default function FAQAutoReplyV2() {
     });
 
     const allQuestionsAnswered = questionsWithAnswers.every(q => q.matchedFAQ);
-    console.log(`All questions answered: ${allQuestionsAnswered}`);
 
     if (allQuestionsAnswered) {
-      // Find the best matching FAQ (highest confidence)
       const bestMatch = questionsWithAnswers.reduce((best, current) => {
         if (!current.matchedFAQ) return best;
         if (!best || current.matchedFAQ.confidence > best.confidence) {
@@ -869,7 +876,6 @@ export default function FAQAutoReplyV2() {
       }, null as AnsweredFAQ | null);
 
       if (bestMatch) {
-        console.log(`Found best match for email: ${bestMatch.question}`);
         return {
           question: bestMatch.question,
           answer: bestMatch.answer,
@@ -878,23 +884,22 @@ export default function FAQAutoReplyV2() {
       }
     }
 
-    console.log('No suitable match found');
     return null;
   }, [emailQuestions, answeredFAQs, calculatePatternSimilarity]);
 
-  // Update the loadEmails function to handle the new pagination
+  // Memoize the email loading function
   const loadEmails = useCallback(async () => {
     if (!user?.accessToken) {
       toast.error('Please sign in to access emails');
       return;
     }
 
-    setIsLoading(true);
+    setLoadingState(prev => ({ ...prev, isLoading: true }));
     try {
       const response = await fetch('/api/emails/inbox', {
         headers: {
           'Authorization': `Bearer ${user.accessToken}`,
-          'X-Page-Token': nextPageToken || ''
+          'X-Page-Token': emailState.nextPageToken || ''
         }
       });
 
@@ -903,12 +908,11 @@ export default function FAQAutoReplyV2() {
       }
 
       const data = await response.json();
-      console.log('Loaded emails:', data);
 
       if (data.emails && data.emails.length > 0) {
-        setEmails(prevEmails => {
-          const newEmails = [...prevEmails, ...data.emails] as ExtendedEmail[];
-          // Convert ExtendedEmail to Email before saving to Firebase
+        setEmailState(prev => {
+          const newEmails = [...prev.emails, ...data.emails] as ExtendedEmail[];
+          // Convert and save to Firebase in a separate operation
           const emailsForCache = newEmails.map(email => ({
             id: email.id,
             threadId: email.threadId,
@@ -918,20 +922,25 @@ export default function FAQAutoReplyV2() {
             receivedAt: typeof email.receivedAt === 'number' ? new Date(email.receivedAt).toISOString() : email.receivedAt,
             threadMessages: email.threadMessages
           }));
-          // Save the converted emails to Firebase cache
-          saveEmailsToFirebase(emailsForCache);
-          return newEmails;
+
+          // Use Promise to handle Firebase save asynchronously
+          Promise.resolve().then(() => saveEmailsToFirebase(emailsForCache));
+
+          return {
+            ...prev,
+            emails: newEmails,
+            nextPageToken: data.nextPageToken || null,
+            totalEmails: data.totalEmails || prev.totalEmails
+          };
         });
-        setNextPageToken(data.nextPageToken);
-        setHasMore(!!data.nextPageToken);
       }
     } catch (error) {
       console.error('Error loading emails:', error);
       toast.error('Failed to load emails');
     } finally {
-      setIsLoading(false);
+      setLoadingState(prev => ({ ...prev, isLoading: false }));
     }
-  }, [user?.accessToken, nextPageToken]);
+  }, [user?.accessToken, emailState.nextPageToken]);
 
   useEffect(() => {
     // Check if analysis is enabled via environment variable
@@ -940,25 +949,24 @@ export default function FAQAutoReplyV2() {
 
   useEffect(() => {
     const initialize = async () => {
-      if (!isSubscribed.current) return;
+      if (initializationLock.current || loadingState.hasInitialized) {
+        return;
+      }
+      initializationLock.current = true;
 
       try {
-        setLoading(true);
+        setLoadingState(prev => ({ ...prev, isLoading: true, loadingCache: true }));
 
-        // First try to load from local cache
+        // Load cached data first
         const cachedData = loadFromCache(CACHE_KEYS.EMAILS);
         if (cachedData?.emails) {
-          setEmails(cachedData.emails as ExtendedEmail[]);
+          setEmailState(prev => ({ ...prev, emails: cachedData.emails as ExtendedEmail[] }));
         }
 
         // Then try Firebase cache
         const firebaseEmails = await loadEmailsFromFirebase();
         if (firebaseEmails && firebaseEmails.length > 0) {
-          setEmails(prevEmails => {
-            const existingIds = new Set(prevEmails.map(e => e.id));
-            const newEmails = firebaseEmails.filter(e => !existingIds.has(e.id));
-            return [...prevEmails, ...newEmails];
-          });
+          setEmailState(prev => ({ ...prev, emails: [...prev.emails, ...firebaseEmails] }));
         }
 
         // Load cached questions from Firebase
@@ -1005,10 +1013,16 @@ export default function FAQAutoReplyV2() {
         await loadEmails();
 
       } catch (error) {
-        console.error('Error initializing:', error);
-        toast.error('Failed to load emails');
+        console.error('Initialization error:', error);
+        setLoadError(error instanceof Error ? error.message : 'Failed to initialize');
       } finally {
-        setLoading(false);
+        setLoadingState(prev => ({
+          ...prev,
+          isLoading: false,
+          loadingCache: false,
+          hasInitialized: true
+        }));
+        initializationLock.current = false;
       }
     };
 
@@ -1017,7 +1031,7 @@ export default function FAQAutoReplyV2() {
     return () => {
       isSubscribed.current = false;
     };
-  }, [loadEmails]);
+  }, [user?.accessToken]);
 
   // Update the FAQ loading effect
   useEffect(() => {
@@ -1025,7 +1039,7 @@ export default function FAQAutoReplyV2() {
 
     const loadFAQs = async () => {
       try {
-        setLoadingFAQs(true);
+        setLoadingState(prev => ({ ...prev, isLoading: true, loadingFAQs: true }));
 
         // Only fetch from API - remove cache logic to ensure fresh data
         console.log('Fetching FAQs from API');
@@ -1056,7 +1070,7 @@ export default function FAQAutoReplyV2() {
         toast.error('Failed to load FAQ library');
         setAnsweredFAQs([]);
       } finally {
-        setLoadingFAQs(false);
+        setLoadingState(prev => ({ ...prev, isLoading: false, loadingFAQs: false }));
       }
     };
 
@@ -1072,7 +1086,7 @@ export default function FAQAutoReplyV2() {
     if (answeredFAQs.length === 0) return;
 
     const updateEmails = async () => {
-      const updatedEmails = await Promise.all(emails.map(async (email) => {
+      const updatedEmails = await Promise.all(emailState.emails.map(async (email) => {
         const questions = emailQuestions.get(email.id) || [];
         if (questions.length === 0) return email;
 
@@ -1141,17 +1155,17 @@ export default function FAQAutoReplyV2() {
         return email;
       }));
 
-      setEmails(updatedEmails);
+      setEmailState(prev => ({ ...prev, emails: updatedEmails }));
     };
 
     updateEmails().catch(error => {
       console.error('Error updating emails:', error);
     });
 
-  }, [answeredFAQs, checkEmailAnsweredStatus, emailQuestions, calculatePatternSimilarity, emails]);
+  }, [answeredFAQs, checkEmailAnsweredStatus, emailQuestions, calculatePatternSimilarity, emailState.emails]);
 
   const handleLoadMore = () => {
-    if (!isLoading && hasMore) {
+    if (!loadingState.isLoading && emailState.hasMore) {
       loadEmails();
     }
   };
@@ -1328,8 +1342,8 @@ export default function FAQAutoReplyV2() {
       );
 
       // Update emails that might now have all questions answered
-      setEmails(prev => {
-        const updatedEmails = prev.map(email => {
+      setEmailState(prev => {
+        const updatedEmails = prev.emails.map(email => {
           const emailIds = selectedFAQ?.emailIds || [];
           if (emailIds.includes(email.id)) {
             const questions = emailQuestions.get(email.id) || [];
@@ -1391,7 +1405,11 @@ export default function FAQAutoReplyV2() {
           });
         }
 
-        return updatedEmails;
+        return {
+          ...prev,
+          emails: updatedEmails,
+          readyToReplyEmails: readyToReplyEmails
+        };
       });
 
       // Save updated state to cache
@@ -1413,9 +1431,11 @@ export default function FAQAutoReplyV2() {
 
   const handleMarkNotRelevant = async (email: ExtendedEmail) => {
     // Immediately mark locally as isNotRelevant
-    setEmails(prev => prev.map(e =>
-      e.id === email.id ? { ...e, isNotRelevant: true } : e
-    ));
+    setEmailState(prev => ({
+      ...prev, emails: prev.emails.map(e =>
+        e.id === email.id ? { ...e, isNotRelevant: true } : e
+      )
+    }));
 
     // Remove from questions if you wish
     const updatedQuestions = new Map(emailQuestions);
@@ -1598,11 +1618,13 @@ export default function FAQAutoReplyV2() {
 
       // Update the email object with the questions
       console.log('Updating emails state...');
-      setEmails(prev => prev.map(e =>
-        e.id === email.id
-          ? { ...e, questions: questionObjects }
-          : e
-      ));
+      setEmailState(prev => ({
+        ...prev, emails: prev.emails.map(e =>
+          e.id === email.id
+            ? { ...e, questions: questionObjects }
+            : e
+        )
+      }));
 
       // Save to cache
       console.log('Saving to cache...');
@@ -1627,11 +1649,13 @@ export default function FAQAutoReplyV2() {
   const generateContextualReply = async (email: ExtendedEmail) => {
     try {
       // Set loading state
-      setEmails(prev => prev.map(e =>
-        e.id === email.id
-          ? { ...e, isGeneratingReply: true, gmailError: undefined }
-          : e
-      ));
+      setEmailState(prev => ({
+        ...prev, emails: prev.emails.map(e =>
+          e.id === email.id
+            ? { ...e, isGeneratingReply: true, gmailError: undefined }
+            : e
+        )
+      }));
 
       const response = await fetch('/api/knowledge/generate-reply', {
         method: 'POST',
@@ -1660,11 +1684,13 @@ export default function FAQAutoReplyV2() {
       const data = await response.json();
 
       // Update email with generated reply and cache it
-      setEmails(prev => prev.map(e =>
-        e.id === email.id
-          ? { ...e, suggestedReply: data.reply, isGeneratingReply: false }
-          : e
-      ));
+      setEmailState(prev => ({
+        ...prev, emails: prev.emails.map(e =>
+          e.id === email.id
+            ? { ...e, suggestedReply: data.reply, isGeneratingReply: false }
+            : e
+        )
+      }));
 
       // Cache the reply in Firebase
       const db = getFirebaseDB();
@@ -1680,11 +1706,13 @@ export default function FAQAutoReplyV2() {
       console.error('Error generating reply:', error);
       toast.error('Failed to generate contextual reply');
       // Reset loading state on error
-      setEmails(prev => prev.map(e =>
-        e.id === email.id
-          ? { ...e, isGeneratingReply: false }
-          : e
-      ));
+      setEmailState(prev => ({
+        ...prev, emails: prev.emails.map(e =>
+          e.id === email.id
+            ? { ...e, isGeneratingReply: false }
+            : e
+        )
+      }));
     }
   };
 
@@ -1698,11 +1726,13 @@ export default function FAQAutoReplyV2() {
   const handleSaveReply = async (emailId: string) => {
     if (!editingReply) return;
 
-    setEmails(prev => prev.map(e => {
-      if (e.id === emailId) {
-        return { ...e, suggestedReply: editingReply.reply };
-      }
-      return e;
+    setEmailState(prev => ({
+      ...prev, emails: prev.emails.map(e => {
+        if (e.id === emailId) {
+          return { ...e, suggestedReply: editingReply.reply };
+        }
+        return e;
+      })
     }));
 
     setEditingReply(null);
@@ -1724,11 +1754,13 @@ Support Team`;
   };
 
   const toggleEmailContent = useCallback((emailId: string) => {
-    setEmails(prev => prev.map(e =>
-      e.id === emailId
-        ? { ...e, showFullContent: !e.showFullContent }
-        : e
-    ));
+    setEmailState(prev => ({
+      ...prev, emails: prev.emails.map(e =>
+        e.id === emailId
+          ? { ...e, showFullContent: !e.showFullContent }
+          : e
+      )
+    }));
   }, []);
 
   const toggleThreadExpansion = (threadId: string) => {
@@ -1746,7 +1778,7 @@ Support Team`;
   // Add this effect at the top level with other effects
   useEffect(() => {
     // Check all emails with questions for completion
-    const updatedEmails = emails.map(email => {
+    const updatedEmails = emailState.emails.map(email => {
       const questions = emailQuestions.get(email.id) || [];
       if (questions.length === 0) return email;
 
@@ -1787,10 +1819,10 @@ Support Team`;
     });
 
     // Only update if there are changes
-    if (JSON.stringify(updatedEmails) !== JSON.stringify(emails)) {
-      setEmails(updatedEmails);
+    if (JSON.stringify(updatedEmails) !== JSON.stringify(emailState.emails)) {
+      setEmailState(prev => ({ ...prev, emails: updatedEmails }));
     }
-  }, [emails, emailQuestions, answeredFAQs, calculatePatternSimilarity]);
+  }, [emailState.emails, emailQuestions, answeredFAQs, calculatePatternSimilarity]);
 
   const renderEmailContent = (email: ExtendedEmail) => {
     const questions = emailQuestions.get(email.id) || [];
@@ -1815,7 +1847,7 @@ Support Team`;
   };
 
   const renderTabs = () => {
-    const readyToReplyCount = emails.filter(e =>
+    const readyToReplyCount = emailState.emails.filter(e =>
       e.status === 'processed' &&
       e.matchedFAQ &&
       !e.isReplied &&
@@ -1828,7 +1860,7 @@ Support Team`;
         label: 'Unanswered',
         mobileLabel: 'New',
         icon: MessageCircleIcon,
-        count: emails.filter(e => !e.isReplied && !e.isNotRelevant && !e.matchedFAQ).length,
+        count: emailState.emails.filter(e => !e.isReplied && !e.isNotRelevant && !e.matchedFAQ).length,
         description: 'Match FAQs to incoming customer emails'
       },
       {
@@ -1852,7 +1884,7 @@ Support Team`;
         label: 'Not Relevant',
         mobileLabel: 'Other',
         icon: XCircleIcon,
-        count: emails.filter(e => e.isNotRelevant).length,
+        count: emailState.emails.filter(e => e.isNotRelevant).length,
         description: 'View emails marked as not requiring FAQ matching'
       }
     ];
@@ -1963,7 +1995,7 @@ Support Team`;
   };
 
   const renderUnansweredEmails = () => {
-    const filteredEmails = emails.filter(email =>
+    const filteredEmails = emailState.emails.filter(email =>
       !email.isReplied &&
       !email.isNotRelevant &&
       (!email.matchedFAQ || !(email.id && ((emailQuestions.get(email.id)?.length ?? 0) > 0))) &&
@@ -2122,14 +2154,14 @@ Support Team`;
   // Update the handleRefresh function
   const handleRefresh = async () => {
     try {
-      setIsLoading(true);
+      setLoadingState(prev => ({ ...prev, isLoading: true }));
       await loadEmails();
       toast.success('Emails refreshed successfully');
     } catch (error) {
       console.error('Error refreshing emails:', error);
       toast.error('Failed to refresh emails');
     } finally {
-      setIsLoading(false);
+      setLoadingState(prev => ({ ...prev, isLoading: false }));
     }
   };
 
@@ -2179,7 +2211,7 @@ Support Team`;
       );
     }
 
-    if (loading) {
+    if (loadingState.isLoading) {
       return <SkeletonLoader />;
     }
 
@@ -2206,7 +2238,7 @@ Support Team`;
     const removedEmailIds = new Set(removedEmailsCache?.emails || []);
 
     // Only show emails that are processed, have a matched FAQ, haven't been replied to, and haven't been removed
-    const readyToReplyEmails = emails.filter(e =>
+    const readyToReplyEmails = emailState.emails.filter(e =>
       e.status === 'processed' &&
       e.matchedFAQ &&
       !e.isReplied &&
@@ -2336,10 +2368,7 @@ Support Team`;
   };
 
   const renderFAQLibrary = () => {
-    console.log('=== Rendering FAQ Library ===');
-    console.log('Current FAQs:', answeredFAQs);
-
-    if (loadingFAQs) {
+    if (loadingState.loadingFAQs) {
       return (
         <div className="flex justify-center items-center h-64">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900" />
@@ -2415,23 +2444,22 @@ Support Team`;
 
   // Update the email handling in handleEmailProcessing
   const handleEmailProcessing = useCallback((emailId: string) => {
-    const currentEmail = emails.find(e => e.id === emailId);
+    const currentEmail = emailState.emails.find(e => e.id === emailId);
     if (!currentEmail) return;
 
     if (selectedFAQ && Array.isArray(selectedFAQ.emailIds)) {
-      selectedFAQ.emailIds.forEach((emailId: string) => {
-        const relatedEmail = emails.find(e => e.id === emailId);
+      selectedFAQ.emailIds.forEach((id: string) => {
+        const relatedEmail = emailState.emails.find(e => e.id === id);
         if (relatedEmail) {
           // Process the email
         }
       });
 
-      const currentEmail = emails.find(e => e.id === emailId);
       if (currentEmail && selectedFAQ.emailIds.includes(currentEmail.id)) {
         // Handle matched email
       }
     }
-  }, [emails, selectedFAQ]);
+  }, [emailState.emails, selectedFAQ]);
 
   // Add debug logging for state changes
   useEffect(() => {
@@ -2441,12 +2469,14 @@ Support Team`;
     console.log('Email Questions:', Array.from(emailQuestions.entries()));
     console.log('Active Tab:', activeTab);
     console.log('Loading States:', {
-      loading,
-      loadingFAQs,
-      loadingCache,
-      loadingMore
+      isLoading: loadingState.isLoading,
+      loadingFAQs: loadingState.loadingFAQs,
+      loadingCache: loadingState.loadingCache,
+      loadingMore: loadingState.loadingMore,
+      analyzing: loadingState.analyzing,
+      hasInitialized: loadingState.hasInitialized
     });
-  }, [genericFAQs, answeredFAQs, emailQuestions, activeTab, loading, loadingFAQs, loadingCache, loadingMore, emails]);
+  }, [genericFAQs, answeredFAQs, emailQuestions, activeTab, loadingState]);
 
   // Add this useEffect for the countdown timer
   useEffect(() => {
@@ -2640,20 +2670,22 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
   const handleRemoveFromReadyToReply = async (email: ExtendedEmail) => {
     try {
       // Update emails state to remove this email from ready to reply
-      setEmails(prev => prev.map(e => {
-        if (e.id === email.id) {
-          const updatedEmail: ExtendedEmail = {
-            ...e,
-            status: 'removed_from_ready',
-            matchedFAQ: undefined
-          };
-          return updatedEmail;
-        }
-        return e;
+      setEmailState(prev => ({
+        ...prev, emails: prev.emails.map(e => {
+          if (e.id === email.id) {
+            const updatedEmail: ExtendedEmail = {
+              ...e,
+              status: 'removed_from_ready',
+              matchedFAQ: undefined
+            };
+            return updatedEmail;
+          }
+          return e;
+        })
       }));
 
       // Get current ready to reply emails excluding the removed one
-      const readyToReplyEmails = emails.filter(e =>
+      const readyToReplyEmails = emailState.emails.filter(e =>
         e.id !== email.id &&
         e.status === 'processed' &&
         e.matchedFAQ &&
@@ -2698,11 +2730,13 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
 
   // Add this helper function inside the component
   const handleShowFullContent = useCallback((emailId: string): void => {
-    setEmails((prev: ExtendedEmail[]) => prev.map((e: ExtendedEmail) =>
-      e.id === emailId
-        ? { ...e, showFullContent: true }
-        : e
-    ));
+    setEmailState(prev => ({
+      ...prev, emails: prev.emails.map(e =>
+        e.id === emailId
+          ? { ...e, showFullContent: true }
+          : e
+      )
+    }));
   }, []);
 
   // Add this function to handle moving emails back to relevant
@@ -2714,9 +2748,7 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
         irrelevanceReason: undefined
       };
 
-      setEmails((prevEmails: ExtendedEmail[]) =>
-        prevEmails.map((e) => (e.id === email.id ? updatedEmail : e))
-      );
+      setEmailState(prev => ({ ...prev, emails: prev.emails.map(e => (e.id === email.id ? updatedEmail : e)) }));
     } catch (error) {
       console.error('Error moving email back to relevant:', error);
       toast.error('Failed to move email back to relevant');
@@ -2724,7 +2756,7 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
   };
 
   function renderNotRelevantEmails() {
-    const notRelevantEmails = emails.filter(email => email.isNotRelevant);
+    const notRelevantEmails = emailState.emails.filter(email => email.isNotRelevant);
 
     return (
       <div className="space-y-8 relative pl-[4.5rem]">
@@ -2768,7 +2800,7 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
   function renderAllEmails() {
     return (
       <div className="space-y-8 relative pl-[4.5rem]">
-        {emails.length === 0 ? (
+        {emailState.emails.length === 0 ? (
           <div className="text-center py-12">
             <div className="mx-auto h-12 w-12 text-gray-400 mb-4">
               <InboxIcon className="h-12 w-12" />
@@ -2780,13 +2812,13 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
           </div>
         ) : (
           <>
-            {emails.map((email, index) => (
+            {emailState.emails.map((email, index) => (
               <div
                 key={`all-${email.id}-${index}`}
                 className="bg-white rounded-lg shadow-sm pt-4 pb-6 px-6 space-y-4 relative"
                 style={{ marginBottom: '2rem' }}
               >
-                {renderEmailTimeline(email, index, emails)}
+                {renderEmailTimeline(email, index, emailState.emails)}
                 <div className="flex justify-between items-start">
                   <div className="space-y-1">
                     <h3 className="text-lg font-medium text-gray-900">
@@ -2845,11 +2877,14 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
 
   // Fix the email state updates
   const updateEmails = (newEmails: ExtendedEmail[]) => {
-    setEmails(prevEmails => {
+    setEmailState(prev => {
       const uniqueEmails = newEmails.filter(email => {
-        return !prevEmails.some(prevEmail => prevEmail.id === email.id);
+        return !prev.emails.some(prevEmail => prevEmail.id === email.id);
       });
-      return [...prevEmails, ...uniqueEmails] as ExtendedEmail[];
+      return {
+        ...prev,
+        emails: [...prev.emails, ...uniqueEmails] as ExtendedEmail[]
+      };
     });
   };
 
@@ -2857,13 +2892,14 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
   const handleEmailUpdate = (email: ExtendedEmail | null) => {
     if (!email) return;
 
-    setEmails(prevEmails =>
-      prevEmails.map(e =>
+    setEmailState(prev => ({
+      ...prev,
+      emails: prev.emails.map(e =>
         e.id === email.id
           ? { ...e, ...email, status: (email.status || e.status || 'pending') as ExtendedEmail['status'] }
           : e
       )
-    );
+    }));
   };
 
   const filterReadyEmails = (emails: ExtendedEmail[]) => {
@@ -2874,6 +2910,28 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
       !email.isReplied
     );
   };
+
+  // Update debug logging for state changes
+  useEffect(() => {
+    console.log('Loading States:', {
+      isLoading: loadingState.isLoading,
+      loadingFAQs: loadingState.loadingFAQs,
+      loadingCache: loadingState.loadingCache,
+      loadingMore: loadingState.loadingMore
+    });
+  }, [loadingState]);
+
+  // Update loading references in debug logging
+  useEffect(() => {
+    if (answeredFAQs.length === 0) return;
+
+    console.log('Loading States:', {
+      isLoading: loadingState.isLoading,
+      loadingFAQs: loadingState.loadingFAQs,
+      loadingCache: loadingState.loadingCache,
+      loadingMore: loadingState.loadingMore
+    });
+  }, [genericFAQs, answeredFAQs, emailQuestions, activeTab, loadingState]);
 
   return (
     <Layout>
@@ -2891,6 +2949,7 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
             )}
             <button
               onClick={handleRefresh}
+              disabled={loadingState.isLoading}
               className="inline-flex items-center px-2 py-1 border border-gray-300 shadow-sm text-[11px] font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
             >
               <ClockIcon className="h-3 w-3 mr-1" />
