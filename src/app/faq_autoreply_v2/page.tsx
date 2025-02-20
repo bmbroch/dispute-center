@@ -33,6 +33,8 @@ import { Email, ExtendedEmail, ThreadMessage, BaseEmail } from '@/types/email';
 import { GenericFAQ, IrrelevanceAnalysis } from '@/types/faq';
 import { calculatePatternSimilarity } from '@/lib/utils/similarity';
 import { Firestore } from 'firebase/firestore';
+import DOMPurify from 'dompurify';
+import EmailRenderNew from '../components/EmailRenderNew';
 
 interface PotentialFAQ {
   id: string;
@@ -203,95 +205,75 @@ const loadEmailsFromFirebase = async () => {
     if (!db) return null;
 
     // First get all not relevant emails
-    const notRelevantRef = collection(db, 'not_relevant_emails');
-    const notRelevantDocs = await getDocs(notRelevantRef);
-    const notRelevantEmails = notRelevantDocs.docs.map(doc => ({
+    const notRelevantRef = collection(db, FIREBASE_COLLECTIONS.NOT_RELEVANT);
+    const notRelevantSnapshot = await getDocs(notRelevantRef);
+    const notRelevantEmails = notRelevantSnapshot.docs.map(doc => ({
       ...doc.data(),
       id: doc.id,
       isNotRelevant: true
     })) as ExtendedEmail[];
 
-    // Then get cached emails
-    const cacheRef = doc(db, FIREBASE_CACHE_COLLECTION, 'latest');
-    const cacheDoc = await getDoc(cacheRef);
+    // Get emails from both email_cache and thread_cache
+    const emailCacheRef = collection(db, FIREBASE_COLLECTIONS.EMAIL_CACHE);
+    const threadCacheRef = collection(db, FIREBASE_COLLECTIONS.THREAD_CACHE);
 
-    if (cacheDoc.exists()) {
-      const { emails, timestamp } = cacheDoc.data();
+    const [emailCacheSnapshot, threadCacheSnapshot] = await Promise.all([
+      getDocs(emailCacheRef),
+      getDocs(threadCacheRef)
+    ]);
 
-      // Check if cache is still valid
-      if (Date.now() - timestamp < FIREBASE_CACHE_DURATION) {
-        // Get all not relevant email IDs
-        const notRelevantIds = new Set(notRelevantDocs.docs.map(doc => doc.id));
+    // Create a map to merge thread and email data
+    const emailMap = new Map<string, ExtendedEmail>();
 
-        // Sort emails by the most recent message in their thread
-        const sortedEmails = emails.map((email: ExtendedEmail) => {
-          // Mark email as not relevant if it's in the not_relevant_emails collection
-          const isNotRelevant = notRelevantIds.has(email.id);
+    // Process email cache documents
+    emailCacheSnapshot.docs.forEach((doc) => {
+      const data = doc.data();
+      emailMap.set(doc.id, {
+        ...data,
+        id: doc.id,
+        content: data.content || { html: null, text: data.content }
+      } as ExtendedEmail);
+    });
 
-          if (email.threadMessages && email.threadMessages.length > 0) {
-            // Sort thread messages by receivedAt in descending order
-            email.threadMessages.sort((a, b) => {
-              const aTime = typeof a.receivedAt === 'string' ? new Date(a.receivedAt).getTime() : Number(a.receivedAt);
-              const bTime = typeof b.receivedAt === 'string' ? new Date(b.receivedAt).getTime() : Number(b.receivedAt);
-              return bTime - aTime;
-            });
-
-            // Update the email's content and receivedAt with the most recent message
-            const mostRecent = email.threadMessages[0];
-            return {
-              ...email,
-              content: mostRecent.content,
-              subject: mostRecent.subject,
-              sender: mostRecent.sender,
-              receivedAt: mostRecent.receivedAt,
-              isNotRelevant
-            };
-          }
-          return { ...email, isNotRelevant };
+    // Process thread cache documents and merge with email data
+    threadCacheSnapshot.docs.forEach((doc) => {
+      const data = doc.data();
+      if (data.emailId && emailMap.has(data.emailId)) {
+        const existingEmail = emailMap.get(data.emailId)!;
+        emailMap.set(data.emailId, {
+          ...existingEmail,
+          ...data,
+          id: data.emailId,
+          threadId: doc.id,
+          content: data.content || existingEmail.content
         });
-
-        // Sort emails by their most recent message
-        sortedEmails.sort((a: ExtendedEmail, b: ExtendedEmail) => {
-          const aTime = typeof a.receivedAt === 'string' ? new Date(a.receivedAt).getTime() : Number(a.receivedAt);
-          const bTime = typeof b.receivedAt === 'string' ? new Date(b.receivedAt).getTime() : Number(b.receivedAt);
-          return bTime - aTime;
-        });
-
-        // Deduplicate emails by threadId, keeping only the most recent one
-        const threadMap = new Map<string, ExtendedEmail>();
-        sortedEmails.forEach((email: ExtendedEmail) => {
-          const threadId = email.threadId;
-          if (!threadId) return;
-
-          if (!threadMap.has(threadId) ||
-            (typeof email.receivedAt === 'string' ? new Date(email.receivedAt).getTime() : Number(email.receivedAt)) >
-            (typeof threadMap.get(threadId)!.receivedAt === 'string' ? new Date(threadMap.get(threadId)!.receivedAt).getTime() : Number(threadMap.get(threadId)!.receivedAt))) {
-            threadMap.set(threadId, email);
-          }
-        });
-
-        const deduplicatedEmails = Array.from(threadMap.values());
-
-        // Combine not relevant emails with deduplicated emails, ensuring no duplicates by threadId
-        const existingThreadIds = new Set(deduplicatedEmails.map((e: ExtendedEmail) => e.threadId));
-        const combinedEmails = [
-          ...deduplicatedEmails,
-          ...notRelevantEmails.filter((e: ExtendedEmail) => !existingThreadIds.has(e.threadId))
-        ];
-
-        return combinedEmails;
       }
-    } else {
-      // Create the email_cache collection with an empty array if it doesn't exist
-      await setDoc(cacheRef, {
-        emails: [],
-        timestamp: Date.now()
-      });
-      console.log('Created email_cache collection with empty array');
-    }
+    });
 
-    // If cache is invalid or empty, at least return the not relevant emails
-    return notRelevantEmails.length > 0 ? notRelevantEmails : null;
+    // Convert map to array and sort by receivedAt
+    const cachedEmails = Array.from(emailMap.values()).sort((a, b) => {
+      const aTime = typeof a.receivedAt === 'string' ? new Date(a.receivedAt).getTime() : Number(a.receivedAt);
+      const bTime = typeof b.receivedAt === 'string' ? new Date(b.receivedAt).getTime() : Number(b.receivedAt);
+      return bTime - aTime;
+    });
+
+    // Get all not relevant email IDs
+    const notRelevantIds = new Set(notRelevantSnapshot.docs.map(doc => doc.id));
+
+    // Mark emails as not relevant if they're in the not_relevant_emails collection
+    const processedEmails = cachedEmails.map(email => ({
+      ...email,
+      isNotRelevant: notRelevantIds.has(email.id)
+    }));
+
+    // Combine with not relevant emails, ensuring no duplicates
+    const existingIds = new Set(processedEmails.map(e => e.id));
+    const combinedEmails = [
+      ...processedEmails,
+      ...notRelevantEmails.filter(e => !existingIds.has(e.id))
+    ];
+
+    return combinedEmails;
   } catch (error) {
     console.error('Error loading emails from Firebase:', error);
     return null;
@@ -303,28 +285,9 @@ const saveEmailsToFirebase = async (emails: Email[]) => {
     const db = getFirebaseDB();
     if (!db) return;
 
-    // Sanitize emails before saving to Firebase
-    const sanitizedEmails = emails.map(email => ({
-      id: email.id,
-      threadId: email.threadId,
-      subject: email.subject || '',
-      sender: email.sender || '',
-      content: email.content || '',
-      receivedAt: email.receivedAt || Date.now(),
-      isReplied: 'isReplied' in email ? email.isReplied : false,
-      isNotRelevant: 'isNotRelevant' in email ? email.isNotRelevant : false,
-      status: 'status' in email ? email.status : 'new',
-      matchedFAQ: email.matchedFAQ ? {
-        question: email.matchedFAQ.question || '',
-        answer: email.matchedFAQ.answer || '',
-        confidence: email.matchedFAQ.confidence || 0
-      } : null,
-      suggestedReply: email.suggestedReply || ''
-    }));
-
     const cacheRef = doc(db, FIREBASE_CACHE_COLLECTION, 'latest');
     await setDoc(cacheRef, {
-      emails: sanitizedEmails,
+      emails,
       timestamp: Date.now()
     });
   } catch (error) {
@@ -418,7 +381,11 @@ const FIREBASE_COLLECTIONS = {
   EMAILS: 'emails',
   QUESTIONS: 'questions',
   FAQS: 'faqs',
-  CACHED_QUESTIONS: 'cached_questions'
+  CACHED_QUESTIONS: 'cached_questions',
+  EMAIL_CACHE: 'email_cache',
+  THREAD_CACHE: 'thread_cache',
+  EMAIL_ANALYSIS: 'email_analysis',
+  NOT_RELEVANT: 'not_relevant_emails'
 };
 
 // Add this near the Firebase-related functions
@@ -672,58 +639,227 @@ const sanitizeAndFormatHTML = (content: string): string => {
   return sanitized;
 };
 
+// Add these helper functions before the EmailContent component
+const decodeHtmlEntities = (html: string): string => {
+  if (!html) return '';
+
+  // First pass: Use DOMParser to decode HTML entities
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  let decoded = doc.documentElement.textContent || html;
+
+  // Second pass: Use textarea for additional entity decoding
+  const textarea = document.createElement('textarea');
+  textarea.innerHTML = decoded;
+  decoded = textarea.value;
+
+  // Third pass: Handle any remaining HTML entities
+  return decoded.replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&');
+}
+
+const extractStyles = (html: string): string => {
+  const styleRegex = /<style[^>]*>([\s\S]*?)<\/style>/gi;
+  const styles = [];
+  let match;
+
+  while ((match = styleRegex.exec(html)) !== null) {
+    styles.push(match[1]);
+  }
+
+  return styles.join('\n');
+}
+
+// Update the EmailContent component
+const EmailContent = ({ content }: { content: string | { html: string | null; text: string | null } }) => {
+  // Add debug function
+  const copyDebugInfo = () => {
+    let debugInfo = '';
+    if (typeof content === 'object') {
+      debugInfo = JSON.stringify({
+        html: content.html,
+        text: content.text,
+        contentType: 'object'
+      }, null, 2);
+    } else {
+      debugInfo = JSON.stringify({
+        content,
+        contentType: 'string'
+      }, null, 2);
+    }
+
+    navigator.clipboard.writeText(debugInfo).then(() => {
+      toast.success('Email content debug info copied to clipboard');
+    }).catch(() => {
+      toast.error('Failed to copy debug info');
+    });
+  };
+
+  // If content is an object with html/text properties
+  if (typeof content === 'object') {
+    // First check for valid HTML content
+    if (content.html && content.html.trim()) {
+      let decodedHtml = decodeHtmlEntities(content.html);
+
+      return (
+        <div className="relative">
+          <button
+            onClick={copyDebugInfo}
+            className="absolute top-2 right-2 p-1.5 text-gray-400 hover:text-gray-600 bg-white/80 hover:bg-white rounded-md shadow-sm border border-gray-200"
+            title="Copy debug info"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+            </svg>
+          </button>
+          <div
+            className="prose prose-sm max-w-none email-content overflow-x-auto"
+            dangerouslySetInnerHTML={{ __html: decodedHtml }}
+          />
+        </div>
+      );
+    }
+
+    // Only fallback to text content if HTML is not available
+    if (content.text) {
+      const decodedText = decodeHtmlEntities(content.text);
+      return (
+        <div className="relative">
+          <button
+            onClick={copyDebugInfo}
+            className="absolute top-2 right-2 p-1.5 text-gray-400 hover:text-gray-600 bg-white/80 hover:bg-white rounded-md shadow-sm border border-gray-200"
+            title="Copy debug info"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+            </svg>
+          </button>
+          <pre className="whitespace-pre-wrap text-sm text-gray-700">{decodedText}</pre>
+        </div>
+      );
+    }
+  }
+
+  // Handle string content (legacy format)
+  if (typeof content === 'string' && content.trim()) {
+    const decodedContent = decodeHtmlEntities(content);
+    // Check if the content is HTML
+    if (decodedContent.trim().startsWith('<')) {
+      return (
+        <div className="relative">
+          <button
+            onClick={copyDebugInfo}
+            className="absolute top-2 right-2 p-1.5 text-gray-400 hover:text-gray-600 bg-white/80 hover:bg-white rounded-md shadow-sm border border-gray-200"
+            title="Copy debug info"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+            </svg>
+          </button>
+          <div
+            className="prose prose-sm max-w-none email-content overflow-x-auto"
+            dangerouslySetInnerHTML={{ __html: decodedContent }}
+          />
+        </div>
+      );
+    }
+    return (
+      <div className="relative">
+        <button
+          onClick={copyDebugInfo}
+          className="absolute top-2 right-2 p-1.5 text-gray-400 hover:text-gray-600 bg-white/80 hover:bg-white rounded-md shadow-sm border border-gray-200"
+          title="Copy debug info"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+          </svg>
+        </button>
+        <div className="whitespace-pre-wrap text-sm text-gray-700">{decodedContent}</div>
+      </div>
+    );
+  }
+
+  // If no valid content is found
+  return (
+    <div className="relative">
+      <button
+        onClick={copyDebugInfo}
+        className="absolute top-2 right-2 p-1.5 text-gray-400 hover:text-gray-600 bg-white/80 hover:bg-white rounded-md shadow-sm border border-gray-200"
+        title="Copy debug info"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+        </svg>
+      </button>
+      <div className="text-gray-500 italic">No content available</div>
+    </div>
+  );
+};
+
+// Update the EmailItem component to properly handle the content object
+const EmailItem = ({ email, onRefresh }: { email: ExtendedEmail; onRefresh: () => void }) => {
+  return (
+    <div className="border rounded-lg p-4 mb-4">
+      <div className="flex justify-between items-start mb-2">
+        <div>
+          <h3 className="font-medium">{email.subject}</h3>
+          <p className="text-sm text-gray-600">{email.sender}</p>
+        </div>
+        <button
+          onClick={onRefresh}
+          className="p-1 hover:bg-gray-100 rounded-full"
+          title="Refresh email"
+        >
+          <ClockIcon className="h-4 w-4 text-gray-500" />
+        </button>
+      </div>
+      <EmailContent content={email.content} />
+    </div>
+  );
+};
+
 export default function FAQAutoReplyV2() {
-  // Remove individual loading states
-  const [loadingState, setLoadingState] = useState({
-    isLoading: true,
-    loadingFAQs: false,
-    loadingCache: false,
-    loadingMore: false,
-    analyzing: false,
-    hasInitialized: false
-  });
-
-  const [emailState, setEmailState] = useState({
-    emails: [] as ExtendedEmail[],
-    hasMore: true,
-    page: 1,
-    nextPageToken: null as string | null,
-    totalEmails: 0
-  });
-
-  // Add initialization lock ref
-  const initializationLock = useRef(false);
-
+  console.log('=== Component Render Start ===');
   const { user, checkGmailAccess, refreshAccessToken, loading: authLoading } = useAuth();
+  const [emails, setEmails] = useState<ExtendedEmail[]>([]);
   const [potentialFAQs, setPotentialFAQs] = useState<PotentialFAQ[]>([]);
   const [genericFAQs, setGenericFAQs] = useState<GenericFAQ[]>([]);
   const [activeTab, setActiveTab] = useState<'unanswered' | 'suggested' | 'faq_library' | 'not_relevant' | 'all'>('unanswered');
+  const [loading, setLoading] = useState(true);
+  const [loadingFAQs, setLoadingFAQs] = useState(true);
+  const [initialized, setInitialized] = useState(false);
+  const [analyzing, setAnalyzing] = useState(false);
+  // Add new state for tracking loading states per email
   const [analyzingEmails, setAnalyzingEmails] = useState<Set<string>>(new Set());
   const [isAnalysisEnabled, setIsAnalysisEnabled] = useState(false);
   const [showAnswerModal, setShowAnswerModal] = useState(false);
   const [selectedFAQ, setSelectedFAQ] = useState<GenericFAQ | null>(null);
   const [answer, setAnswer] = useState('');
   const [emailQuestions, setEmailQuestions] = useState<Map<string, GenericFAQ[]>>(new Map());
+  const [loadingCache, setLoadingCache] = useState(true);
+  const [hasMore, setHasMore] = useState(true);
+  const [page, setPage] = useState(1);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [answeredFAQs, setAnsweredFAQs] = useState<AnsweredFAQ[]>([]);
   const [editingReply, setEditingReply] = useState<EditingReply | null>(null);
   const [lastFetchTimestamp, setLastFetchTimestamp] = useState<number>(0);
   const [timeUntilNextRefresh, setTimeUntilNextRefresh] = useState<number>(0);
   const [expandedThreads, setExpandedThreads] = useState<Set<string>>(new Set());
   const [hasRefreshedOnce, setHasRefreshedOnce] = useState(false);
+  const [nextPageToken, setNextPageToken] = useState<string | null>(null);
   const [totalEmails, setTotalEmails] = useState<number>(0);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  // Memoize readyToReplyCount calculation
-  const readyToReplyCount = useMemo(() =>
-    emailState.emails.filter(e =>
-      e.status === 'processed' &&
-      e.matchedFAQ &&
-      !e.isReplied &&
-      e.suggestedReply
-    ).length,
-    [emailState.emails]
-  );
+  // Add readyToReplyCount calculation
+  const readyToReplyCount = useMemo(() => emails.filter(e =>
+    e.status === 'processed' &&
+    e.matchedFAQ &&
+    !e.isReplied &&
+    e.suggestedReply
+  ).length, [emails]);
 
   // Move isSubscribed ref before the useEffect
   const isSubscribed = useRef(true);
@@ -755,7 +891,7 @@ export default function FAQAutoReplyV2() {
     }
 
     // Look through all emails' questions to find similar ones
-    emailState.emails.forEach((email: ExtendedEmail) => {
+    emails.forEach(email => {
       const questions = emailQuestions.get(email.id) || [];
       questions.forEach(q => {
         if (calculatePatternSimilarity(q.question, faq.question) > SIMILARITY_THRESHOLD) {
@@ -765,7 +901,7 @@ export default function FAQAutoReplyV2() {
     });
 
     return Array.from(allQuestions);
-  }, [emailState.emails, emailQuestions, calculatePatternSimilarity]);
+  }, [emails, emailQuestions, calculatePatternSimilarity]);
 
   // Update groupSimilarPatterns to be more aggressive in consolidating similar questions
   const groupSimilarPatterns = useCallback((patterns: GenericFAQ[]): GenericFAQ[] => {
@@ -847,14 +983,17 @@ export default function FAQAutoReplyV2() {
     return null;
   }, [answeredFAQs, calculatePatternSimilarity]);
 
-  // Memoize the checkEmailAnsweredStatus function
+  // Add this helper function to check if all email questions have been answered
   const checkEmailAnsweredStatus = useCallback((email: ExtendedEmail) => {
+    console.log(`Checking status for email ${email.id}`);
     const questions = emailQuestions.get(email.id) || [];
 
     if (questions.length === 0) {
+      console.log('No questions found for email');
       return null;
     }
 
+    // Check if all questions have matching answered FAQs
     const questionsWithAnswers = questions.map(q => {
       const matchedFAQ = answeredFAQs.find(faq =>
         faq.answer &&
@@ -865,8 +1004,10 @@ export default function FAQAutoReplyV2() {
     });
 
     const allQuestionsAnswered = questionsWithAnswers.every(q => q.matchedFAQ);
+    console.log(`All questions answered: ${allQuestionsAnswered}`);
 
     if (allQuestionsAnswered) {
+      // Find the best matching FAQ (highest confidence)
       const bestMatch = questionsWithAnswers.reduce((best, current) => {
         if (!current.matchedFAQ) return best;
         if (!best || current.matchedFAQ.confidence > best.confidence) {
@@ -876,6 +1017,7 @@ export default function FAQAutoReplyV2() {
       }, null as AnsweredFAQ | null);
 
       if (bestMatch) {
+        console.log(`Found best match for email: ${bestMatch.question}`);
         return {
           question: bestMatch.question,
           answer: bestMatch.answer,
@@ -884,22 +1026,22 @@ export default function FAQAutoReplyV2() {
       }
     }
 
+    console.log('No suitable match found');
     return null;
   }, [emailQuestions, answeredFAQs, calculatePatternSimilarity]);
 
-  // Memoize the email loading function
-  const loadEmails = useCallback(async () => {
+  // Update the loadEmails function to handle the new pagination
+  const loadEmails = useCallback(async (skipCache: boolean = false, pageNumber?: number) => {
     if (!user?.accessToken) {
       toast.error('Please sign in to access emails');
       return;
     }
 
-    setLoadingState(prev => ({ ...prev, isLoading: true }));
     try {
-      const response = await fetch('/api/emails/inbox', {
+      setIsLoading(true);
+      const response = await fetch(`/api/emails/inbox${nextPageToken ? `?pageToken=${nextPageToken}` : ''}`, {
         headers: {
-          'Authorization': `Bearer ${user.accessToken}`,
-          'X-Page-Token': emailState.nextPageToken || ''
+          'Authorization': `Bearer ${user.accessToken}`
         }
       });
 
@@ -909,38 +1051,26 @@ export default function FAQAutoReplyV2() {
 
       const data = await response.json();
 
-      if (data.emails && data.emails.length > 0) {
-        setEmailState(prev => {
-          const newEmails = [...prev.emails, ...data.emails] as ExtendedEmail[];
-          // Convert and save to Firebase in a separate operation
-          const emailsForCache = newEmails.map(email => ({
-            id: email.id,
-            threadId: email.threadId,
-            subject: email.subject,
-            sender: email.sender,
-            content: email.content,
-            receivedAt: typeof email.receivedAt === 'number' ? new Date(email.receivedAt).toISOString() : email.receivedAt,
-            threadMessages: email.threadMessages
-          }));
-
-          // Use Promise to handle Firebase save asynchronously
-          Promise.resolve().then(() => saveEmailsToFirebase(emailsForCache));
-
-          return {
-            ...prev,
-            emails: newEmails,
-            nextPageToken: data.nextPageToken || null,
-            totalEmails: data.totalEmails || prev.totalEmails
-          };
+      if (data.emails) {
+        setEmails(prevEmails => {
+          if (skipCache) {
+            return data.emails as ExtendedEmail[];
+          }
+          const newEmails = data.emails.filter((email: ExtendedEmail) =>
+            !prevEmails.some(prevEmail => prevEmail.id === email.id)
+          );
+          return [...prevEmails, ...newEmails] as ExtendedEmail[];
         });
+        setNextPageToken(data.nextPageToken);
+        setHasMore(!!data.nextPageToken);
       }
     } catch (error) {
       console.error('Error loading emails:', error);
       toast.error('Failed to load emails');
     } finally {
-      setLoadingState(prev => ({ ...prev, isLoading: false }));
+      setIsLoading(false);
     }
-  }, [user?.accessToken, emailState.nextPageToken]);
+  }, [user?.accessToken, nextPageToken]);
 
   useEffect(() => {
     // Check if analysis is enabled via environment variable
@@ -949,24 +1079,25 @@ export default function FAQAutoReplyV2() {
 
   useEffect(() => {
     const initialize = async () => {
-      if (initializationLock.current || loadingState.hasInitialized) {
-        return;
-      }
-      initializationLock.current = true;
+      if (!isSubscribed.current) return;
 
       try {
-        setLoadingState(prev => ({ ...prev, isLoading: true, loadingCache: true }));
+        setLoading(true);
 
-        // Load cached data first
+        // First try to load from local cache
         const cachedData = loadFromCache(CACHE_KEYS.EMAILS);
         if (cachedData?.emails) {
-          setEmailState(prev => ({ ...prev, emails: cachedData.emails as ExtendedEmail[] }));
+          setEmails(cachedData.emails as ExtendedEmail[]);
         }
 
         // Then try Firebase cache
         const firebaseEmails = await loadEmailsFromFirebase();
         if (firebaseEmails && firebaseEmails.length > 0) {
-          setEmailState(prev => ({ ...prev, emails: [...prev.emails, ...firebaseEmails] }));
+          setEmails(prevEmails => {
+            const existingIds = new Set(prevEmails.map(e => e.id));
+            const newEmails = firebaseEmails.filter(e => !existingIds.has(e.id));
+            return [...prevEmails, ...newEmails];
+          });
         }
 
         // Load cached questions from Firebase
@@ -1010,19 +1141,13 @@ export default function FAQAutoReplyV2() {
         }
 
         // Finally, load fresh emails
-        await loadEmails();
+        await loadEmails(true);
 
       } catch (error) {
-        console.error('Initialization error:', error);
-        setLoadError(error instanceof Error ? error.message : 'Failed to initialize');
+        console.error('Error initializing:', error);
+        toast.error('Failed to load emails');
       } finally {
-        setLoadingState(prev => ({
-          ...prev,
-          isLoading: false,
-          loadingCache: false,
-          hasInitialized: true
-        }));
-        initializationLock.current = false;
+        setLoading(false);
       }
     };
 
@@ -1031,7 +1156,7 @@ export default function FAQAutoReplyV2() {
     return () => {
       isSubscribed.current = false;
     };
-  }, [user?.accessToken]);
+  }, [loadEmails]);
 
   // Update the FAQ loading effect
   useEffect(() => {
@@ -1039,7 +1164,7 @@ export default function FAQAutoReplyV2() {
 
     const loadFAQs = async () => {
       try {
-        setLoadingState(prev => ({ ...prev, isLoading: true, loadingFAQs: true }));
+        setLoadingFAQs(true);
 
         // Only fetch from API - remove cache logic to ensure fresh data
         console.log('Fetching FAQs from API');
@@ -1070,7 +1195,7 @@ export default function FAQAutoReplyV2() {
         toast.error('Failed to load FAQ library');
         setAnsweredFAQs([]);
       } finally {
-        setLoadingState(prev => ({ ...prev, isLoading: false, loadingFAQs: false }));
+        setLoadingFAQs(false);
       }
     };
 
@@ -1086,7 +1211,7 @@ export default function FAQAutoReplyV2() {
     if (answeredFAQs.length === 0) return;
 
     const updateEmails = async () => {
-      const updatedEmails = await Promise.all(emailState.emails.map(async (email) => {
+      const updatedEmails = await Promise.all(emails.map(async (email) => {
         const questions = emailQuestions.get(email.id) || [];
         if (questions.length === 0) return email;
 
@@ -1155,18 +1280,18 @@ export default function FAQAutoReplyV2() {
         return email;
       }));
 
-      setEmailState(prev => ({ ...prev, emails: updatedEmails }));
+      setEmails(updatedEmails);
     };
 
     updateEmails().catch(error => {
       console.error('Error updating emails:', error);
     });
 
-  }, [answeredFAQs, checkEmailAnsweredStatus, emailQuestions, calculatePatternSimilarity, emailState.emails]);
+  }, [answeredFAQs, checkEmailAnsweredStatus, emailQuestions, calculatePatternSimilarity]);
 
   const handleLoadMore = () => {
-    if (!loadingState.isLoading && emailState.hasMore) {
-      loadEmails();
+    if (!isLoading && hasMore) {
+      loadEmails(false);
     }
   };
 
@@ -1342,8 +1467,8 @@ export default function FAQAutoReplyV2() {
       );
 
       // Update emails that might now have all questions answered
-      setEmailState(prev => {
-        const updatedEmails = prev.emails.map(email => {
+      setEmails(prev => {
+        const updatedEmails = prev.map(email => {
           const emailIds = selectedFAQ?.emailIds || [];
           if (emailIds.includes(email.id)) {
             const questions = emailQuestions.get(email.id) || [];
@@ -1405,11 +1530,7 @@ export default function FAQAutoReplyV2() {
           });
         }
 
-        return {
-          ...prev,
-          emails: updatedEmails,
-          readyToReplyEmails: readyToReplyEmails
-        };
+        return updatedEmails;
       });
 
       // Save updated state to cache
@@ -1431,11 +1552,9 @@ export default function FAQAutoReplyV2() {
 
   const handleMarkNotRelevant = async (email: ExtendedEmail) => {
     // Immediately mark locally as isNotRelevant
-    setEmailState(prev => ({
-      ...prev, emails: prev.emails.map(e =>
-        e.id === email.id ? { ...e, isNotRelevant: true } : e
-      )
-    }));
+    setEmails(prev => prev.map(e =>
+      e.id === email.id ? { ...e, isNotRelevant: true } : e
+    ));
 
     // Remove from questions if you wish
     const updatedQuestions = new Map(emailQuestions);
@@ -1618,13 +1737,11 @@ export default function FAQAutoReplyV2() {
 
       // Update the email object with the questions
       console.log('Updating emails state...');
-      setEmailState(prev => ({
-        ...prev, emails: prev.emails.map(e =>
-          e.id === email.id
-            ? { ...e, questions: questionObjects }
-            : e
-        )
-      }));
+      setEmails(prev => prev.map(e =>
+        e.id === email.id
+          ? { ...e, questions: questionObjects }
+          : e
+      ));
 
       // Save to cache
       console.log('Saving to cache...');
@@ -1649,13 +1766,11 @@ export default function FAQAutoReplyV2() {
   const generateContextualReply = async (email: ExtendedEmail) => {
     try {
       // Set loading state
-      setEmailState(prev => ({
-        ...prev, emails: prev.emails.map(e =>
-          e.id === email.id
-            ? { ...e, isGeneratingReply: true, gmailError: undefined }
-            : e
-        )
-      }));
+      setEmails(prev => prev.map(e =>
+        e.id === email.id
+          ? { ...e, isGeneratingReply: true, gmailError: undefined }
+          : e
+      ));
 
       const response = await fetch('/api/knowledge/generate-reply', {
         method: 'POST',
@@ -1684,13 +1799,11 @@ export default function FAQAutoReplyV2() {
       const data = await response.json();
 
       // Update email with generated reply and cache it
-      setEmailState(prev => ({
-        ...prev, emails: prev.emails.map(e =>
-          e.id === email.id
-            ? { ...e, suggestedReply: data.reply, isGeneratingReply: false }
-            : e
-        )
-      }));
+      setEmails(prev => prev.map(e =>
+        e.id === email.id
+          ? { ...e, suggestedReply: data.reply, isGeneratingReply: false }
+          : e
+      ));
 
       // Cache the reply in Firebase
       const db = getFirebaseDB();
@@ -1706,13 +1819,11 @@ export default function FAQAutoReplyV2() {
       console.error('Error generating reply:', error);
       toast.error('Failed to generate contextual reply');
       // Reset loading state on error
-      setEmailState(prev => ({
-        ...prev, emails: prev.emails.map(e =>
-          e.id === email.id
-            ? { ...e, isGeneratingReply: false }
-            : e
-        )
-      }));
+      setEmails(prev => prev.map(e =>
+        e.id === email.id
+          ? { ...e, isGeneratingReply: false }
+          : e
+      ));
     }
   };
 
@@ -1726,13 +1837,11 @@ export default function FAQAutoReplyV2() {
   const handleSaveReply = async (emailId: string) => {
     if (!editingReply) return;
 
-    setEmailState(prev => ({
-      ...prev, emails: prev.emails.map(e => {
-        if (e.id === emailId) {
-          return { ...e, suggestedReply: editingReply.reply };
-        }
-        return e;
-      })
+    setEmails(prev => prev.map(e => {
+      if (e.id === emailId) {
+        return { ...e, suggestedReply: editingReply.reply };
+      }
+      return e;
     }));
 
     setEditingReply(null);
@@ -1754,13 +1863,11 @@ Support Team`;
   };
 
   const toggleEmailContent = useCallback((emailId: string) => {
-    setEmailState(prev => ({
-      ...prev, emails: prev.emails.map(e =>
-        e.id === emailId
-          ? { ...e, showFullContent: !e.showFullContent }
-          : e
-      )
-    }));
+    setEmails(prev => prev.map(e =>
+      e.id === emailId
+        ? { ...e, showFullContent: !e.showFullContent }
+        : e
+    ));
   }, []);
 
   const toggleThreadExpansion = (threadId: string) => {
@@ -1778,7 +1885,7 @@ Support Team`;
   // Add this effect at the top level with other effects
   useEffect(() => {
     // Check all emails with questions for completion
-    const updatedEmails = emailState.emails.map(email => {
+    const updatedEmails = emails.map(email => {
       const questions = emailQuestions.get(email.id) || [];
       if (questions.length === 0) return email;
 
@@ -1819,35 +1926,32 @@ Support Team`;
     });
 
     // Only update if there are changes
-    if (JSON.stringify(updatedEmails) !== JSON.stringify(emailState.emails)) {
-      setEmailState(prev => ({ ...prev, emails: updatedEmails }));
+    if (JSON.stringify(updatedEmails) !== JSON.stringify(emails)) {
+      setEmails(updatedEmails);
     }
-  }, [emailState.emails, emailQuestions, answeredFAQs, calculatePatternSimilarity]);
+  }, [emails, emailQuestions, answeredFAQs, calculatePatternSimilarity]);
 
   const renderEmailContent = (email: ExtendedEmail) => {
-    const questions = emailQuestions.get(email.id) || [];
-    const hasQuestions = questions.length > 0;
-
     return (
-      <div>
-        {email.content && (
-          <div className="whitespace-pre-wrap text-gray-800 [&_*]:text-gray-800">{email.content}</div>
-        )}
-        {hasQuestions && (
-          <div className="mt-4">
-            {questions.map((question, index) => (
-              <div key={`${email.id}-question-${index}`} className="text-sm text-gray-600">
-                {question.question}
-              </div>
-            ))}
+      <div className="bg-white rounded-lg border border-gray-200 p-4 mb-4 hover:shadow-sm transition-shadow">
+        <div className="flex items-center justify-between mb-3">
+          <div className="text-sm text-gray-500">
+            {new Date(email.receivedAt).toLocaleString()}
           </div>
-        )}
+        </div>
+        <EmailRenderNew
+          content={email.content}
+          maxHeight={200}
+          showDebugInfo={false}
+          className="email-content"
+          onRefresh={() => refreshSingleEmail(email)}
+        />
       </div>
     );
   };
 
   const renderTabs = () => {
-    const readyToReplyCount = emailState.emails.filter(e =>
+    const readyToReplyCount = emails.filter(e =>
       e.status === 'processed' &&
       e.matchedFAQ &&
       !e.isReplied &&
@@ -1860,7 +1964,7 @@ Support Team`;
         label: 'Unanswered',
         mobileLabel: 'New',
         icon: MessageCircleIcon,
-        count: emailState.emails.filter(e => !e.isReplied && !e.isNotRelevant && !e.matchedFAQ).length,
+        count: emails.filter(e => !e.isReplied && !e.isNotRelevant && !e.matchedFAQ).length,
         description: 'Match FAQs to incoming customer emails'
       },
       {
@@ -1884,7 +1988,7 @@ Support Team`;
         label: 'Not Relevant',
         mobileLabel: 'Other',
         icon: XCircleIcon,
-        count: emailState.emails.filter(e => e.isNotRelevant).length,
+        count: emails.filter(e => e.isNotRelevant).length,
         description: 'View emails marked as not requiring FAQ matching'
       }
     ];
@@ -1995,7 +2099,7 @@ Support Team`;
   };
 
   const renderUnansweredEmails = () => {
-    const filteredEmails = emailState.emails.filter(email =>
+    const filteredEmails = emails.filter(email =>
       !email.isReplied &&
       !email.isNotRelevant &&
       (!email.matchedFAQ || !(email.id && ((emailQuestions.get(email.id)?.length ?? 0) > 0))) &&
@@ -2025,7 +2129,7 @@ Support Team`;
 
           return (
             <div
-              key={`unanswered-${email.id}-${index}`}
+              key={email.id}
               className="bg-white rounded-lg shadow-sm pt-4 pb-6 px-6 space-y-4 relative"
               style={{ marginBottom: '2rem' }}
             >
@@ -2048,10 +2152,135 @@ Support Team`;
                   </button>
                 </div>
               </div>
+
+              {/* Email Content with Thread Support */}
               {renderEmailContent(email)}
+
+              <div className="mt-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-medium text-gray-900">Questions:</h4>
+                  {!isAnalyzing && (
+                    <div className="flex items-center gap-2">
+                      {hasQuestions ? (
+                        <button
+                          onClick={() => handleCreateFAQ(email)}
+                          className="inline-flex items-center p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-full transition-colors"
+                          title="Re-analyze email"
+                        >
+                          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                          </svg>
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => handleCreateFAQ(email)}
+                          disabled={isAnalyzing}
+                          className="inline-flex items-center px-3 py-1.5 border border-transparent text-xs font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50"
+                        >
+                          {isAnalyzing ? (
+                            <>
+                              <svg className="animate-spin -ml-1 mr-2 h-3 w-3 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                              </svg>
+                              Analyzing...
+                            </>
+                          ) : (
+                            <>
+                              <LightbulbIcon className="h-3 w-3 mr-1.5" />
+                              Extract Questions
+                            </>
+                          )}
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Show loading state or questions */}
+                {isAnalyzing ? (
+                  <div className="flex items-center justify-center py-4">
+                    <svg className="animate-spin h-5 w-5 text-gray-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                  </div>
+                ) : hasQuestions ? (
+                  <div className="flex flex-wrap gap-2 mt-2">
+                    {questions.map((question, index) => {
+                      const matchedFAQ = answeredFAQs.find(faq =>
+                        faq.answer &&
+                        faq.answer.trim() !== '' &&
+                        calculatePatternSimilarity(faq.question, question.question) > SIMILARITY_THRESHOLD
+                      );
+                      const isAnswered = !!matchedFAQ;
+                      return (
+                        <button
+                          key={index}
+                          onClick={() => handleAddToFAQLibrary(question)}
+                          className={`
+                            group relative inline-flex items-center px-2 py-1 rounded-full text-xs font-medium
+                            transition-all duration-200 hover:shadow-md
+                            ${isAnswered
+                              ? 'bg-green-100 text-green-800 hover:bg-green-200 border border-green-200'
+                              : 'bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200'}
+                          `}
+                        >
+                          {isAnswered ? (
+                            <CheckCircleIcon className="h-3 w-3 mr-1" />
+                          ) : (
+                            <PencilIcon className="h-3 w-3 mr-1" />
+                          )}
+                          {truncateQuestion(question.question)}
+                          {isAnswered && (
+                            <div className="absolute -top-1 -right-1 h-3 w-3 bg-green-500 rounded-full border-2 border-white flex items-center justify-center">
+                              <CheckCircleIcon className="h-2 w-2 text-white" />
+                            </div>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="text-xs text-gray-500 py-2">
+                    No questions extracted yet
+                  </div>
+                )}
+              </div>
             </div>
           );
         })}
+
+        {/* Load More Button */}
+        {hasMore && !loadingMore && (
+          <div className="flex justify-center mt-8">
+            <button
+              onClick={() => loadEmails(false, page + 1)}
+              className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+            >
+              {loadingMore ? (
+                <>
+                  <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-gray-700" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  Loading...
+                </>
+              ) : (
+                'Load 5 More'
+              )}
+            </button>
+          </div>
+        )}
+
+        {/* Loading More Indicator */}
+        {loadingMore && (
+          <div className="flex justify-center mt-8">
+            <div className="animate-pulse flex space-x-4">
+              <div className="h-4 w-24 bg-gray-200 rounded"></div>
+            </div>
+          </div>
+        )}
       </div>
     );
   };
@@ -2154,14 +2383,147 @@ Support Team`;
   // Update the handleRefresh function
   const handleRefresh = async () => {
     try {
-      setLoadingState(prev => ({ ...prev, isLoading: true }));
-      await loadEmails();
-      toast.success('Emails refreshed successfully');
+      if (!user?.accessToken) {
+        toast.error('Please sign in to refresh emails');
+        return;
+      }
+
+      const emailsToRefresh = emails.filter(email => email.threadId); // Only refresh emails with threadId
+      if (emailsToRefresh.length === 0) {
+        toast.error('No emails to refresh');
+        return;
+      }
+
+      toast.loading(`Refreshing ${emailsToRefresh.length} emails...`);
+
+      let currentToken = user.accessToken;
+      const batchSize = 5; // Process 5 emails at a time
+      const emailBatches = [];
+
+      // Split emails into batches
+      for (let i = 0; i < emailsToRefresh.length; i += batchSize) {
+        emailBatches.push(emailsToRefresh.slice(i, i + batchSize));
+      }
+
+      let updatedEmails: ExtendedEmail[] = [];
+      let failedEmails = 0;
+
+      // Process each batch
+      for (let i = 0; i < emailBatches.length; i++) {
+        const batch = emailBatches[i];
+        const batchPromises = batch.map(async (email) => {
+          if (!email.threadId) return null;
+
+          try {
+            let response = await fetch(`/api/gmail/fetch-emails?threadId=${email.threadId}`, {
+              headers: {
+                'Authorization': `Bearer ${currentToken}`
+              }
+            });
+
+            // Handle 401 by refreshing token
+            if (response.status === 401) {
+              const newToken = await refreshAccessToken();
+              if (!newToken) {
+                throw new Error('Session expired');
+              }
+              currentToken = newToken;
+              // Retry with new token
+              response = await fetch(`/api/gmail/fetch-emails?threadId=${email.threadId}`, {
+                headers: {
+                  'Authorization': `Bearer ${currentToken}`
+                }
+              });
+            }
+
+            if (!response.ok) {
+              throw new Error('Failed to fetch email data');
+            }
+
+            const emailData = await response.json();
+
+            // Process the email data
+            const processedEmailData = {
+              ...emailData,
+              lastUpdated: Date.now(),
+              content: {
+                html: typeof emailData.content === 'object' ? emailData.content.html : null,
+                text: typeof emailData.content === 'object' ? emailData.content.text : emailData.content
+              }
+            };
+
+            // Update Firebase
+            const db = getFirebaseDB();
+            if (db) {
+              const emailDocRef = doc(db, FIREBASE_COLLECTIONS.EMAIL_CACHE, email.id);
+              const threadDocRef = doc(db, FIREBASE_COLLECTIONS.THREAD_CACHE, email.threadId);
+
+              await Promise.all([
+                setDoc(emailDocRef, processedEmailData, { merge: true }),
+                setDoc(threadDocRef, {
+                  ...processedEmailData,
+                  threadId: email.threadId,
+                  emailId: email.id,
+                  lastUpdated: Date.now()
+                }, { merge: true })
+              ]);
+            }
+
+            return processedEmailData;
+          } catch (error) {
+            console.error(`Error refreshing email ${email.id}:`, error);
+            failedEmails++;
+            return null;
+          }
+        });
+
+        // Wait for batch to complete and add successful updates to list
+        const batchResults = await Promise.all(batchPromises);
+        updatedEmails = [...updatedEmails, ...batchResults.filter((email): email is ExtendedEmail => email !== null)];
+
+        // Update progress
+        toast.loading(`Refreshed ${updatedEmails.length} of ${emailsToRefresh.length} emails...`);
+
+        // Add a small delay between batches to avoid rate limiting
+        if (i < emailBatches.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+      }
+
+      // Update local state
+      setEmails(prevEmails => {
+        const updatedEmailMap = new Map(updatedEmails.map(email => [email.id, email]));
+        return prevEmails.map(email => updatedEmailMap.get(email.id) || email);
+      });
+
+      toast.dismiss();
+
+      // Show success/failure message
+      if (failedEmails > 0) {
+        toast.warning(
+          <div className="flex flex-col gap-1">
+            <div className="font-medium">Refresh completed with some errors</div>
+            <div className="text-sm text-gray-600">
+              Successfully updated {updatedEmails.length} emails, {failedEmails} failed
+            </div>
+          </div>,
+          { duration: 5000 }
+        );
+      } else {
+        toast.success(
+          <div className="flex flex-col gap-1">
+            <div className="font-medium">All emails refreshed successfully</div>
+            <div className="text-sm text-gray-600">
+              Updated {updatedEmails.length} emails
+            </div>
+          </div>,
+          { duration: 3000 }
+        );
+      }
     } catch (error) {
+      toast.dismiss();
       console.error('Error refreshing emails:', error);
-      toast.error('Failed to refresh emails');
-    } finally {
-      setLoadingState(prev => ({ ...prev, isLoading: false }));
+      toast.error(error instanceof Error ? error.message : 'Failed to refresh emails');
     }
   };
 
@@ -2211,7 +2573,7 @@ Support Team`;
       );
     }
 
-    if (loadingState.isLoading) {
+    if (loading) {
       return <SkeletonLoader />;
     }
 
@@ -2238,7 +2600,7 @@ Support Team`;
     const removedEmailIds = new Set(removedEmailsCache?.emails || []);
 
     // Only show emails that are processed, have a matched FAQ, haven't been replied to, and haven't been removed
-    const readyToReplyEmails = emailState.emails.filter(e =>
+    const readyToReplyEmails = emails.filter(e =>
       e.status === 'processed' &&
       e.matchedFAQ &&
       !e.isReplied &&
@@ -2368,7 +2730,10 @@ Support Team`;
   };
 
   const renderFAQLibrary = () => {
-    if (loadingState.loadingFAQs) {
+    console.log('=== Rendering FAQ Library ===');
+    console.log('Current FAQs:', answeredFAQs);
+
+    if (loadingFAQs) {
       return (
         <div className="flex justify-center items-center h-64">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900" />
@@ -2444,22 +2809,23 @@ Support Team`;
 
   // Update the email handling in handleEmailProcessing
   const handleEmailProcessing = useCallback((emailId: string) => {
-    const currentEmail = emailState.emails.find(e => e.id === emailId);
+    const currentEmail = emails.find(e => e.id === emailId);
     if (!currentEmail) return;
 
     if (selectedFAQ && Array.isArray(selectedFAQ.emailIds)) {
-      selectedFAQ.emailIds.forEach((id: string) => {
-        const relatedEmail = emailState.emails.find(e => e.id === id);
+      selectedFAQ.emailIds.forEach((emailId: string) => {
+        const relatedEmail = emails.find(e => e.id === emailId);
         if (relatedEmail) {
           // Process the email
         }
       });
 
+      const currentEmail = emails.find(e => e.id === emailId);
       if (currentEmail && selectedFAQ.emailIds.includes(currentEmail.id)) {
         // Handle matched email
       }
     }
-  }, [emailState.emails, selectedFAQ]);
+  }, [emails, selectedFAQ]);
 
   // Add debug logging for state changes
   useEffect(() => {
@@ -2469,14 +2835,12 @@ Support Team`;
     console.log('Email Questions:', Array.from(emailQuestions.entries()));
     console.log('Active Tab:', activeTab);
     console.log('Loading States:', {
-      isLoading: loadingState.isLoading,
-      loadingFAQs: loadingState.loadingFAQs,
-      loadingCache: loadingState.loadingCache,
-      loadingMore: loadingState.loadingMore,
-      analyzing: loadingState.analyzing,
-      hasInitialized: loadingState.hasInitialized
+      loading,
+      loadingFAQs,
+      loadingCache,
+      loadingMore
     });
-  }, [genericFAQs, answeredFAQs, emailQuestions, activeTab, loadingState]);
+  }, [genericFAQs, answeredFAQs, emailQuestions, activeTab, loading, loadingFAQs, loadingCache, loadingMore, emails]);
 
   // Add this useEffect for the countdown timer
   useEffect(() => {
@@ -2616,11 +2980,7 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
           subject: email.subject,
           sender: email.sender,
           content: email.content,
-          receivedAt: typeof email.receivedAt === 'string'
-            ? Date.parse(email.receivedAt)
-            : typeof email.receivedAt === 'number'
-              ? email.receivedAt
-              : new Date().getTime()
+          receivedAt: typeof email.receivedAt === 'string' ? Date.parse(email.receivedAt) : email.receivedAt
         };
 
         return {
@@ -2670,22 +3030,20 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
   const handleRemoveFromReadyToReply = async (email: ExtendedEmail) => {
     try {
       // Update emails state to remove this email from ready to reply
-      setEmailState(prev => ({
-        ...prev, emails: prev.emails.map(e => {
-          if (e.id === email.id) {
-            const updatedEmail: ExtendedEmail = {
-              ...e,
-              status: 'removed_from_ready',
-              matchedFAQ: undefined
-            };
-            return updatedEmail;
-          }
-          return e;
-        })
+      setEmails(prev => prev.map(e => {
+        if (e.id === email.id) {
+          const updatedEmail: ExtendedEmail = {
+            ...e,
+            status: 'removed_from_ready',
+            matchedFAQ: undefined
+          };
+          return updatedEmail;
+        }
+        return e;
       }));
 
       // Get current ready to reply emails excluding the removed one
-      const readyToReplyEmails = emailState.emails.filter(e =>
+      const readyToReplyEmails = emails.filter(e =>
         e.id !== email.id &&
         e.status === 'processed' &&
         e.matchedFAQ &&
@@ -2730,13 +3088,11 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
 
   // Add this helper function inside the component
   const handleShowFullContent = useCallback((emailId: string): void => {
-    setEmailState(prev => ({
-      ...prev, emails: prev.emails.map(e =>
-        e.id === emailId
-          ? { ...e, showFullContent: true }
-          : e
-      )
-    }));
+    setEmails((prev: ExtendedEmail[]) => prev.map((e: ExtendedEmail) =>
+      e.id === emailId
+        ? { ...e, showFullContent: true }
+        : e
+    ));
   }, []);
 
   // Add this function to handle moving emails back to relevant
@@ -2748,7 +3104,9 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
         irrelevanceReason: undefined
       };
 
-      setEmailState(prev => ({ ...prev, emails: prev.emails.map(e => (e.id === email.id ? updatedEmail : e)) }));
+      setEmails((prevEmails: ExtendedEmail[]) =>
+        prevEmails.map((e) => (e.id === email.id ? updatedEmail : e))
+      );
     } catch (error) {
       console.error('Error moving email back to relevant:', error);
       toast.error('Failed to move email back to relevant');
@@ -2756,13 +3114,13 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
   };
 
   function renderNotRelevantEmails() {
-    const notRelevantEmails = emailState.emails.filter(email => email.isNotRelevant);
+    const notRelevantEmails = emails.filter(email => email.isNotRelevant);
 
     return (
       <div className="space-y-8 relative pl-[4.5rem]">
         {notRelevantEmails.map((email, index) => (
           <div
-            key={`not-relevant-${email.id}-${index}`}
+            key={email.id}
             className="bg-white rounded-lg shadow-sm p-6 space-y-4 relative"
             style={{ marginBottom: '2rem' }}
           >
@@ -2786,6 +3144,8 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
                 </button>
               </div>
             </div>
+
+            {/* Email Content with Thread Support */}
             {renderEmailContent(email)}
           </div>
         ))}
@@ -2800,7 +3160,7 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
   function renderAllEmails() {
     return (
       <div className="space-y-8 relative pl-[4.5rem]">
-        {emailState.emails.length === 0 ? (
+        {emails.length === 0 ? (
           <div className="text-center py-12">
             <div className="mx-auto h-12 w-12 text-gray-400 mb-4">
               <InboxIcon className="h-12 w-12" />
@@ -2812,13 +3172,13 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
           </div>
         ) : (
           <>
-            {emailState.emails.map((email, index) => (
+            {emails.map((email, index) => (
               <div
-                key={`all-${email.id}-${index}`}
+                key={email.id}
                 className="bg-white rounded-lg shadow-sm pt-4 pb-6 px-6 space-y-4 relative"
                 style={{ marginBottom: '2rem' }}
               >
-                {renderEmailTimeline(email, index, emailState.emails)}
+                {renderEmailTimeline(email, index, emails)}
                 <div className="flex justify-between items-start">
                   <div className="space-y-1">
                     <h3 className="text-lg font-medium text-gray-900">
@@ -2827,11 +3187,76 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
                     <div className="text-sm text-gray-500">
                       From: {email.sender}
                     </div>
+                    {/* Add status indicators */}
+                    <div className="flex gap-2 mt-2">
+                      {email.isReplied && (
+                        <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                          <CheckCircleIcon className="h-3 w-3 mr-1" />
+                          Replied
+                        </span>
+                      )}
+                      {email.isNotRelevant && (
+                        <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
+                          <XCircleIcon className="h-3 w-3 mr-1" />
+                          Not Relevant
+                        </span>
+                      )}
+                      {email.matchedFAQ && (
+                        <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                          <BookOpenIcon className="h-3 w-3 mr-1" />
+                          FAQ Matched
+                        </span>
+                      )}
+                    </div>
                   </div>
+                  <button
+                    onClick={() => refreshSingleEmail(email)}
+                    className="p-1 text-gray-500 hover:text-gray-700"
+                    title="Refresh email data"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                      <path fillRule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clipRule="evenodd" />
+                    </svg>
+                  </button>
                 </div>
+
+                {/* Email Content with Thread Support */}
                 {renderEmailContent(email)}
+
+                {/* Show matched FAQ if exists */}
+                {email.matchedFAQ && (
+                  <div className="mt-4 bg-blue-50 rounded-lg p-4">
+                    <h4 className="text-sm font-medium text-blue-900 mb-2">Matched FAQ:</h4>
+                    <p className="text-sm text-blue-800">{email.matchedFAQ.question}</p>
+                    {email.matchedFAQ.answer && (
+                      <p className="text-sm text-blue-700 mt-2">{email.matchedFAQ.answer}</p>
+                    )}
+                  </div>
+                )}
               </div>
             ))}
+
+            {/* Load More Button */}
+            {hasMore && !loadingMore && (
+              <div className="flex justify-center mt-8">
+                <button
+                  onClick={() => loadEmails(false, page + 1)}
+                  className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                >
+                  {loadingMore ? (
+                    <>
+                      <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-gray-700" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                      </svg>
+                      Loading...
+                    </>
+                  ) : (
+                    'Load 5 More'
+                  )}
+                </button>
+              </div>
+            )}
           </>
         )}
       </div>
@@ -2843,7 +3268,7 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
     <div className="flex justify-center mt-4 mb-8">
       <button
         className="bg-blue-500 hover:bg-blue-600 text-white font-semibold py-2 px-4 rounded"
-        onClick={() => loadEmails()}
+        onClick={() => loadEmails(false)}
         disabled={isLoading}
       >
         {isLoading ? 'Loading...' : 'Load More'}
@@ -2877,14 +3302,11 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
 
   // Fix the email state updates
   const updateEmails = (newEmails: ExtendedEmail[]) => {
-    setEmailState(prev => {
+    setEmails(prevEmails => {
       const uniqueEmails = newEmails.filter(email => {
-        return !prev.emails.some(prevEmail => prevEmail.id === email.id);
+        return !prevEmails.some(prevEmail => prevEmail.id === email.id);
       });
-      return {
-        ...prev,
-        emails: [...prev.emails, ...uniqueEmails] as ExtendedEmail[]
-      };
+      return [...prevEmails, ...uniqueEmails] as ExtendedEmail[];
     });
   };
 
@@ -2892,14 +3314,13 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
   const handleEmailUpdate = (email: ExtendedEmail | null) => {
     if (!email) return;
 
-    setEmailState(prev => ({
-      ...prev,
-      emails: prev.emails.map(e =>
+    setEmails(prevEmails =>
+      prevEmails.map(e =>
         e.id === email.id
           ? { ...e, ...email, status: (email.status || e.status || 'pending') as ExtendedEmail['status'] }
           : e
       )
-    }));
+    );
   };
 
   const filterReadyEmails = (emails: ExtendedEmail[]) => {
@@ -2911,27 +3332,168 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
     );
   };
 
-  // Update debug logging for state changes
-  useEffect(() => {
-    console.log('Loading States:', {
-      isLoading: loadingState.isLoading,
-      loadingFAQs: loadingState.loadingFAQs,
-      loadingCache: loadingState.loadingCache,
-      loadingMore: loadingState.loadingMore
-    });
-  }, [loadingState]);
+  // Add this function near other email-related functions
+  const refreshSingleEmail = async (email: ExtendedEmail) => {
+    try {
+      if (!user?.accessToken) {
+        toast.error('Please sign in to refresh emails');
+        return;
+      }
 
-  // Update loading references in debug logging
-  useEffect(() => {
-    if (answeredFAQs.length === 0) return;
+      toast.loading('Refreshing email data...');
 
-    console.log('Loading States:', {
-      isLoading: loadingState.isLoading,
-      loadingFAQs: loadingState.loadingFAQs,
-      loadingCache: loadingState.loadingCache,
-      loadingMore: loadingState.loadingMore
-    });
-  }, [genericFAQs, answeredFAQs, emailQuestions, activeTab, loadingState]);
+      let currentToken = user.accessToken;
+
+      // First attempt with current token
+      let response = await fetch(`/api/gmail/fetch-emails?threadId=${email.threadId}`, {
+        headers: {
+          'Authorization': `Bearer ${currentToken}`
+        }
+      });
+
+      // Handle 401 by refreshing token
+      if (response.status === 401) {
+        const newToken = await refreshAccessToken();
+        if (!newToken) {
+          toast.dismiss();
+          toast.error('Session expired. Please sign in again.');
+          return;
+        }
+        currentToken = newToken;
+        // Retry with new token
+        response = await fetch(`/api/gmail/fetch-emails?threadId=${email.threadId}`, {
+          headers: {
+            'Authorization': `Bearer ${currentToken}`
+          }
+        });
+      }
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to fetch email data');
+      }
+
+      const updatedEmail = await response.json();
+
+      // Update Firebase with the new email data
+      const db = getFirebaseDB();
+      if (!db) throw new Error('Firebase not initialized');
+
+      // Prepare the metadata (everything except content)
+      const emailMetadata = {
+        id: email.id,
+        threadId: email.threadId,
+        subject: updatedEmail.subject,
+        sender: updatedEmail.sender,
+        receivedAt: updatedEmail.receivedAt,
+        lastUpdated: Date.now(),
+        // Add a flag to indicate content is stored separately
+        hasLargeContent: true
+      };
+
+      // Prepare the content object
+      const emailContent = {
+        html: typeof updatedEmail.content === 'object' ? updatedEmail.content.html : null,
+        text: typeof updatedEmail.content === 'object' ? updatedEmail.content.text : updatedEmail.content
+      };
+
+      // Function to truncate content if needed
+      const truncateContent = (content: string, maxLength: number = 500000) => {
+        if (!content) return content;
+        if (content.length <= maxLength) return content;
+
+        // For HTML, try to preserve structure
+        if (content.includes('</')) {
+          // Find the last complete tag before maxLength
+          const truncated = content.substring(0, maxLength);
+          const lastCloseTag = truncated.lastIndexOf('</');
+          if (lastCloseTag > 0) {
+            return truncated.substring(0, lastCloseTag) + '\n<!-- Content truncated due to size limits -->';
+          }
+        }
+
+        return content.substring(0, maxLength) + '\n... (Content truncated due to size limits)';
+      };
+
+      // Truncate content if necessary
+      if (emailContent.html) {
+        emailContent.html = truncateContent(emailContent.html);
+      }
+      if (emailContent.text) {
+        emailContent.text = truncateContent(emailContent.text);
+      }
+
+      try {
+        // Save metadata to email_cache
+        const emailDocRef = doc(db, FIREBASE_COLLECTIONS.EMAIL_CACHE, email.id);
+        await setDoc(emailDocRef, emailMetadata, { merge: true });
+
+        // Save metadata to thread_cache
+        const threadDocRef = doc(db, FIREBASE_COLLECTIONS.THREAD_CACHE, email.threadId);
+        await setDoc(threadDocRef, {
+          ...emailMetadata,
+          emailId: email.id
+        }, { merge: true });
+
+        // Save content to a separate collection with compression
+        const contentDocRef = doc(db, 'email_content', email.id);
+        await setDoc(contentDocRef, {
+          content: emailContent,
+          updatedAt: Date.now()
+        });
+
+        // Update local state
+        const combinedData: Partial<ExtendedEmail> = {
+          ...emailMetadata,
+          content: emailContent.html || emailContent.text || '',
+          status: email.status,
+          isReplied: email.isReplied,
+          isNotRelevant: email.isNotRelevant,
+          matchedFAQ: email.matchedFAQ,
+          suggestedReply: email.suggestedReply
+        };
+
+        setEmails((prevEmails: ExtendedEmail[]) =>
+          prevEmails.map((e: ExtendedEmail) =>
+            e.id === email.id ? {
+              ...e,
+              ...combinedData
+            } : e
+          )
+        );
+
+        toast.dismiss();
+        toast.success(
+          <div className="flex flex-col gap-1">
+            <div className="font-medium">Email refreshed successfully</div>
+            <div className="text-sm text-gray-600">
+              Content and metadata saved separately
+            </div>
+          </div>,
+          { duration: 3000 }
+        );
+      } catch (error) {
+        if (error instanceof Error && error.message.includes('maximum allowed size')) {
+          console.error('Content too large, saving metadata only:', error);
+          // Save only metadata if content is too large
+          const emailDocRef = doc(db, FIREBASE_COLLECTIONS.EMAIL_CACHE, email.id);
+          await setDoc(emailDocRef, {
+            ...emailMetadata,
+            contentError: 'Content too large to store'
+          }, { merge: true });
+
+          toast.dismiss();
+          toast.warning('Email metadata updated (content too large to store)');
+        } else {
+          throw error;
+        }
+      }
+    } catch (error) {
+      toast.dismiss();
+      console.error('Error refreshing email:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to refresh email');
+    }
+  };
 
   return (
     <Layout>
@@ -2949,7 +3511,6 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
             )}
             <button
               onClick={handleRefresh}
-              disabled={loadingState.isLoading}
               className="inline-flex items-center px-2 py-1 border border-gray-300 shadow-sm text-[11px] font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
             >
               <ClockIcon className="h-3 w-3 mr-1" />
