@@ -54,7 +54,11 @@ export function EmailList({
             </div>
             <div className="mt-4">
               <div className="prose prose-sm max-w-none">
-                <p className="text-gray-700">{email.content}</p>
+                {typeof email.content === 'string' ? (
+                  <p className="text-gray-700">{email.content}</p>
+                ) : (
+                  <p className="text-gray-700">{email.content.html || email.content.text || ''}</p>
+                )}
               </div>
             </div>
             {emailQuestions.has(email.id) && (
@@ -87,4 +91,4 @@ export function EmailList({
       ))}
     </div>
   );
-} 
+}

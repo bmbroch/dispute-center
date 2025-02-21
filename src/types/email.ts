@@ -5,7 +5,7 @@ export interface Email {
   threadId: string;
   subject: string;
   sender: string;
-  content: string;
+  content: string | EmailContent;
   receivedAt: string;
   timestamp?: string;
   hasReply?: boolean;
@@ -14,7 +14,7 @@ export interface Email {
   thread?: Array<{
     id: string;
     sender: string;
-    content: string;
+    content: string | EmailContent;
     receivedAt: string;
     subject?: string;
   }>;
@@ -59,12 +59,17 @@ export interface ThreadMessage {
   receivedAt: number;
 }
 
+export interface EmailContent {
+  html: string | null;
+  text: string | null;
+}
+
 export interface BaseEmail {
   id: string;
   threadId: string;
   subject: string;
   sender: string;
-  content: string;
+  content: string | EmailContent;
   receivedAt: string | number;
 }
 
@@ -87,5 +92,9 @@ export interface ExtendedEmail extends BaseEmail {
   gmailError?: {
     message: string;
     details?: any;
+  };
+  content: string | {
+    html: string | null;
+    text: string | null;
   };
 }

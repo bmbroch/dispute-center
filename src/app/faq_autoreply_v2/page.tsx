@@ -29,7 +29,7 @@ import { Dialog, Transition } from '@headlessui/react';
 import { Fragment } from 'react';
 import { getFirebaseDB } from '@/lib/firebase/firebase';
 import { collection, doc, setDoc, getDoc, getDocs, query, where, deleteDoc } from 'firebase/firestore';
-import { Email, ExtendedEmail, ThreadMessage, BaseEmail } from '@/types/email';
+import type { Email, ExtendedEmail, EmailContent, BaseEmail } from '@/types/email';
 import { GenericFAQ, IrrelevanceAnalysis } from '@/types/faq';
 import { calculatePatternSimilarity } from '@/lib/utils/similarity';
 import { Firestore } from 'firebase/firestore';
@@ -1629,14 +1629,20 @@ export default function FAQAutoReplyV2() {
   // Update the handleCreateFAQ function
   const handleCreateFAQ = async (email: ExtendedEmail) => {
     console.log('=== Starting FAQ Creation ===');
+
+    // Get the content to analyze - prefer HTML content if available
+    const contentToAnalyze = typeof email.content === 'object'
+      ? (email.content.html || email.content.text)
+      : email.content;
+
     console.log('Email:', {
       id: email.id,
       subject: email.subject,
-      contentLength: email.content?.length,
-      contentPreview: email.content?.substring(0, 100) + '...'
+      contentLength: contentToAnalyze?.length,
+      contentPreview: contentToAnalyze?.substring(0, 100) + '...'
     });
 
-    if (!email.content) {
+    if (!contentToAnalyze) {
       console.log('Error: No email content to analyze');
       toast.error('No email content to analyze');
       return;
@@ -1653,7 +1659,7 @@ export default function FAQAutoReplyV2() {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          emailContent: email.content
+          emailContent: contentToAnalyze
         })
       });
 
@@ -2653,7 +2659,9 @@ Support Team`;
                   </div>
                   <div className="bg-gray-50 rounded-lg p-4">
                     <p className="text-sm text-gray-700 whitespace-pre-wrap">
-                      {email.content}
+                      {typeof email.content === 'string'
+                        ? email.content
+                        : (email.content.html || email.content.text || '')}
                     </p>
                   </div>
                 </div>
@@ -3345,10 +3353,13 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
       let currentToken = user.accessToken;
 
       // First attempt with current token
-      let response = await fetch(`/api/gmail/fetch-emails?threadId=${email.threadId}`, {
+      let response = await fetch('/api/emails/refresh-single', {
+        method: 'POST',
         headers: {
-          'Authorization': `Bearer ${currentToken}`
-        }
+          'Authorization': `Bearer ${currentToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ threadId: email.threadId })
       });
 
       // Handle 401 by refreshing token
@@ -3361,10 +3372,13 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
         }
         currentToken = newToken;
         // Retry with new token
-        response = await fetch(`/api/gmail/fetch-emails?threadId=${email.threadId}`, {
+        response = await fetch('/api/emails/refresh-single', {
+          method: 'POST',
           headers: {
-            'Authorization': `Bearer ${currentToken}`
-          }
+            'Authorization': `Bearer ${currentToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ threadId: email.threadId })
         });
       }
 
@@ -3394,7 +3408,7 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
       // Prepare the content object
       const emailContent = {
         html: typeof updatedEmail.content === 'object' ? updatedEmail.content.html : null,
-        text: typeof updatedEmail.content === 'object' ? updatedEmail.content.text : updatedEmail.content
+        text: typeof updatedEmail.content === 'object' ? updatedEmail.content.text : null
       };
 
       // Function to truncate content if needed
@@ -3424,14 +3438,23 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
       }
 
       try {
+        // First update Firebase with the full content object
+        const firebaseData = {
+          ...emailMetadata,
+          content: {
+            html: emailContent.html || null,
+            text: emailContent.text || null
+          }
+        };
+
         // Save metadata to email_cache
         const emailDocRef = doc(db, FIREBASE_COLLECTIONS.EMAIL_CACHE, email.id);
-        await setDoc(emailDocRef, emailMetadata, { merge: true });
+        await setDoc(emailDocRef, firebaseData, { merge: true });
 
         // Save metadata to thread_cache
         const threadDocRef = doc(db, FIREBASE_COLLECTIONS.THREAD_CACHE, email.threadId);
         await setDoc(threadDocRef, {
-          ...emailMetadata,
+          ...firebaseData,
           emailId: email.id
         }, { merge: true });
 
@@ -3442,8 +3465,40 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
           updatedAt: Date.now()
         });
 
-        // Update local state
-        const combinedData: Partial<ExtendedEmail> = {
+        // Extract and save new questions
+        const contentToAnalyze = emailContent.html || emailContent.text;
+        if (contentToAnalyze) {
+          const questionsResponse = await fetch('/api/knowledge/extract-questions', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              emailContent: contentToAnalyze
+            })
+          });
+
+          if (questionsResponse.ok) {
+            const questionsData = await questionsResponse.json();
+            if (questionsData.questions) {
+              // Save to both question collections
+              await Promise.all([
+                saveQuestionsToFirebase(email.id, questionsData.questions),
+                saveExtractedQuestionsToFirebase(email.id, questionsData.questions)
+              ]);
+
+              // Update emailQuestions state
+              setEmailQuestions(prev => {
+                const updated = new Map(prev);
+                updated.set(email.id, questionsData.questions);
+                return updated;
+              });
+            }
+          }
+        }
+
+        // Update React state with string content
+        const stateData: Partial<ExtendedEmail> = {
           ...emailMetadata,
           content: emailContent.html || emailContent.text || '',
           status: email.status,
@@ -3457,7 +3512,7 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
           prevEmails.map((e: ExtendedEmail) =>
             e.id === email.id ? {
               ...e,
-              ...combinedData
+              ...stateData
             } : e
           )
         );
@@ -3467,7 +3522,7 @@ ${questions.map((q: GenericFAQ, i: number) => `${i + 1}. ${q.question}`).join('\
           <div className="flex flex-col gap-1">
             <div className="font-medium">Email refreshed successfully</div>
             <div className="text-sm text-gray-600">
-              Content and metadata saved separately
+              Content, metadata, and questions updated
             </div>
           </div>,
           { duration: 3000 }
