@@ -29,21 +29,21 @@ export function extractEmailBody(message: gmail_v1.Schema$Message): {
 
       // If no body data but has parts, recursively search parts
       if (part.parts) {
-        // First try to find text/plain
-        let plainTextPart = part.parts.find(p => p.mimeType === 'text/plain');
-        if (plainTextPart?.body?.data) {
-          return {
-            content: Buffer.from(plainTextPart.body.data, 'base64').toString('utf-8'),
-            contentType: 'text/plain'
-          };
-        }
-
-        // If no text/plain, try to find text/html
+        // First try to find HTML content
         let htmlPart = part.parts.find(p => p.mimeType === 'text/html');
         if (htmlPart?.body?.data) {
           return {
             content: Buffer.from(htmlPart.body.data, 'base64').toString('utf-8'),
             contentType: 'text/html'
+          };
+        }
+
+        // If no HTML, try to find plain text
+        let plainTextPart = part.parts.find(p => p.mimeType === 'text/plain');
+        if (plainTextPart?.body?.data) {
+          return {
+            content: Buffer.from(plainTextPart.body.data, 'base64').toString('utf-8'),
+            contentType: 'text/plain'
           };
         }
 
