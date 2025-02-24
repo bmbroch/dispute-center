@@ -3,6 +3,7 @@ import OpenAI from 'openai';
 import { getFirebaseAdmin } from '@/lib/firebase/firebase-admin';
 import { getFirestore } from 'firebase-admin/firestore';
 import { FAQ } from '@/types/faq';
+import { calculatePatternSimilarity } from '@/lib/utils/similarity';
 
 // Validate environment variables
 if (!process.env.OPENAI_API_KEY) {
@@ -12,6 +13,11 @@ if (!process.env.OPENAI_API_KEY) {
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY || '',
 });
+
+interface ExistingFaq {
+  id: string;
+  question?: string;
+}
 
 export async function POST(req: Request) {
   try {
@@ -62,17 +68,17 @@ export async function POST(req: Request) {
     // Analyze emails to generate generic FAQs
     const systemPrompt = `You are an expert at analyzing customer support emails and generating generic, reusable FAQ questions.
     Given a set of customer emails, identify common underlying themes and generate generic questions that could help multiple users.
-    
+
     For example:
     If multiple users ask about "how do I set up X" or "can't configure Y", generate a generic question like "How do I set up and configure my account?"
-    
+
     Rules:
     1. Questions should be generic enough to help multiple users
     2. Avoid customer-specific details
     3. Group similar questions together
     4. Identify which emails would be helped by each FAQ
     5. Categorize questions (e.g., Setup, Usage, Billing, etc.)
-    
+
     Return a JSON object in this format:
     {
       "genericFaqs": [{
@@ -88,8 +94,8 @@ export async function POST(req: Request) {
       model: "gpt-4",
       messages: [
         { role: "system", content: systemPrompt },
-        { 
-          role: "user", 
+        {
+          role: "user",
           content: JSON.stringify(emails.map(e => ({
             id: e.id,
             subject: e.subject,
@@ -111,11 +117,11 @@ export async function POST(req: Request) {
     const analysis = JSON.parse(response.choices[0].message.content);
 
     // Filter out any FAQs that are too similar to existing ones
-    const newFaqs = analysis.genericFaqs.filter((newFaq: { question: string; answer: string }) => {
-      // Check if a similar FAQ already exists
-      return !existingFaqs.some((existingFaq: any) => {
-        if (!existingFaq.question) return false;
-        return calculateSimilarity(newFaq.question, existingFaq.question) > 0.8;
+    const newFaqs = analysis.genericFaqs.filter((newFaq: { question: string }) => {
+      // Check against all existing FAQs using similarity
+      return !existingFaqs.some((existingFaq: ExistingFaq) => {
+        const existingQuestion = existingFaq.question || '';
+        return calculatePatternSimilarity(existingQuestion, newFaq.question) > 0.7;
       });
     });
 
@@ -134,7 +140,7 @@ export async function POST(req: Request) {
     console.error('Error analyzing emails:', error);
     // Return a more detailed error response
     return NextResponse.json(
-      { 
+      {
         error: 'Failed to analyze emails',
         details: error instanceof Error ? error.message : 'Unknown error',
         timestamp: new Date().toISOString()
@@ -149,9 +155,9 @@ function calculateSimilarity(text1: string, text2: string): number {
   const normalize = (text: string) => text.toLowerCase().replace(/[^\w\s]/g, '');
   const words1 = new Set(normalize(text1).split(/\s+/));
   const words2 = new Set(normalize(text2).split(/\s+/));
-  
+
   const intersection = new Set([...words1].filter(x => words2.has(x)));
   const union = new Set([...words1, ...words2]);
-  
+
   return intersection.size / union.size;
-} 
+}

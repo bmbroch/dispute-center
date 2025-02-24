@@ -3,7 +3,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Editor } from '@tinymce/tinymce-react';
 import { useAuth } from '@/lib/hooks/useAuth';
-import toast from 'react-hot-toast';
+import { toast } from 'sonner';
+import { TINYMCE_CONFIG } from '@/lib/config/tinymce';
+import { Send } from 'lucide-react';
 
 interface FAQEmailComposerProps {
   customerEmail: string;
@@ -21,25 +23,43 @@ export default function FAQEmailComposer({
   onEmailSent,
 }: FAQEmailComposerProps) {
   const { user } = useAuth();
-  const [subject, setSubject] = useState('Re: Your Question');
-  const [content, setContent] = useState(generatedReply);
   const [isSending, setIsSending] = useState(false);
-  const [to, setTo] = useState(user?.email || '');
+  const [to, setTo] = useState('');
   const editorRef = useRef<any>(null);
 
-  // Update 'to' field when user auth state changes
-  useEffect(() => {
-    if (user?.email) {
-      setTo(user.email);
-    }
-  }, [user?.email]);
+  // Format the content for display
+  const formatContent = (content: string) => {
+    // Remove the subject line if it exists
+    const contentWithoutSubject = content.replace(/^Subject: .+?\n/, '');
 
-  // Set the editor content when component mounts
+    // Split the content into paragraphs and format them
+    const paragraphs = contentWithoutSubject.split('\n\n');
+    const formattedParagraphs = paragraphs.map(para => {
+      // Handle multi-line paragraphs
+      const lines = para.split('\n').map(line => line.trim()).filter(Boolean);
+      if (lines.length === 0) return '<p><br></p>';
+      return lines.map(line => `<p>${line}</p>`).join('');
+    });
+
+    return formattedParagraphs.join('\n');
+  };
+
+  // Extract email address from customer email string
+  useEffect(() => {
+    if (customerEmail) {
+      // Extract email from format like "Name <email@example.com>" or just "email@example.com"
+      const emailMatch = customerEmail.match(/<(.+)>/) || [null, customerEmail];
+      setTo(emailMatch[1] || customerEmail);
+    }
+  }, [customerEmail]);
+
+  // Update editor content when initialized or when generatedReply changes
   useEffect(() => {
     if (editorRef.current) {
-      editorRef.current.setContent(generatedReply);
+      const formattedContent = formatContent(generatedReply);
+      editorRef.current.setContent(formattedContent);
     }
-  }, [generatedReply]);
+  }, [generatedReply, editorRef.current]);
 
   const handleSend = async () => {
     if (!user?.accessToken) {
@@ -52,12 +72,15 @@ export default function FAQEmailComposer({
       return;
     }
 
-    try {
-      setIsSending(true);
+    // Create a loading toast that we'll update
+    const toastId = toast.loading('Sending email...');
+    setIsSending(true);
+    onClose(); // Close the modal immediately
 
+    try {
       // Get the content from TinyMCE editor
       const editor = (window as any).tinymce.get('email-editor');
-      const newContent = editor ? editor.getContent() : content;
+      const newContent = editor ? editor.getContent() : formatContent(generatedReply);
 
       // Format the email content with proper structure
       const fullEmailContent = `<div dir="ltr" style="font-family:Arial,sans-serif;font-size:14px">
@@ -73,7 +96,7 @@ ${newContent}
         },
         body: JSON.stringify({
           to: to.trim(),
-          subject: subject.trim(),
+          subject: `Re: ${originalQuestion.split('\n')[0].substring(0, 50)}...`, // Use first line of original email
           content: fullEmailContent,
         })
       });
@@ -85,15 +108,14 @@ ${newContent}
 
       const data = await response.json();
       if (data.success) {
-        toast.success('Email sent successfully! 📧');
+        toast.success('Email sent successfully! 📧', { id: toastId });
         onEmailSent();
-        onClose();
       } else {
         throw new Error('Failed to send email');
       }
     } catch (error) {
       console.error('Error sending email:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to send email');
+      toast.error(error instanceof Error ? error.message : 'Failed to send email', { id: toastId });
     } finally {
       setIsSending(false);
     }
@@ -126,34 +148,21 @@ ${newContent}
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700">Subject</label>
-            <input
-              type="text"
-              value={subject}
-              onChange={(e) => setSubject(e.target.value)}
-              className="mt-1 block w-full px-3 py-2 text-gray-900 border border-gray-300 rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500"
-            />
-          </div>
-
-          <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
               Message
             </label>
             <Editor
               id="email-editor"
               apiKey={process.env.NEXT_PUBLIC_TINYMCE_API_KEY}
+              initialValue={formatContent(generatedReply)}
               init={{
+                ...TINYMCE_CONFIG,
                 height: 400,
-                menubar: false,
                 plugins: [
-                  'advlist', 'autolink', 'lists', 'link', 'charmap', 'preview',
-                  'searchreplace', 'visualblocks', 'code', 'fullscreen',
-                  'insertdatetime', 'table', 'code', 'help', 'wordcount', 'emoticons'
+                  ...TINYMCE_CONFIG.plugins,
+                  'emoticons'
                 ],
-                toolbar: 'undo redo | formatselect | ' +
-                  'bold italic | alignleft aligncenter ' +
-                  'alignright alignjustify | bullist numlist | ' +
-                  'removeformat | emoticons | help',
+                toolbar: TINYMCE_CONFIG.toolbar + ' | emoticons',
                 content_style: `
                   body {
                     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
@@ -161,9 +170,11 @@ ${newContent}
                     line-height: 1.6;
                     color: #333;
                     margin: 1rem;
+                    padding: 0;
                   }
                   p {
                     margin: 0 0 1rem 0;
+                    padding: 0;
                   }
                   .emoji {
                     font-size: 1.2em;
@@ -173,12 +184,17 @@ ${newContent}
                 formats: {
                   p: { block: 'p', styles: { margin: '0 0 1rem 0' } }
                 },
-                forced_root_block: 'p'
+                forced_root_block: 'p',
+                convert_newlines_to_brs: false,
+                remove_trailing_brs: false,
+                paste_as_text: true,
+                paste_enable_default_filters: false,
+                paste_word_valid_elements: "p,b,strong,i,em,h1,h2,h3,h4,h5,h6",
+                paste_retain_style_properties: "none"
               }}
               onInit={(evt, editor) => {
                 editorRef.current = editor;
               }}
-              initialValue={content}
             />
           </div>
 
@@ -192,10 +208,10 @@ ${newContent}
             <button
               onClick={handleSend}
               disabled={isSending}
-              className={`px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 ${
-                isSending ? 'opacity-50 cursor-not-allowed' : ''
-              }`}
+              className={`px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 inline-flex items-center gap-2 ${isSending ? 'opacity-50 cursor-not-allowed' : ''
+                }`}
             >
+              <Send className="h-4 w-4" />
               {isSending ? 'Sending...' : 'Send'}
             </button>
           </div>
@@ -203,4 +219,4 @@ ${newContent}
       </div>
     </div>
   );
-} 
+}

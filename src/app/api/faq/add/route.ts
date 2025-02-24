@@ -2,6 +2,9 @@ import { NextResponse } from 'next/server';
 import { getFirebaseAdmin } from '@/lib/firebase/firebase-admin';
 import { getFirestore } from 'firebase-admin/firestore';
 import { FAQ } from '@/types/faq';
+import { calculatePatternSimilarity } from '@/lib/utils/similarity';
+
+const SIMILARITY_THRESHOLD = 0.6; // Threshold for question similarity matching
 
 export async function POST(req: Request) {
   try {
@@ -26,6 +29,27 @@ export async function POST(req: Request) {
     const faqRef = db.collection('faqs');
     const snapshot = await faqRef.where('question', '==', question).get();
 
+    // Add similarity check for existing FAQs
+    const allFaqs = await faqRef.get();
+    const similarExistingFaq = allFaqs.docs.find(doc => {
+      const existingQuestion = doc.data().question;
+      return calculatePatternSimilarity(existingQuestion, question) > SIMILARITY_THRESHOLD;
+    });
+
+    if (similarExistingFaq) {
+      // Update existing FAQ instead of creating new one
+      const existingData = similarExistingFaq.data();
+      const updatedFaq = {
+        ...existingData,
+        emailIds: [...new Set([...existingData.emailIds, ...(emailIds || [])])],
+        confidence: Math.min(1, existingData.confidence + 0.1), // Boost confidence
+        updatedAt: new Date().toISOString()
+      };
+
+      await similarExistingFaq.ref.update(updatedFaq);
+      return NextResponse.json({ id: similarExistingFaq.id, ...updatedFaq });
+    }
+
     const newFaq: FAQ = {
       question,
       answer,
@@ -38,7 +62,7 @@ export async function POST(req: Request) {
     };
 
     let docRef;
-    
+
     if (!snapshot.empty) {
       // Update existing FAQ
       docRef = snapshot.docs[0].ref;
@@ -60,11 +84,11 @@ export async function POST(req: Request) {
   } catch (error) {
     console.error('Error adding/updating FAQ:', error);
     return NextResponse.json(
-      { 
+      {
         error: 'Failed to add/update FAQ',
         details: error instanceof Error ? error.message : 'Unknown error'
       },
       { status: 500 }
     );
   }
-} 
+}

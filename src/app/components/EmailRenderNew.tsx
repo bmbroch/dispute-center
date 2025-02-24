@@ -192,38 +192,29 @@ export default function EmailRenderNew({
 
   return (
     <div className={`relative ${className}`}>
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-2">
-          {onRefresh && (
-            <button
-              onClick={onRefresh}
-              className="inline-flex items-center px-2.5 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 shadow-sm"
-              title="Refresh email content"
-            >
-              <svg
-                className="w-4 h-4 mr-1.5"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-                style={{ transform: 'scaleX(-1)' }}
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-                />
-              </svg>
-              Refresh
-            </button>
-          )}
-        </div>
-      </div>
-
       {error && (
         <div className="mb-2 p-2 bg-red-50 text-red-700 text-sm rounded">
           {error}
         </div>
+      )}
+
+      {processedContent.length > maxHeight && (
+        <button
+          onClick={() => setIsExpanded(!isExpanded)}
+          className="mb-2 text-blue-600 hover:text-blue-800 text-sm font-medium focus:outline-none flex items-center gap-1"
+        >
+          {isExpanded ? (
+            <>
+              <ChevronUp className="w-4 h-4" />
+              Show Less
+            </>
+          ) : (
+            <>
+              <ChevronDown className="w-4 h-4" />
+              Show More
+            </>
+          )}
+        </button>
       )}
 
       <div className="relative bg-white rounded-lg overflow-hidden">
@@ -239,25 +230,6 @@ export default function EmailRenderNew({
           )}
         </div>
       </div>
-
-      {processedContent.length > maxHeight && (
-        <button
-          onClick={() => setIsExpanded(!isExpanded)}
-          className="mt-2 text-blue-600 hover:text-blue-800 text-sm font-medium focus:outline-none flex items-center gap-1"
-        >
-          {isExpanded ? (
-            <>
-              <ChevronUp className="w-4 h-4" />
-              Show Less
-            </>
-          ) : (
-            <>
-              <ChevronDown className="w-4 h-4" />
-              Show More
-            </>
-          )}
-        </button>
-      )}
 
       {showDebugInfo && (
         <div className="mt-4 p-3 bg-gray-50 rounded-lg text-xs font-mono">

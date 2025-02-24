@@ -32,9 +32,9 @@ export async function POST(req: Request) {
       contentLength: body.emailContent?.length,
       contentPreview: body.emailContent?.substring(0, 100) + '...'
     });
-    
+
     const { emailContent } = body;
-    
+
     if (!emailContent) {
       console.log('Error: No email content provided');
       return NextResponse.json(
@@ -53,7 +53,7 @@ export async function POST(req: Request) {
             role: "system",
             content: `You are an expert at analyzing customer support emails and extracting GENERALIZED questions for a FAQ library.
             Your task is to identify the core issues and create generic questions that would help ANY customer with similar problems.
-            
+
             STRICT RULES:
             1. Extract a MAXIMUM of 2 questions per email
             2. NEVER include customer-specific details (emails, names, dates) in questions
@@ -61,35 +61,46 @@ export async function POST(req: Request) {
             4. Make questions as generic as possible while remaining useful
             5. Questions must be actionable and answerable
             6. Look for secondary issues that might need addressing
-            
+
             EXAMPLES:
-            
+
             Email: "Please cancel my subscription for john@example.com and jane@example.com"
             ❌ DON'T create specific questions:
             - "How do I cancel subscription for john@example.com?"
             - "How do I cancel multiple email subscriptions?"
-            
+
             ✅ DO create generic questions:
             - "How do I cancel my subscription?"
             - "Can I manage multiple subscriptions under different email addresses?"
-            
+
             Email: "Reset password not working for my account user123"
             ❌ DON'T use specific details:
             - "Why can't user123 reset their password?"
-            
+
             ✅ DO make it generic:
             - "How do I troubleshoot password reset issues?"
-            
+
             Email: "I paid $50 on May 5th but haven't received access"
             ❌ DON'T include specific amounts/dates:
             - "Why hasn't my $50 payment from May 5th been processed?"
-            
+
             ✅ DO make it generic:
             - "Why hasn't my payment been processed?"
             - "How long does it take to get access after payment?"
-            
+
             Remember: The goal is to build a FAQ library that helps ALL users, not just the current customer.
-            
+
+            NEW RULES FOR QUESTION GENERATION:
+            7. Before creating a new question, check if it's just a rephrasing of:
+               - "How do I...?"
+               - "Can I...?"
+               - "Why is...?"
+               - "What happens if...?"
+            8. If the question is a rephrasing, use the standard form:
+               - "How to..." instead of "How do I..."
+               - "Can I..." instead of "Is it possible to..."
+            9. Group similar phrasings under a single canonical question
+
             Return a JSON object with an array of questions. Example:
             {"questions": ["How do I cancel my subscription?", "How do I manage multiple subscriptions?"]}`
           },
@@ -114,7 +125,7 @@ export async function POST(req: Request) {
                 role: "system",
                 content: `You are an expert at analyzing customer support emails and extracting GENERALIZED questions for a FAQ library.
                 Your task is to identify the core issues and create generic questions that would help ANY customer with similar problems.
-                
+
                 STRICT RULES:
                 1. Extract a MAXIMUM of 2 questions per email
                 2. NEVER include customer-specific details (emails, names, dates) in questions
@@ -124,33 +135,33 @@ export async function POST(req: Request) {
                 6. Look for secondary issues that might need addressing
                 7. ALWAYS return response in this exact JSON format:
                 {"questions": ["question1", "question2"]}
-                
+
                 EXAMPLES:
-                
+
                 Email: "Please cancel my subscription for john@example.com and jane@example.com"
                 ❌ DON'T create specific questions:
                 - "How do I cancel subscription for john@example.com?"
                 - "How do I cancel multiple email subscriptions?"
-                
+
                 ✅ DO create generic questions:
                 - "How do I cancel my subscription?"
                 - "Can I manage multiple subscriptions under different email addresses?"
-                
+
                 Email: "Reset password not working for my account user123"
                 ❌ DON'T use specific details:
                 - "Why can't user123 reset their password?"
-                
+
                 ✅ DO make it generic:
                 - "How do I troubleshoot password reset issues?"
-                
+
                 Email: "I paid $50 on May 5th but haven't received access"
                 ❌ DON'T include specific amounts/dates:
                 - "Why hasn't my $50 payment from May 5th been processed?"
-                
+
                 ✅ DO make it generic:
                 - "Why hasn't my payment been processed?"
                 - "How long does it take to get access after payment?"
-                
+
                 Remember: The goal is to build a FAQ library that helps ALL users, not just the current customer.`
               },
               {
@@ -198,19 +209,19 @@ export async function POST(req: Request) {
         error: parseError,
         rawResponse: response.choices[0].message.content
       });
-      return NextResponse.json({ 
+      return NextResponse.json({
         error: 'Failed to parse AI response',
         rawResponse: response.choices[0].message.content
       }, { status: 500 });
     }
-    
+
     // Validate the response structure and ensure consistent format
     if (!analysis || !Array.isArray(analysis.questions)) {
       console.error('Invalid AI response format:', {
         rawResponse: response.choices[0].message.content,
         parsedAnalysis: analysis
       });
-      return NextResponse.json({ 
+      return NextResponse.json({
         error: 'Invalid response format from AI',
         rawResponse: response.choices[0].message.content,
         parsedAnalysis: analysis
@@ -245,4 +256,4 @@ export async function POST(req: Request) {
       { status: 500 }
     );
   }
-} 
+}
