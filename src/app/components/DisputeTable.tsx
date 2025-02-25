@@ -294,11 +294,35 @@ const DisputeTable: React.FC<DisputeTableProps> = ({ onDisputeCountChange }) => 
 
       if (emailResponse.ok) {
         const { threads } = await emailResponse.json();
+
+        // Transform threads so they have a "messages" array
+        const transformedThreads = (threads || []).map((thread: any) => {
+          // If a thread already has a "messages" array, keep it as-is;
+          // otherwise transform its "threadMessages" to "messages".
+          const messages = thread.threadMessages?.map((msg: any) => ({
+            id: msg.id,
+            threadId: thread.threadId || thread.id,
+            from: msg.sender || '',
+            subject: msg.subject || '',
+            content: msg.content || '',
+            date: msg.receivedAt || '',
+            // Include extra fields as needed
+          })) || [];
+
+          return {
+            id: thread.id || thread.threadId,
+            threadId: thread.threadId || thread.id,
+            messages,
+            // Keep or map any other fields needed by EmailCorrespondence:
+            historyId: thread.historyId || '',
+          };
+        });
+
         // Update only the specific dispute's email threads
         setDisputes(prevDisputes =>
           prevDisputes.map(d =>
             d.id === disputeId
-              ? { ...d, emailThreads: threads || [] }
+              ? { ...d, emailThreads: transformedThreads }
               : d
           )
         );
@@ -440,9 +464,9 @@ const DisputeTable: React.FC<DisputeTableProps> = ({ onDisputeCountChange }) => 
                 <tr>
                   <td className="px-6 py-4 whitespace-nowrap">
                     <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${dispute.status === 'needs_response' ? 'bg-red-100 text-red-800' :
-                        dispute.status === 'warning_needs_response' ? 'bg-orange-100 text-orange-800' :
-                          dispute.status === 'won' ? 'bg-green-100 text-green-800' :
-                            'bg-gray-100 text-gray-800'
+                      dispute.status === 'warning_needs_response' ? 'bg-orange-100 text-orange-800' :
+                        dispute.status === 'won' ? 'bg-green-100 text-green-800' :
+                          'bg-gray-100 text-gray-800'
                       }`}>
                       {dispute.status}
                     </span>

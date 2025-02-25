@@ -15,13 +15,15 @@ export interface PotentialFAQ {
 }
 
 export interface GenericFAQ {
+  id?: string;
   question: string;
   answer?: string;
-  category: string;
+  category?: string;
+  confidence?: number;
   emailIds?: string[];
-  confidence: number;
-  requiresCustomerSpecificInfo: boolean;
   similarPatterns?: string[];
+  requiresCustomerSpecificInfo?: boolean;
+  updatedAt?: string;
 }
 
 export interface FAQ {
@@ -37,6 +39,7 @@ export interface FAQ {
   instructions?: string;
   replyTemplate?: string;
   emailIds?: string[];
+  similarPatterns?: string[];
   requiresCustomerSpecificInfo?: boolean;
 }
 
@@ -101,4 +104,4 @@ export interface EmailAnalysis {
 
 export interface EmailAnalysisCache {
   [threadId: string]: EmailAnalysis;
-} 
+}

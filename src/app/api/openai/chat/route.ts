@@ -1,47 +1,74 @@
-import { OpenAI } from "openai";
+import { NextResponse } from 'next/server';
 import { StreamingTextResponse } from 'ai';
+import OpenAI from 'openai';
+import { saveAIApiLog } from '@/lib/firebase/aiLogging';
 
-export const runtime = "edge";
+const MODEL = 'gpt-4o-mini' as const;
 
 export async function POST(req: Request) {
   try {
-    const { messages } = await req.json();
-    
-    const openai = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY,
-    });
+    const { messages, userEmail } = await req.json();
 
-    const response = await openai.chat.completions.create({
-      model: 'gpt-4',
-      messages,
-      stream: true,
-    });
+    if (!messages || !Array.isArray(messages) || messages.length === 0) {
+      return NextResponse.json(
+        { error: 'Messages array is required' },
+        { status: 400 }
+      );
+    }
 
-    // Convert the OpenAI response into a text-encoder stream
+    const openai = new OpenAI();
     const encoder = new TextEncoder();
-    const stream = new ReadableStream({
-      async start(controller) {
-        try {
-          for await (const part of response) {
-            const text = part.choices[0]?.delta?.content || '';
-            if (text) {
-              controller.enqueue(encoder.encode(text));
-            }
-          }
-        } catch (error) {
-          controller.error(error);
-        } finally {
-          controller.close();
-        }
-      },
-    });
 
-    return new StreamingTextResponse(stream);
+    try {
+      const response = await openai.chat.completions.create({
+        model: 'gpt-4-turbo-preview',
+        messages,
+        stream: true,
+        temperature: 0.7,
+      });
+
+      const transformStream = new TransformStream();
+      const writer = transformStream.writable.getWriter();
+
+      // Process each chunk
+      let totalCompletionTokens = 0;
+      for await (const chunk of response) {
+        const content = chunk.choices[0]?.delta?.content || '';
+        if (content) {
+          totalCompletionTokens += Math.ceil(content.length / 4);
+          await writer.write(encoder.encode(`data: ${JSON.stringify({ content })}\n\n`));
+        }
+      }
+
+      // Log after stream completes
+      try {
+        await saveAIApiLog({
+          username: userEmail || 'unknown',
+          functionName: 'chat',
+          inputTokens: messages.reduce((acc: number, msg: any) => acc + Math.ceil(msg.content.length / 4), 0),
+          outputTokens: totalCompletionTokens,
+          status: 'success',
+          model: 'gpt-4-turbo-preview',
+        });
+      } catch (logError) {
+        console.error('Error logging streaming chat:', logError);
+      }
+
+      writer.close();
+      return new StreamingTextResponse(transformStream.readable);
+
+    } catch (error) {
+      console.error('Error in chat completion:', error);
+      return NextResponse.json(
+        { error: 'Failed to generate response' },
+        { status: 500 }
+      );
+    }
   } catch (error) {
-    console.error('Error in chat:', error);
-    return new Response(
-      JSON.stringify({ error: 'Failed to process chat request' }), 
-      { status: 500, headers: { 'Content-Type': 'application/json' } }
+    console.error('Error processing request:', error);
+    return NextResponse.json(
+      { error: 'Invalid request format' },
+      { status: 400 }
     );
   }
 }

@@ -1,20 +1,20 @@
 import { NextResponse } from 'next/server';
 import OpenAI from 'openai';
+import { saveAIApiLog } from '@/lib/firebase/aiLogging';
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
+const MODEL = 'gpt-4o-mini' as const;
+
 export async function POST(req: Request) {
   try {
-    const { text } = await req.json();
+    const { text, userEmail } = await req.json();
     console.log('Received text to analyze, length:', text.length);
 
     if (!text) {
-      return NextResponse.json(
-        { error: 'Text is required' },
-        { status: 400 }
-      );
+      throw new Error('Text is required');
     }
 
     const prompt = `Given the following text, generate a list of relevant questions and answers that would be useful for a FAQ system. Focus on the most important and frequently asked questions that might arise from this content. Format your response as a JSON object with a 'qas' field containing an array of objects, each with 'question' and 'answer' fields.
@@ -36,7 +36,7 @@ Generate clear, concise questions and detailed, helpful answers. Each answer sho
 
     console.log('Sending request to OpenAI...');
     const completion = await openai.chat.completions.create({
-      model: "gpt-4-turbo-preview",
+      model: MODEL,
       messages: [
         {
           role: "system",
@@ -61,19 +61,45 @@ Generate clear, concise questions and detailed, helpful answers. Each answer sho
     const parsedResponse = JSON.parse(response);
     console.log('Parsed response:', parsedResponse);
 
-    if (!parsedResponse.qas || !Array.isArray(parsedResponse.qas)) {
-      console.error('Invalid response format from OpenAI:', parsedResponse);
-      throw new Error('Invalid response format from OpenAI');
-    }
-    
-    return NextResponse.json({
-      qas: parsedResponse.qas
+    // Log the successful API call
+    await saveAIApiLog({
+      username: userEmail || 'unknown',
+      functionName: 'generate-qas',
+      inputTokens: completion.usage?.prompt_tokens || 0,
+      outputTokens: completion.usage?.completion_tokens || 0,
+      status: 'success',
+      model: MODEL,
     });
+
+    return NextResponse.json({
+      qas: parsedResponse.qas,
+      usage: completion.usage
+    });
+
   } catch (error) {
     console.error('Error generating Q&As:', error);
+
+    // Log the failed API call
+    if (error instanceof Error) {
+      try {
+        const { userEmail } = await req.json();
+        await saveAIApiLog({
+          username: userEmail || 'unknown',
+          functionName: 'generate-qas',
+          inputTokens: 0,
+          outputTokens: 0,
+          status: 'failed',
+          model: MODEL,
+          error: error.message
+        });
+      } catch (logError) {
+        console.error('Error logging API failure:', logError);
+      }
+    }
+
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Failed to generate Q&As' },
+      { error: 'Failed to generate Q&As' },
       { status: 500 }
     );
   }
-} 
+}

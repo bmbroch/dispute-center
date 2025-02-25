@@ -377,163 +377,169 @@ ${threadHistoryToAppend ? `<br>${threadHistoryToAppend}` : ''}
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg w-full max-w-4xl mx-4 p-6 space-y-4 max-h-[90vh] overflow-y-auto">
+      <div className="bg-white rounded-lg w-full max-w-4xl mx-4 flex flex-col max-h-[90vh]">
         {isLoading ? (
           <div className="flex items-center justify-center py-12">
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
           </div>
         ) : (
           <>
-            <div className="flex justify-between items-center">
-              <h2 className="text-xl font-semibold">
-                {replyToMessage ? 'Reply to Email' : 'New Email'}
-              </h2>
-              <button
-                onClick={onClose}
-                className="text-gray-500 hover:text-gray-700"
-              >
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
+            <div className="p-6 flex-shrink-0">
+              <div className="flex justify-between items-center">
+                <h2 className="text-xl font-semibold">
+                  {replyToMessage ? 'Reply to Email' : 'New Email'}
+                </h2>
+                <button
+                  onClick={onClose}
+                  className="text-gray-500 hover:text-gray-700"
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
             </div>
 
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700">To</label>
-                <input
-                  type="email"
-                  value={to}
-                  onChange={(e) => setTo(e.target.value)}
-                  className="mt-1 block w-full px-3 py-2 text-gray-900 border border-gray-300 rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500"
-                />
-              </div>
+            <div className="flex-1 overflow-y-auto px-6">
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">To</label>
+                  <input
+                    type="email"
+                    value={to}
+                    onChange={(e) => setTo(e.target.value)}
+                    className="mt-1 block w-full px-3 py-2 text-gray-900 border border-gray-300 rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                  />
+                </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Subject</label>
-                <input
-                  type="text"
-                  value={subject}
-                  onChange={(e) => setSubject(e.target.value)}
-                  className="mt-1 block w-full px-3 py-2 text-gray-900 border border-gray-300 rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500"
-                />
-              </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Subject</label>
+                  <input
+                    type="text"
+                    value={subject}
+                    onChange={(e) => setSubject(e.target.value)}
+                    className="mt-1 block w-full px-3 py-2 text-gray-900 border border-gray-300 rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                  />
+                </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Templates
-                </label>
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-                  {templates.map((template) => (
-                    <button
-                      key={template.id}
-                      onClick={() => handleTemplateSelect(template)}
-                      className={`p-3 text-left border rounded-lg transition-colors ${
-                        selectedTemplate?.id === template.id
-                          ? 'border-blue-500 bg-blue-50 text-gray-900'
-                          : 'border-gray-200 hover:border-blue-300 text-gray-900'
-                      }`}
-                    >
-                      <div className="font-medium text-gray-900">{template.name}</div>
-                      <div className="text-sm text-gray-600 truncate">
-                        {template.subject}
-                      </div>
-                    </button>
-                  ))}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Templates
+                  </label>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+                    {templates.map((template) => (
+                      <button
+                        key={template.id}
+                        onClick={() => handleTemplateSelect(template)}
+                        className={`p-3 text-left border rounded-lg transition-colors ${
+                          selectedTemplate?.id === template.id
+                            ? 'border-blue-500 bg-blue-50 text-gray-900'
+                            : 'border-gray-200 hover:border-blue-300 text-gray-900'
+                        }`}
+                      >
+                        <div className="font-medium text-gray-900">{template.name}</div>
+                        <div className="text-sm text-gray-600 truncate">
+                          {template.subject}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Message
+                  </label>
+                  <Editor
+                    id="email-editor"
+                    apiKey={process.env.NEXT_PUBLIC_TINYMCE_API_KEY}
+                    init={{
+                      height: 500,
+                      menubar: false,
+                      statusbar: false,
+                      branding: false,
+                      promotion: false,
+                      skin: 'oxide',
+                      plugins: [
+                        'advlist', 'autolink', 'lists', 'link', 'image',
+                        'charmap', 'preview', 'anchor', 'searchreplace',
+                        'visualblocks', 'code', 'fullscreen',
+                        'insertdatetime', 'media', 'table', 'help',
+                        'wordcount'
+                      ],
+                      toolbar: 'undo redo | formatselect | ' +
+                        'bold italic underline | alignleft aligncenter ' +
+                        'alignright alignjustify | bullist numlist | ' +
+                        'link image | removeformat',
+                      content_style: `
+                        body {
+                          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+                          font-size: 14px;
+                          line-height: 1.4;
+                          color: #000000;
+                          background: #ffffff;
+                          margin: 0;
+                          padding: 16px;
+                        }
+                        .mce-content-body {
+                          padding: 16px !important;
+                        }
+                        p {
+                          margin: 0;
+                          padding: 0;
+                          min-height: 1.4em;
+                        }
+                        p:empty {
+                          min-height: 1.4em;
+                        }
+                        p + p {
+                          margin-top: 0.7em;
+                        }
+                        img {
+                          max-width: 40%;
+                          height: auto;
+                          display: block;
+                          margin: 8px 0;
+                        }
+                        ul, ol {
+                          margin: 0.7em 0;
+                          padding-left: 2em;
+                        }
+                        li {
+                          margin: 0;
+                          padding: 0;
+                        }
+                        li + li {
+                          margin-top: 0.2em;
+                        }
+                      `,
+                      content_css: 'default',
+                      content_css_cors: true,
+                      forced_root_block: 'p',
+                      forced_root_block_attrs: {
+                        style: 'margin: 0; padding: 0; min-height: 1.4em;'
+                      },
+                      formats: {
+                        p: { block: 'p', styles: { margin: '0', padding: '0', 'min-height': '1.4em' } }
+                      },
+                      setup: function(editor) {
+                        editor.on('init', function() {
+                          const body = editor.getBody();
+                          body.style.backgroundColor = '#ffffff';
+                          body.style.color = '#000000';
+                        });
+                      }
+                    }}
+                    onInit={(evt, editor) => {
+                      editorRef.current = editor;
+                    }}
+                    initialValue={content}
+                  />
                 </div>
               </div>
+            </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Message
-                </label>
-                <Editor
-                  id="email-editor"
-                  apiKey={process.env.NEXT_PUBLIC_TINYMCE_API_KEY}
-                  init={{
-                    height: 500,
-                    menubar: false,
-                    statusbar: false,
-                    branding: false,
-                    promotion: false,
-                    skin: 'oxide',
-                    plugins: [
-                      'advlist', 'autolink', 'lists', 'link', 'image',
-                      'charmap', 'preview', 'anchor', 'searchreplace',
-                      'visualblocks', 'code', 'fullscreen',
-                      'insertdatetime', 'media', 'table', 'help',
-                      'wordcount'
-                    ],
-                    toolbar: 'undo redo | formatselect | ' +
-                      'bold italic underline | alignleft aligncenter ' +
-                      'alignright alignjustify | bullist numlist | ' +
-                      'link image | removeformat',
-                    content_style: `
-                      body {
-                        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-                        font-size: 14px;
-                        line-height: 1.4;
-                        color: #000000;
-                        background: #ffffff;
-                        margin: 0;
-                        padding: 16px;
-                      }
-                      .mce-content-body {
-                        padding: 16px !important;
-                      }
-                      p {
-                        margin: 0;
-                        padding: 0;
-                        min-height: 1.4em;
-                      }
-                      p:empty {
-                        min-height: 1.4em;
-                      }
-                      p + p {
-                        margin-top: 0.7em;
-                      }
-                      img {
-                        max-width: 40%;
-                        height: auto;
-                        display: block;
-                        margin: 8px 0;
-                      }
-                      ul, ol {
-                        margin: 0.7em 0;
-                        padding-left: 2em;
-                      }
-                      li {
-                        margin: 0;
-                        padding: 0;
-                      }
-                      li + li {
-                        margin-top: 0.2em;
-                      }
-                    `,
-                    content_css: 'default',
-                    content_css_cors: true,
-                    forced_root_block: 'p',
-                    forced_root_block_attrs: {
-                      style: 'margin: 0; padding: 0; min-height: 1.4em;'
-                    },
-                    formats: {
-                      p: { block: 'p', styles: { margin: '0', padding: '0', 'min-height': '1.4em' } }
-                    },
-                    setup: function(editor) {
-                      editor.on('init', function() {
-                        const body = editor.getBody();
-                        body.style.backgroundColor = '#ffffff';
-                        body.style.color = '#000000';
-                      });
-                    }
-                  }}
-                  onInit={(evt, editor) => {
-                    editorRef.current = editor;
-                  }}
-                  initialValue={content}
-                />
-              </div>
-
+            <div className="p-6 border-t border-gray-200 flex-shrink-0">
               <div className="flex justify-end gap-4">
                 <button
                   onClick={onClose}

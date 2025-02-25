@@ -1,50 +1,44 @@
 import { NextResponse } from 'next/server';
-import { getFirebaseAdmin } from '@/lib/firebase/firebase-admin';
-import { getFirestore } from 'firebase-admin/firestore';
+import { getFirebaseDB } from '@/lib/firebase/firebase';
+import { doc, deleteDoc } from 'firebase/firestore';
 
 export async function DELETE(req: Request) {
   try {
-    const { question } = await req.json();
+    const { id } = await req.json();
 
-    if (!question) {
+    if (!id) {
       return NextResponse.json(
-        { error: 'Question is required' },
+        { error: 'FAQ ID is required' },
         { status: 400 }
       );
     }
 
-    // Initialize Firebase Admin
-    const app = getFirebaseAdmin();
-    if (!app) {
-      throw new Error('Failed to initialize Firebase Admin');
-    }
-    const db = getFirestore(app);
-
-    // Find and delete the FAQ with the matching question
-    const faqRef = db.collection('faqs');
-    const snapshot = await faqRef.where('question', '==', question).get();
-
-    if (snapshot.empty) {
+    // Get Firebase instance
+    const db = getFirebaseDB();
+    if (!db) {
       return NextResponse.json(
-        { error: 'FAQ not found' },
-        { status: 404 }
+        { error: 'Database connection failed' },
+        { status: 500 }
       );
     }
 
-    // Delete all documents found with this question (should only be one)
-    const deletePromises = snapshot.docs.map(doc => doc.ref.delete());
-    await Promise.all(deletePromises);
+    console.log('Deleting FAQ with ID:', id);
+
+    // Delete the FAQ document by ID
+    await deleteDoc(doc(db, 'faqs', id));
+
+    console.log('Successfully deleted FAQ');
 
     return NextResponse.json({ success: true });
 
   } catch (error) {
     console.error('Error deleting FAQ:', error);
     return NextResponse.json(
-      { 
+      {
         error: 'Failed to delete FAQ',
         details: error instanceof Error ? error.message : 'Unknown error'
       },
       { status: 500 }
     );
   }
-} 
+}

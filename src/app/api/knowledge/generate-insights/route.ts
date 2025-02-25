@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import OpenAI from 'openai';
+import { saveAIApiLog } from '@/lib/firebase/aiLogging';
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -22,28 +23,24 @@ interface AIResponse {
   recommendedActions: string[];
 }
 
-export async function POST(req: Request) {
-  if (!process.env.OPENAI_API_KEY) {
-    return NextResponse.json(
-      { error: 'OpenAI API key is not configured' },
-      { status: 500 }
-    );
-  }
+const MODEL = 'gpt-4o-mini' as const;
 
+export async function POST(req: Request) {
   try {
-    const { supportEmails, totalEmailsAnalyzed, tokenLimit = 20000 } = await req.json();
+    if (!openai.apiKey) {
+      throw new Error('OpenAI API key is not configured');
+    }
+
+    const { supportEmails, totalEmailsAnalyzed, tokenLimit = 20000, userEmail } = await req.json();
 
     if (!supportEmails || !Array.isArray(supportEmails)) {
-      return NextResponse.json(
-        { error: 'Invalid support emails data' },
-        { status: 400 }
-      );
+      throw new Error('Invalid support emails data');
     }
 
     // Prepare emails for analysis
     const emailsForAnalysis = supportEmails.map(email => ({
       subject: email.subject || email.messages?.[0]?.subject || 'No subject',
-      body: email.body || email.messages?.map((m: { body: string }) => m.body).join('\n\n') || '', // Handle both direct body and messages array
+      body: email.body || email.messages?.map((m: { body: string }) => m.body).join('\n\n') || '',
       category: email.category || 'uncategorized',
       priority: email.priority || 2,
       confidence: email.confidence || 0.7,
@@ -57,52 +54,27 @@ export async function POST(req: Request) {
       }
     });
 
-    // Create a more detailed prompt that will generate insights similar to the example
-    const prompt = `Analyze these ${supportEmails.length} customer support emails and provide comprehensive insights. 
+    const prompt = `Analyze the following customer support emails and provide insights. Total emails analyzed: ${totalEmailsAnalyzed}
 
-Context: These are customer support emails that need detailed analysis for improving customer service.
-
-Emails to analyze:
+Email Data:
 ${JSON.stringify(emailsForAnalysis, null, 2)}
 
-Return a detailed JSON response with the following structure:
-
+Provide insights in the following JSON format:
 {
-  "keyCustomerPoints": [
-    "Subscription and payment issues are prevalent, with customers expressing confusion over charges",
-    "Technical difficulties related to service access and functionality",
-    "Repeated follow-ups on unresolved queries",
-    "Mixed sentiment on customer support interactions"
-  ],
+  "keyCustomerPoints": ["point1", "point2", ...],
   "customerSentiment": {
-    "overall": "A clear one-line summary of overall sentiment (e.g., 'Mixed, with a leaning towards negative due to unresolved issues')",
-    "details": "A paragraph explaining key sentiment trends, customer satisfaction levels, and notable patterns in customer feedback"
+    "overall": "positive/neutral/negative",
+    "details": "explanation"
   },
   "commonQuestions": [
     {
-      "question": "How do I cancel my subscription and get a refund?",
-      "typicalAnswer": "Clear step-by-step answer",
-      "frequency": 5
-    },
-    {
-      "question": "Why isn't my subscription showing as active after payment?",
-      "typicalAnswer": "Clear explanation of the issue and resolution",
-      "frequency": 4
+      "question": "What is...",
+      "typicalAnswer": "The answer is...",
+      "frequency": 3
     }
   ],
-  "recommendedActions": [
-    "Improve the clarity and accessibility of information regarding subscription management",
-    "Enhance technical support and develop more detailed troubleshooting guides",
-    "Invest in customer service training focused on empathy and responsiveness"
-  ]
-}
-
-Focus on identifying:
-1. Clear patterns in customer issues and questions
-2. Specific areas of customer confusion or frustration
-3. Actionable recommendations for improvement
-4. Accurate frequency counts for common questions
-5. Balanced sentiment analysis considering both positive and negative feedback`;
+  "recommendedActions": ["action1", "action2", ...]
+}`;
 
     const completion = await openai.chat.completions.create({
       messages: [
@@ -115,48 +87,73 @@ Focus on identifying:
           content: prompt
         }
       ],
-      model: "gpt-4-turbo-preview",
+      model: MODEL,
       response_format: { type: "json_object" },
       max_tokens: Math.min(Math.floor(tokenLimit / 2), 4000),
-      temperature: 0.3 // Lower temperature for more consistent output
+      temperature: 0.3
     });
 
     if (!completion.choices[0].message.content) {
       throw new Error('Empty response from OpenAI');
     }
 
-    try {
-      const insights = JSON.parse(completion.choices[0].message.content) as AIResponse;
-      
-      // Ensure all required fields exist with proper formatting
-      return NextResponse.json({
-        keyCustomerPoints: insights.keyCustomerPoints || [
-          "No key points identified",
-          "Analysis needs more data"
-        ],
-        customerSentiment: {
-          overall: insights.customerSentiment?.overall || "Insufficient data for sentiment analysis",
-          details: insights.customerSentiment?.details || "More data needed for detailed sentiment analysis"
-        },
-        commonQuestions: (insights.commonQuestions || []).map((q: CommonQuestion) => ({
-          question: q.question,
-          typicalAnswer: q.typicalAnswer,
-          frequency: q.frequency || 1
-        })),
-        recommendedActions: insights.recommendedActions || [
-          "Gather more customer feedback",
-          "Implement systematic support tracking"
-        ]
-      });
-    } catch (parseError) {
-      console.error('Error parsing OpenAI response:', parseError);
-      throw new Error('Failed to parse AI response');
-    }
+    const insights = JSON.parse(completion.choices[0].message.content);
+
+    // Log the successful API call
+    await saveAIApiLog({
+      username: userEmail || 'unknown',
+      functionName: 'generate-insights',
+      inputTokens: completion.usage?.prompt_tokens || 0,
+      outputTokens: completion.usage?.completion_tokens || 0,
+      status: 'success',
+      model: MODEL,
+    });
+
+    return NextResponse.json({
+      keyCustomerPoints: insights.keyCustomerPoints || [
+        "No key points identified",
+        "Analysis needs more data"
+      ],
+      customerSentiment: {
+        overall: insights.customerSentiment?.overall || "Insufficient data for sentiment analysis",
+        details: insights.customerSentiment?.details || "More data needed for detailed sentiment analysis"
+      },
+      commonQuestions: (insights.commonQuestions || []).map((q: any) => ({
+        question: q.question,
+        typicalAnswer: q.typicalAnswer,
+        frequency: q.frequency || 1
+      })),
+      recommendedActions: insights.recommendedActions || [
+        "Gather more customer feedback",
+        "Implement systematic support tracking"
+      ],
+      usage: completion.usage
+    });
+
   } catch (error) {
     console.error('Error generating insights:', error);
+
+    // Log the failed API call
+    if (error instanceof Error) {
+      try {
+        const { userEmail } = await req.json();
+        await saveAIApiLog({
+          username: userEmail || 'unknown',
+          functionName: 'generate-insights',
+          inputTokens: 0,
+          outputTokens: 0,
+          status: 'failed',
+          model: MODEL,
+          error: error.message
+        });
+      } catch (logError) {
+        console.error('Error logging API failure:', logError);
+      }
+    }
+
     return NextResponse.json(
       { error: 'Failed to generate insights' },
       { status: 500 }
     );
   }
-} 
+}

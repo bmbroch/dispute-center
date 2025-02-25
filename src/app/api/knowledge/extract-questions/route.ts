@@ -1,258 +1,219 @@
 import { NextResponse } from 'next/server';
 import OpenAI from 'openai';
+import { saveAIApiLog } from '@/lib/firebase/aiLogging';
+import { getFirebaseDB } from '@/lib/firebase/firebase';
+import { collection, getDocs } from 'firebase/firestore';
+
+interface FAQ {
+  id: string;
+  question: string;
+  answer: string;
+  category: string;
+}
+
+interface MatchedFAQ {
+  questionId: string;
+  question: string;
+  confidence: number;
+  matchReasoning?: string;
+}
+
+interface NewQuestion {
+  question: string;
+  category: string;
+  confidence: number;
+  requiresCustomerSpecificInfo: boolean;
+  reasoning?: string;
+}
+
+interface ParsedResponse {
+  matchedFAQs: MatchedFAQ[];
+  newQuestions: NewQuestion[];
+}
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-export async function POST(req: Request) {
-  console.log('=== Question Extraction API Start ===');
+const MODEL = 'gpt-4-turbo-preview' as const;
+
+// Function to get existing FAQs from the library
+async function getExistingFAQs(): Promise<FAQ[]> {
   try {
-    // First check if OpenAI API key is configured
-    if (!process.env.OPENAI_API_KEY) {
+    const db = getFirebaseDB();
+    if (!db) return [];
+
+    const faqRef = collection(db, 'faq_library');
+    const snapshot = await getDocs(faqRef);
+    return snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    } as FAQ));
+  } catch (error) {
+    console.error('Error fetching existing FAQs:', error);
+    return [];
+  }
+}
+
+export async function POST(req: Request) {
+  try {
+    if (!openai.apiKey) {
       console.error('OpenAI API key not configured');
       return NextResponse.json(
-        { error: 'OpenAI API key not configured' },
+        { error: 'OpenAI API key is not configured' },
         { status: 500 }
       );
     }
 
-    let body;
-    try {
-      body = await req.json();
-    } catch (e) {
-      console.error('Failed to parse request body:', e);
-      return NextResponse.json(
-        { error: 'Invalid request body' },
-        { status: 400 }
-      );
-    }
-
-    console.log('Request body received:', {
-      contentLength: body.emailContent?.length,
-      contentPreview: body.emailContent?.substring(0, 100) + '...'
-    });
-
-    const { emailContent } = body;
+    const body = await req.json();
+    const { emailId, emailContent, maxQuestions } = body;
 
     if (!emailContent) {
-      console.log('Error: No email content provided');
+      console.error('No email content provided');
       return NextResponse.json(
-        { error: 'Email content is required' },
+        { error: 'No email content provided' },
         { status: 400 }
       );
     }
 
-    console.log('Calling OpenAI API...');
-    let response;
+    console.log('Processing request:', {
+      emailId,
+      contentLength: emailContent?.length,
+      contentPreview: emailContent?.substring(0, 200) + '...',
+      maxQuestions
+    });
+
+    // First, get existing FAQs
+    const existingFAQs = await getExistingFAQs();
+    console.log(`Found ${existingFAQs.length} existing FAQs`);
+
+    if (!existingFAQs || existingFAQs.length === 0) {
+      console.log('No existing FAQs found, will only generate new questions');
+    }
+
     try {
-      response = await openai.chat.completions.create({
-        model: "gpt-4-turbo-preview",
+      const response = await openai.chat.completions.create({
+        model: MODEL,
         messages: [
           {
-            role: "system",
-            content: `You are an expert at analyzing customer support emails and extracting GENERALIZED questions for a FAQ library.
-            Your task is to identify the core issues and create generic questions that would help ANY customer with similar problems.
+            role: 'system',
+            content: `You are an expert at analyzing customer inquiries and matching them with existing FAQ questions. You excel at understanding the core intent of questions and matching them to more general existing FAQs.
 
-            STRICT RULES:
-            1. Extract a MAXIMUM of 2 questions per email
-            2. NEVER include customer-specific details (emails, names, dates) in questions
-            3. Focus on the underlying issue, not the specific customer's situation
-            4. Make questions as generic as possible while remaining useful
-            5. Questions must be actionable and answerable
-            6. Look for secondary issues that might need addressing
+For example:
+- "How do I get my money back for this broken app?" → matches "How can I request a refund"
+- "The app keeps crashing, can I have my payment returned?" → matches "How can I request a refund"
+- "Why isn't my subscription working on my new phone?" → matches "How do I manage my subscription"
 
-            EXAMPLES:
-
-            Email: "Please cancel my subscription for john@example.com and jane@example.com"
-            ❌ DON'T create specific questions:
-            - "How do I cancel subscription for john@example.com?"
-            - "How do I cancel multiple email subscriptions?"
-
-            ✅ DO create generic questions:
-            - "How do I cancel my subscription?"
-            - "Can I manage multiple subscriptions under different email addresses?"
-
-            Email: "Reset password not working for my account user123"
-            ❌ DON'T use specific details:
-            - "Why can't user123 reset their password?"
-
-            ✅ DO make it generic:
-            - "How do I troubleshoot password reset issues?"
-
-            Email: "I paid $50 on May 5th but haven't received access"
-            ❌ DON'T include specific amounts/dates:
-            - "Why hasn't my $50 payment from May 5th been processed?"
-
-            ✅ DO make it generic:
-            - "Why hasn't my payment been processed?"
-            - "How long does it take to get access after payment?"
-
-            Remember: The goal is to build a FAQ library that helps ALL users, not just the current customer.
-
-            NEW RULES FOR QUESTION GENERATION:
-            7. Before creating a new question, check if it's just a rephrasing of:
-               - "How do I...?"
-               - "Can I...?"
-               - "Why is...?"
-               - "What happens if...?"
-            8. If the question is a rephrasing, use the standard form:
-               - "How to..." instead of "How do I..."
-               - "Can I..." instead of "Is it possible to..."
-            9. Group similar phrasings under a single canonical question
-
-            Return a JSON object with an array of questions. Example:
-            {"questions": ["How do I cancel my subscription?", "How do I manage multiple subscriptions?"]}`
+Always try to match to existing FAQs first by understanding the underlying intent. Only suggest new questions if the core intent is truly unique. Always respond with valid JSON.`
           },
           {
-            role: "user",
-            content: emailContent
+            role: 'user',
+            content: `Analyze this email content and match it with existing FAQs. Focus on understanding the core intent of the inquiry and match it to more general existing FAQs when possible.
+
+Here are the existing FAQ questions - try to match the email's intent to these general questions:
+${existingFAQs.map(faq => `- ${faq.question} (id: ${faq.id})`).join('\n')}
+
+Guidelines for matching:
+1. Look for the underlying intent, not just exact wording matches
+2. If a specific question can be answered by a more general existing FAQ, use the existing FAQ
+3. Consider that different wording might express the same basic need
+4. Only suggest new questions if the core intent is truly unique and not covered by any existing FAQ
+5. When suggesting new questions, make them as generic as possible to cover similar future cases
+
+Email Content:
+${emailContent}
+
+Respond with a JSON object in this exact format:
+{
+  "matchedFAQs": [
+    {
+      "questionId": "existing-faq-id",
+      "question": "existing question text",
+      "confidence": 0.8,
+      "matchReasoning": "Brief explanation of why this FAQ matches the intent"
+    }
+  ],
+  "newQuestions": [
+    {
+      "question": "generic new question",
+      "category": "support",
+      "confidence": 0.9,
+      "requiresCustomerSpecificInfo": false,
+      "reasoning": "Explanation of why this needs a new FAQ and can't be covered by existing ones"
+    }
+  ]
+}`
           }
         ],
         temperature: 0.1,
+        max_tokens: 1000,
         response_format: { type: "json_object" }
       });
-    } catch (error: any) {
-      console.error('OpenAI API error:', error);
-      // Check for specific OpenAI error types
-      if (error.code === 'invalid_request_error') {
-        // If the model doesn't support JSON response format, try again without it
-        try {
-          response = await openai.chat.completions.create({
-            model: "gpt-4",
-            messages: [
-              {
-                role: "system",
-                content: `You are an expert at analyzing customer support emails and extracting GENERALIZED questions for a FAQ library.
-                Your task is to identify the core issues and create generic questions that would help ANY customer with similar problems.
 
-                STRICT RULES:
-                1. Extract a MAXIMUM of 2 questions per email
-                2. NEVER include customer-specific details (emails, names, dates) in questions
-                3. Focus on the underlying issue, not the specific customer's situation
-                4. Make questions as generic as possible while remaining useful
-                5. Questions must be actionable and answerable
-                6. Look for secondary issues that might need addressing
-                7. ALWAYS return response in this exact JSON format:
-                {"questions": ["question1", "question2"]}
+      console.log('Received OpenAI response');
 
-                EXAMPLES:
+      const result = response.choices[0]?.message?.content;
 
-                Email: "Please cancel my subscription for john@example.com and jane@example.com"
-                ❌ DON'T create specific questions:
-                - "How do I cancel subscription for john@example.com?"
-                - "How do I cancel multiple email subscriptions?"
-
-                ✅ DO create generic questions:
-                - "How do I cancel my subscription?"
-                - "Can I manage multiple subscriptions under different email addresses?"
-
-                Email: "Reset password not working for my account user123"
-                ❌ DON'T use specific details:
-                - "Why can't user123 reset their password?"
-
-                ✅ DO make it generic:
-                - "How do I troubleshoot password reset issues?"
-
-                Email: "I paid $50 on May 5th but haven't received access"
-                ❌ DON'T include specific amounts/dates:
-                - "Why hasn't my $50 payment from May 5th been processed?"
-
-                ✅ DO make it generic:
-                - "Why hasn't my payment been processed?"
-                - "How long does it take to get access after payment?"
-
-                Remember: The goal is to build a FAQ library that helps ALL users, not just the current customer.`
-              },
-              {
-                role: "user",
-                content: emailContent
-              }
-            ],
-            temperature: 0.1
-          });
-        } catch (retryError: any) {
-          console.error('OpenAI API retry error:', retryError);
-          return NextResponse.json(
-            { error: retryError.message || 'Failed to call OpenAI API' },
-            { status: 500 }
-          );
-        }
-      } else {
+      if (!result) {
+        console.error('No content in OpenAI response');
         return NextResponse.json(
-          { error: error.message || 'Failed to call OpenAI API' },
+          { error: 'Failed to extract questions - no content in response' },
           { status: 500 }
         );
       }
-    }
 
-    console.log('OpenAI API response received:', {
-      responseStatus: response.choices[0].finish_reason,
-      responseContent: response.choices[0].message?.content
-    });
+      let parsedResult: ParsedResponse;
+      try {
+        parsedResult = JSON.parse(result) as ParsedResponse;
+        console.log('Successfully parsed OpenAI response');
+      } catch (parseError) {
+        console.error('Failed to parse OpenAI response:', parseError);
+        return NextResponse.json(
+          { error: 'Failed to parse OpenAI response' },
+          { status: 500 }
+        );
+      }
 
-    if (!response.choices[0].message?.content) {
-      console.log('Error: Empty response from OpenAI');
+      // Map the matched FAQs to include their full content
+      const matchedFAQs = (parsedResult.matchedFAQs || []).map(match => {
+        const existingFAQ = existingFAQs.find(faq => faq.id === match.questionId);
+        return {
+          ...match,
+          answer: existingFAQ?.answer,
+          category: existingFAQ?.category || 'support'
+        };
+      });
+
+      // Log the successful API call
+      await saveAIApiLog({
+        username: emailId || 'unknown',
+        functionName: 'extract-questions',
+        inputTokens: response.usage?.prompt_tokens || 0,
+        outputTokens: response.usage?.completion_tokens || 0,
+        status: 'success',
+        model: MODEL,
+      });
+
+      return NextResponse.json({
+        matchedFAQs,
+        newQuestions: parsedResult.newQuestions || [],
+        usage: response.usage
+      });
+
+    } catch (openAIError) {
+      console.error('OpenAI API error:', openAIError);
+      const errorMessage = openAIError instanceof Error ? openAIError.message : 'Unknown OpenAI error';
       return NextResponse.json(
-        { error: 'No response from AI' },
+        { error: `OpenAI API error: ${errorMessage}` },
         { status: 500 }
       );
     }
 
-    let analysis;
-    try {
-      console.log('Parsing AI response...');
-      analysis = JSON.parse(response.choices[0].message.content);
-      console.log('Parsed analysis:', analysis);
-    } catch (parseError) {
-      console.error('Error parsing AI response:', {
-        error: parseError,
-        rawResponse: response.choices[0].message.content
-      });
-      return NextResponse.json({
-        error: 'Failed to parse AI response',
-        rawResponse: response.choices[0].message.content
-      }, { status: 500 });
-    }
-
-    // Validate the response structure and ensure consistent format
-    if (!analysis || !Array.isArray(analysis.questions)) {
-      console.error('Invalid AI response format:', {
-        rawResponse: response.choices[0].message.content,
-        parsedAnalysis: analysis
-      });
-      return NextResponse.json({
-        error: 'Invalid response format from AI',
-        rawResponse: response.choices[0].message.content,
-        parsedAnalysis: analysis
-      }, { status: 500 });
-    }
-
-    // Ensure we never return more than 2 questions and they're properly formatted
-    const validQuestions = analysis.questions
-      .filter((q: any) => typeof q === 'string' && q.trim().length > 0)
-      .slice(0, 2)
-      .map((q: string) => ({
-        question: q.trim(),
-        category: 'support',
-        confidence: 1,
-        requiresCustomerSpecificInfo: false
-      }));
-
-    if (validQuestions.length === 0) {
-      console.log('No valid questions found in response');
-      return NextResponse.json({
-        error: 'No valid questions found in AI response',
-        rawResponse: response.choices[0].message.content
-      }, { status: 500 });
-    }
-
-    console.log('Processed questions:', validQuestions);
-    return NextResponse.json({ questions: validQuestions });
-  } catch (error: any) {
-    console.error('Error in question extraction:', error);
+  } catch (error) {
+    console.error('Error processing request:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     return NextResponse.json(
-      { error: error.message || 'Failed to extract questions' },
+      { error: `Server error: ${errorMessage}` },
       { status: 500 }
     );
   }

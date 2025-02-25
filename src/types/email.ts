@@ -74,11 +74,11 @@ export interface BaseEmail {
 }
 
 export interface ExtendedEmail extends BaseEmail {
-  status?: 'pending' | 'processed' | 'replied' | 'removed_from_ready';
+  status?: 'pending' | 'processed' | 'replied' | 'removed_from_ready' | 'not_relevant';
   matchedFAQ?: {
     question: string;
     answer: string;
-    confidence: number;
+    confidence?: number;
   };
   questions?: GenericFAQ[];
   suggestedReply?: string;
@@ -88,6 +88,9 @@ export interface ExtendedEmail extends BaseEmail {
   isReplied?: boolean;
   isMovingToReady?: boolean;
   irrelevanceReason?: string;
+  irrelevanceCategory?: string;
+  irrelevanceConfidence?: number;
+  irrelevanceDetails?: string;
   threadMessages?: ThreadMessage[];
   gmailError?: {
     message: string;
@@ -97,4 +100,5 @@ export interface ExtendedEmail extends BaseEmail {
     html: string | null;
     text: string | null;
   };
+  sortTimestamp?: number;
 }

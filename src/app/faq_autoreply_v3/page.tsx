@@ -27,12 +27,12 @@ const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
 // Add the groupSimilarPatterns function
 function groupSimilarPatterns(questions: any[]): any[] {
   const groups: any[] = [];
-  
+
   questions.forEach(question => {
-    const similarGroup = groups.find(group => 
+    const similarGroup = groups.find(group =>
       calculatePatternSimilarity(group.question, question.question) > 0.8
     );
-    
+
     if (similarGroup) {
       if (!similarGroup.similarPatterns) {
         similarGroup.similarPatterns = [];
@@ -46,7 +46,7 @@ function groupSimilarPatterns(questions: any[]): any[] {
       });
     }
   });
-  
+
   return groups;
 }
 
@@ -124,7 +124,7 @@ export default function FAQAutoReplyV3Page() {
   useEffect(() => {
     const cachedEmails = localStorage.getItem(CACHE_KEYS.EMAILS);
     const lastFetch = localStorage.getItem(CACHE_KEYS.LAST_FETCH);
-    
+
     if (cachedEmails && lastFetch) {
       const timeSinceLastFetch = Date.now() - parseInt(lastFetch);
       if (timeSinceLastFetch < CACHE_DURATION) {
@@ -153,7 +153,7 @@ export default function FAQAutoReplyV3Page() {
           'X-Force-Refresh': forceRefresh ? 'true' : 'false'
         }
       });
-      
+
       if (response.status === 401) {
         const newToken = await refreshAccessToken();
         if (!newToken) {
@@ -177,11 +177,11 @@ export default function FAQAutoReplyV3Page() {
 
       const data = await response.json();
       console.log('Loaded emails:', data);
-      
+
       // Update cache
       localStorage.setItem(CACHE_KEYS.EMAILS, JSON.stringify(data.emails));
       localStorage.setItem(CACHE_KEYS.LAST_FETCH, Date.now().toString());
-      
+
       setEmails(data.emails || []);
       setPage(nextPage);
     } catch (error) {
@@ -199,7 +199,7 @@ export default function FAQAutoReplyV3Page() {
     try {
       const nextPage = page + 1;
       let currentToken = user.accessToken;
-      
+
       let response = await fetch('/api/emails/inbox', {
         headers: {
           'Authorization': `Bearer ${currentToken}`,
@@ -231,7 +231,7 @@ export default function FAQAutoReplyV3Page() {
       if (data.emails && data.emails.length > 0) {
         setEmails(prev => [...prev, ...data.emails]);
         setPage(nextPage);
-        
+
         // Update cache with new emails
         const allEmails = [...emails, ...data.emails];
         localStorage.setItem(CACHE_KEYS.EMAILS, JSON.stringify(allEmails));
@@ -240,7 +240,7 @@ export default function FAQAutoReplyV3Page() {
         setAnalyzing(true);
         try {
           const emailQuestionsMap = new Map(emailQuestions);
-          
+
           await Promise.all(
             data.emails.map(async (email: ExtendedEmail) => {
               try {
@@ -280,7 +280,7 @@ export default function FAQAutoReplyV3Page() {
           setEmailQuestions(emailQuestionsMap);
           // Cache the questions (convert Map to object for storage)
           saveToCache(CACHE_KEYS.QUESTIONS, Object.fromEntries(emailQuestionsMap));
-          
+
           // Group similar questions for FAQ Expansion tab
           const allQuestions = Array.from(emailQuestionsMap.values()).flat();
           const groupedQuestions = groupSimilarPatterns(allQuestions);
@@ -352,11 +352,21 @@ export default function FAQAutoReplyV3Page() {
 
   const handleAutoReply = async (email: ExtendedEmail) => {
     try {
+      // Get matched FAQs for this email
+      const matchedFAQs = emailQuestions.get(email.id) || [];
+
       const response = await fetch('/api/emails/auto-reply', {
         method: 'POST',
-        body: JSON.stringify({ emailId: email.id }),
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          email,
+          matchedFAQs,
+          userEmail: user?.email || 'unknown'
+        })
       });
-      
+
       if (response.ok) {
         toast.success('Auto-reply sent successfully');
         loadEmails(true);
@@ -372,7 +382,7 @@ export default function FAQAutoReplyV3Page() {
     try {
       // First, immediately remove the email from the list for better UX
       setEmails(prev => prev.filter(e => e.id !== email.id));
-      
+
       // Remove from questions if present
       const updatedQuestions = new Map(emailQuestions);
       updatedQuestions.delete(email.id);
@@ -388,7 +398,7 @@ export default function FAQAutoReplyV3Page() {
       });
 
       const data = await response.json();
-      
+
       // Show a simple success message
       toast.success('Email removed from analysis');
 
@@ -430,16 +440,15 @@ export default function FAQAutoReplyV3Page() {
             onClick={() => setActiveTab(id as any)}
             className={`
               group inline-flex items-center px-1 py-4 border-b-2 font-medium text-sm
-              ${activeTab === id 
+              ${activeTab === id
                 ? 'border-indigo-500 text-indigo-600'
                 : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}
             `}
           >
             <Icon className="h-5 w-5 mr-2" />
             {label}
-            <span className={`ml-2 py-0.5 px-2.5 rounded-full text-xs font-medium ${
-              activeTab === id ? 'bg-indigo-100 text-indigo-600' : 'bg-gray-100 text-gray-900'
-            }`}>
+            <span className={`ml-2 py-0.5 px-2.5 rounded-full text-xs font-medium ${activeTab === id ? 'bg-indigo-100 text-indigo-600' : 'bg-gray-100 text-gray-900'
+              }`}>
               {count}
             </span>
           </button>
@@ -464,9 +473,8 @@ export default function FAQAutoReplyV3Page() {
             <button
               onClick={() => loadEmails(true)}
               disabled={loading}
-              className={`inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 ${
-                loading ? 'opacity-50 cursor-not-allowed' : ''
-              }`}
+              className={`inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 ${loading ? 'opacity-50 cursor-not-allowed' : ''
+                }`}
             >
               {loading ? (
                 <>
@@ -514,9 +522,8 @@ export default function FAQAutoReplyV3Page() {
                     <button
                       onClick={loadMoreEmails}
                       disabled={loadingMore}
-                      className={`inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 ${
-                        loadingMore ? 'opacity-50 cursor-not-allowed' : ''
-                      }`}
+                      className={`inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 ${loadingMore ? 'opacity-50 cursor-not-allowed' : ''
+                        }`}
                     >
                       {loadingMore ? (
                         <>
@@ -555,4 +562,4 @@ export default function FAQAutoReplyV3Page() {
       </div>
     </Layout>
   );
-} 
+}
