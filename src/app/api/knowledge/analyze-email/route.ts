@@ -18,13 +18,15 @@ const openai = new OpenAI({
   apiKey: OPENAI_API_KEY || '',
 });
 
+const MODEL = 'gpt-4o-mini' as const;
+
 export async function POST(req: Request) {
   try {
     // Check API key first
     if (!OPENAI_API_KEY) {
       console.error('OpenAI API key is missing');
       return NextResponse.json(
-        { 
+        {
           error: 'OpenAI API key is not configured',
           details: 'Please set NEXT_PUBLIC_OPENAI_API_KEY or OPENAI_API_KEY environment variable'
         },
@@ -34,7 +36,7 @@ export async function POST(req: Request) {
 
     const { emailId, content } = await req.json();
     console.log('Analyzing email:', { emailId, contentLength: content?.length });
-    
+
     if (!content || !emailId) {
       return NextResponse.json(
         { error: 'Email content and ID are required' },
@@ -60,7 +62,7 @@ export async function POST(req: Request) {
 
     // Analyze the email with OpenAI
     const response = await openai.chat.completions.create({
-      model: "gpt-4",
+      model: MODEL,
       messages: [
         {
           role: "system",
@@ -70,10 +72,10 @@ export async function POST(req: Request) {
           3. Generalize them so they can be reused for similar questions
           4. Ensure each question captures a single, distinct inquiry
           5. Format questions to be clear and concise
-          
+
           Return a JSON object with an array of questions. Each question should be a string.
           Example: {"questions": ["How do I reset my password?", "What are the system requirements?"]}
-          
+
           Important guidelines:
           - Focus on actionable questions that can be answered
           - Combine very similar questions
@@ -103,18 +105,18 @@ export async function POST(req: Request) {
 
     try {
       const analysis = JSON.parse(response.choices[0].message.content);
-      
+
       // Validate the response structure
       if (!Array.isArray(analysis.questions)) {
         console.error('Invalid analysis structure:', analysis);
-        return NextResponse.json({ 
+        return NextResponse.json({
           error: 'Invalid response format',
-          questions: [] 
+          questions: []
         });
       }
 
       // Filter out any empty or invalid questions
-      const validQuestions = analysis.questions.filter((q: string) => 
+      const validQuestions = analysis.questions.filter((q: string) =>
         typeof q === 'string' && q.trim().length > 0
       );
 
@@ -134,20 +136,20 @@ export async function POST(req: Request) {
       return NextResponse.json({ questions: validQuestions });
     } catch (parseError) {
       console.error('Error parsing AI response:', parseError);
-      return NextResponse.json({ 
+      return NextResponse.json({
         error: 'Failed to parse AI response',
         details: parseError instanceof Error ? parseError.message : 'Unknown parsing error',
-        questions: [] 
+        questions: []
       });
     }
   } catch (error) {
     console.error('Error analyzing email:', error);
     return NextResponse.json(
-      { 
+      {
         error: 'Failed to analyze email',
         details: error instanceof Error ? error.message : 'Unknown error'
       },
       { status: 500 }
     );
   }
-} 
+}

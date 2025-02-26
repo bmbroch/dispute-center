@@ -35,7 +35,7 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-const MODEL = 'gpt-4-turbo-preview' as const;
+const MODEL = 'gpt-4o-mini' as const;
 
 // Function to get existing FAQs from the library
 async function getExistingFAQs(): Promise<FAQ[]> {

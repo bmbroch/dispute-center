@@ -8,7 +8,7 @@ const openai = new OpenAI({
 export async function POST(req: Request) {
   try {
     const authHeader = req.headers.get('Authorization');
-    
+
     if (!authHeader) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
@@ -16,15 +16,15 @@ export async function POST(req: Request) {
     const { emails } = await req.json();
 
     // First, filter support emails
-    const systemPrompt = `You are an expert at identifying customer support emails. 
-    Analyze each email and return true only if it appears to be a customer support related email. 
+    const systemPrompt = `You are an expert at identifying customer support emails.
+    Analyze each email and return true only if it appears to be a customer support related email.
     Ignore promotional emails, newsletters, and other non-support communications.`;
 
     const supportEmails = [];
-    
+
     for (const email of emails) {
       const response = await openai.chat.completions.create({
-        model: "gpt-4",
+        model: "gpt-4o-mini",
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: `Subject: ${email.subject}\n\nBody: ${email.body}` }
@@ -39,7 +39,7 @@ export async function POST(req: Request) {
     }
 
     // Now generate FAQs from support emails
-    const faqPrompt = `Analyze these customer support emails and generate the top 10 most frequently asked questions with their corresponding answers. 
+    const faqPrompt = `Analyze these customer support emails and generate the top 10 most frequently asked questions with their corresponding answers.
     Format the output as a JSON array with objects containing:
     1. question: The frequently asked question
     2. frequency: Number of times this type of question appears
@@ -47,11 +47,11 @@ export async function POST(req: Request) {
     4. category: The general category this FAQ belongs to (e.g., "Technical Issue", "Billing", "Account Management")`;
 
     const faqResponse = await openai.chat.completions.create({
-      model: "gpt-4",
+      model: "gpt-4o-mini",
       messages: [
         { role: "system", content: faqPrompt },
-        { 
-          role: "user", 
+        {
+          role: "user",
           content: JSON.stringify(supportEmails.map(e => ({
             subject: e.subject,
             body: e.body
@@ -76,4 +76,4 @@ export async function POST(req: Request) {
       { status: 500 }
     );
   }
-} 
+}
