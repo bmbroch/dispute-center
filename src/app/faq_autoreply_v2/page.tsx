@@ -47,6 +47,8 @@ import EmailRenderNew from '../components/EmailRenderNew';
 import dynamic from 'next/dynamic';
 import { TINYMCE_CONFIG } from '@/lib/config/tinymce';
 import { Editor } from '@tinymce/tinymce-react';
+import { Cog6ToothIcon } from '@heroicons/react/24/outline';
+import SettingsModal from './components/SettingsModal';
 
 // Dynamically import your email composer modal
 const FAQEmailComposer = dynamic(() => import('../faq_autoreply/components/FAQEmailComposer'), {
@@ -122,7 +124,13 @@ const CACHE_KEYS = {
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes in milliseconds
 const ANSWERED_FAQS_CACHE_DURATION = 30 * 60 * 1000; // 30 minutes for answered FAQs
 const MIN_FETCH_INTERVAL = 30000; // 30 seconds in milliseconds
-const SIMILARITY_THRESHOLD = 0.6; // Threshold for question similarity matching
+const DEFAULT_SIMILARITY_THRESHOLD = 0.6; // Default threshold for question similarity matching
+
+// Helper function to get current similarity threshold
+const getSimilarityThreshold = (settings: AutoReplySettings | null) => {
+  if (!settings) return DEFAULT_SIMILARITY_THRESHOLD;
+  return settings.confidenceThreshold / 100 || DEFAULT_SIMILARITY_THRESHOLD;
+};
 
 const loadFromCache = (key: string): CacheData | null => {
   try {
@@ -549,6 +557,28 @@ const extractEmailAddress = (sender: string) => {
   return matches[1] || sender;
 };
 
+interface AutoReplySettings {
+  confidenceThreshold: number;
+  emailFormatting: {
+    greeting: string;
+    listStyle: 'bullet' | 'numbered';
+    spacing: 'compact' | 'normal' | 'spacious';
+    signatureStyle: string;
+    customPrompt: string;
+  };
+}
+
+const DEFAULT_SETTINGS: AutoReplySettings = {
+  confidenceThreshold: 80,
+  emailFormatting: {
+    greeting: "Hi [Name]",
+    listStyle: 'bullet',
+    spacing: 'normal',
+    signatureStyle: "Best,\nInterview Sidekick team",
+    customPrompt: "Please keep responses friendly but professional."
+  }
+};
+
 export default function FAQAutoReplyV2() {
   console.log('=== Component Render Start ===');
   const { user, checkGmailAccess, refreshAccessToken, loading: authLoading } = useAuth();
@@ -594,6 +624,8 @@ export default function FAQAutoReplyV2() {
   const [processingNotRelevant, setProcessingNotRelevant] = useState<Set<string>>(new Set());
   // Add this state near other state declarations
   const [processingUndoNotRelevant, setProcessingUndoNotRelevant] = useState<Set<string>>(new Set());
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [settings, setSettings] = useState<AutoReplySettings>(DEFAULT_SETTINGS);
 
   // Add readyToReplyCount calculation
   const readyToReplyCount = useMemo(() => emails.filter(e =>
@@ -617,8 +649,8 @@ export default function FAQAutoReplyV2() {
     return intersection.size / union.size;
   }, []);
 
-  // Update the similarity threshold to be more aggressive in grouping
-  const SIMILARITY_THRESHOLD = 0.6; // Lowered from 0.8 to group more aggressively
+  // Get the similarity threshold from settings
+  const similarityThreshold = useMemo(() => getSimilarityThreshold(settings), [settings]);
 
   // Add this helper function to get all related questions for a FAQ
   const getRelatedQuestions = useCallback((faq: GenericFAQ): string[] => {
@@ -636,14 +668,14 @@ export default function FAQAutoReplyV2() {
     emails.forEach(email => {
       const questions = emailQuestions.get(email.id) || [];
       questions.forEach(q => {
-        if (calculatePatternSimilarity(q.question, faq.question) > SIMILARITY_THRESHOLD) {
+        if (calculatePatternSimilarity(q.question, faq.question) > similarityThreshold) {
           allQuestions.add(q.question);
         }
       });
     });
 
     return Array.from(allQuestions);
-  }, [emails, emailQuestions, calculatePatternSimilarity]);
+  }, [emails, emailQuestions, calculatePatternSimilarity, similarityThreshold]);
 
   // Update groupSimilarPatterns to be more aggressive in consolidating similar questions
   const groupSimilarPatterns = useCallback((patterns: GenericFAQ[]): GenericFAQ[] => {
@@ -663,7 +695,7 @@ export default function FAQAutoReplyV2() {
         const hasCommonKeyWord = [...keyWords1].some(word => keyWords2.has(word));
         const similarity = calculatePatternSimilarity(baseQuestion1, baseQuestion2);
 
-        return hasCommonKeyWord && similarity > SIMILARITY_THRESHOLD;
+        return hasCommonKeyWord && similarity > similarityThreshold;
       });
 
       if (similarGroup) {
@@ -686,7 +718,7 @@ export default function FAQAutoReplyV2() {
     });
 
     return groups;
-  }, [calculatePatternSimilarity]);
+  }, [calculatePatternSimilarity, similarityThreshold]);
 
   // Add this helper function inside the component
   const truncateQuestion = (question: string) => {
@@ -713,7 +745,7 @@ export default function FAQAutoReplyV2() {
     const similarMatch = answeredFAQs.find(faq => {
       const similarity = calculatePatternSimilarity(faq.question, question);
       console.log(`Similarity between "${faq.question}" and "${question}": ${similarity}`);
-      return similarity > SIMILARITY_THRESHOLD;
+      return similarity > similarityThreshold;
     });
 
     if (similarMatch) {
@@ -723,7 +755,7 @@ export default function FAQAutoReplyV2() {
 
     console.log('No match found for question:', question);
     return null;
-  }, [answeredFAQs, calculatePatternSimilarity]);
+  }, [answeredFAQs, calculatePatternSimilarity, similarityThreshold]);
 
   // Add this helper function to check if all email questions have been answered
   const checkEmailAnsweredStatus = useCallback((email: ExtendedEmail) => {
@@ -740,7 +772,7 @@ export default function FAQAutoReplyV2() {
       const matchedFAQ = answeredFAQs.find(faq =>
         faq.answer &&
         faq.answer.trim() !== '' &&
-        calculatePatternSimilarity(faq.question, q.question) > SIMILARITY_THRESHOLD
+        calculatePatternSimilarity(faq.question, q.question) > similarityThreshold
       );
       return { question: q, matchedFAQ };
     });
@@ -770,7 +802,7 @@ export default function FAQAutoReplyV2() {
 
     console.log('No suitable match found');
     return null;
-  }, [emailQuestions, answeredFAQs, calculatePatternSimilarity]);
+  }, [emailQuestions, answeredFAQs, calculatePatternSimilarity, similarityThreshold]);
 
   // Add this near the state declarations
   const lastLoadTime = useRef<number>(0);
@@ -1027,7 +1059,7 @@ export default function FAQAutoReplyV2() {
                   questions: questions,
                   answeredFAQs: answeredFAQs.filter(faq =>
                     questions.some(q =>
-                      calculatePatternSimilarity(q.question, faq.question) > SIMILARITY_THRESHOLD
+                      calculatePatternSimilarity(q.question, faq.question) > similarityThreshold
                     )
                   )
                 })
@@ -1068,7 +1100,7 @@ export default function FAQAutoReplyV2() {
       console.error('Error updating emails:', error);
     });
 
-  }, [answeredFAQs, checkEmailAnsweredStatus, emailQuestions, calculatePatternSimilarity]);
+  }, [answeredFAQs, checkEmailAnsweredStatus, emailQuestions, calculatePatternSimilarity, similarityThreshold]);
 
   const handleLoadMore = () => {
     if (!isLoading && hasMore) {
@@ -1399,68 +1431,7 @@ export default function FAQAutoReplyV2() {
         markedNotRelevantAt: new Date().toISOString()
       }, { merge: true });
 
-      // Now call analyze-irrelevant with threadId and userEmail
-      const response = await fetch('/api/emails/analyze-irrelevant', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          email: {
-            threadId: email.threadId,
-            subject: email.subject || 'No Subject',
-            content: email.content || '',
-            sender: email.sender || 'Unknown Sender'
-          },
-          userEmail: user?.email || 'unknown'
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to analyze email');
-      }
-
-      const analysis = await response.json();
-
-      // Update the email document with the analysis
-      await setDoc(emailRef, {
-        irrelevanceReason: analysis.reason,
-        irrelevanceCategory: analysis.category,
-        irrelevanceConfidence: analysis.confidence,
-        irrelevanceDetails: analysis.details
-      }, { merge: true });
-
-      // Update local state with the analysis
-      setEmails(prev => prev.map(e =>
-        e.id === email.id
-          ? {
-            ...e,
-            isNotRelevant: true,
-            status: 'not_relevant',
-            irrelevanceReason: analysis.reason
-          }
-          : e
-      ));
-
-      // Update cache with the analysis
-      const updatedCachedData = loadFromCache(CACHE_KEYS.ANSWERED_FAQS) || {};
-      const updatedCachedEmails = (updatedCachedData.emails || []).map(e =>
-        e.id === email.id
-          ? {
-            ...e,
-            isNotRelevant: true,
-            status: 'not_relevant',
-            irrelevanceReason: analysis.reason
-          }
-          : e
-      );
-      saveToCache(CACHE_KEYS.ANSWERED_FAQS, {
-        ...updatedCachedData,
-        emails: updatedCachedEmails,
-        timestamp: Date.now()
-      });
-
-      toast.success(`Removed: ${analysis.reason}`);
+      toast.success('Email marked as not relevant');
     } catch (error) {
       console.error('Error marking email as not relevant:', error);
 
@@ -1657,11 +1628,11 @@ export default function FAQAutoReplyV2() {
   };
 
   // Update the generateContextualReply function to check for existing replies
-  const generateContextualReply = async (email: ExtendedEmail) => {
+  const generateContextualReply = async (email: ExtendedEmail, forceRegenerate = false) => {
     try {
-      // Check if we already have a reply in Firebase
+      // Check if we already have a reply in Firebase (skip this check if forceRegenerate is true)
       const db = getFirebaseDB();
-      if (db) {
+      if (db && !forceRegenerate) {
         const replyRef = doc(db, 'email_replies', email.id);
         const replyDoc = await getDoc(replyRef);
         if (replyDoc.exists()) {
@@ -1685,6 +1656,16 @@ export default function FAQAutoReplyV2() {
           : e
       ));
 
+      // Use settings from the settings modal or fallback to defaults
+      const currentSettings = {
+        confidenceThreshold: settings.confidenceThreshold / 100 || 0.6, // Convert percentage to decimal
+        emailFormatting: {
+          greeting: settings.emailFormatting.greeting || "Hi there",
+          signatureStyle: settings.emailFormatting.signatureStyle || "Sincerely, Our Team",
+          customPrompt: settings.emailFormatting.customPrompt || "Please keep responses friendly and human sounding."
+        }
+      };
+
       const response = await fetch('/api/knowledge/generate-reply', {
         method: 'POST',
         headers: {
@@ -1699,9 +1680,11 @@ export default function FAQAutoReplyV2() {
           answeredFAQs: answeredFAQs.filter(faq => {
             const emailQuestionsList = emailQuestions.get(email.id) || [];
             return emailQuestionsList.some(q =>
-              calculatePatternSimilarity(q.question, faq.question) > SIMILARITY_THRESHOLD
+              calculatePatternSimilarity(q.question, faq.question) > currentSettings.confidenceThreshold
             );
-          })
+          }),
+          settings: currentSettings,
+          userEmail: user?.email
         })
       });
 
@@ -1837,17 +1820,20 @@ export default function FAQAutoReplyV2() {
       .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
       .join(' ');
 
+    // Use settings from the settings modal or fallback to defaults
+    const greeting = settings.emailFormatting?.greeting?.replace('[Name]', senderName) || `Hi ${senderName}`;
+    const signature = settings.emailFormatting?.signatureStyle?.replace('[Name]', 'Support Team') || 'Best regards,\nSupport Team';
+
     const question = email.matchedFAQ?.question?.replace('{email}', email.sender) || '';
     const answer = email.matchedFAQ?.answer || '';
 
-    return `Dear ${senderName},
+    return `${greeting},
 
 Thank you for your email regarding ${question}.
 
 ${answer}
 
-Best regards,
-Support Team`;
+${signature}`;
   };
 
   const toggleEmailContent = useCallback((emailId: string) => {
@@ -1881,7 +1867,7 @@ Support Team`;
         answeredFAQs.some(faq =>
           faq.answer &&
           faq.answer.trim() !== '' &&
-          calculatePatternSimilarity(faq.question, q.question) > SIMILARITY_THRESHOLD
+          calculatePatternSimilarity(faq.question, q.question) > similarityThreshold
         )
       );
 
@@ -1891,7 +1877,7 @@ Support Team`;
       if (isComplete && !email.matchedFAQ && !email.isReplied && !email.isNotRelevant) {
         const bestMatch = answeredQuestions.reduce((best, current) => {
           const matchedFAQ = answeredFAQs.find(faq =>
-            calculatePatternSimilarity(faq.question, current.question) > SIMILARITY_THRESHOLD
+            calculatePatternSimilarity(faq.question, current.question) > similarityThreshold
           );
           if (!matchedFAQ) return best;
           if (!best || matchedFAQ.confidence > (best.confidence || 0)) return matchedFAQ;
@@ -1917,7 +1903,7 @@ Support Team`;
     if (JSON.stringify(updatedEmails) !== JSON.stringify(emails)) {
       setEmails(updatedEmails);
     }
-  }, [emails, emailQuestions, answeredFAQs, calculatePatternSimilarity]);
+  }, [emails, emailQuestions, answeredFAQs, calculatePatternSimilarity, similarityThreshold]);
 
   const handleEmailExpand = (emailId: string, expanded: boolean) => {
     setExpandedEmails(prev => {
@@ -2220,7 +2206,7 @@ Support Team`;
                       const matchedFAQ = answeredFAQs.find(faq =>
                         faq.answer &&
                         faq.answer.trim() !== '' &&
-                        calculatePatternSimilarity(faq.question, question.question) > SIMILARITY_THRESHOLD
+                        calculatePatternSimilarity(faq.question, question.question) > similarityThreshold
                       );
                       const isAnswered = !!matchedFAQ;
                       return (
@@ -2372,18 +2358,21 @@ Support Team`;
                 <div className="flex justify-between items-center mb-3">
                   <div className="flex items-center gap-2">
                     <SparklesIcon className="h-4 w-4 text-indigo-600" />
-                    <h4 className="text-sm font-medium text-indigo-600">AI Generated Reply</h4>
+                    <h4 className="text-sm font-medium text-indigo-600">
+                      {email.isGeneratingReply ? 'Generating AI Reply...' : 'AI Generated Reply'}
+                    </h4>
                   </div>
                   <div className="flex items-center gap-2">
                     <button
                       onClick={() => handleEditReply(email)}
                       className="p-1.5 text-indigo-600 hover:bg-indigo-100 rounded-full transition-colors"
+                      disabled={email.isGeneratingReply}
                     >
                       <PencilIcon className="h-4 w-4" />
                     </button>
                     <div className="relative">
                       <button
-                        onClick={() => generateContextualReply(email)}
+                        onClick={() => generateContextualReply(email, true)}
                         className="p-1.5 text-indigo-600 hover:bg-indigo-100 rounded-full transition-colors"
                         disabled={email.isGeneratingReply}
                         title="Regenerate AI response"
@@ -2399,7 +2388,17 @@ Support Team`;
                   </div>
                 </div>
                 <div className="text-sm text-indigo-900 whitespace-pre-wrap">
-                  {email.suggestedReply}
+                  {email.isGeneratingReply ? (
+                    <div className="flex items-center justify-center py-4">
+                      <svg className="animate-spin h-5 w-5 text-indigo-600 mr-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                      </svg>
+                      <span>Generating a fresh AI reply...</span>
+                    </div>
+                  ) : (
+                    email.suggestedReply
+                  )}
                 </div>
               </div>
             </div>
@@ -3227,12 +3226,19 @@ Support Team`;
 
   // Update the header section to use the new function
   const renderHeader = () => (
-    <div className="flex items-center justify-between mb-3 sm:mb-5">
-      <div>
-        <h1 className="text-sm sm:text-base font-semibold text-gray-900 mb-0.5">Customer Support Triage</h1>
-        <p className="text-[11px] text-gray-500 hidden sm:block">Manage and respond to customer inquiries efficiently</p>
+    <div className="flex items-center justify-between px-4 py-4 sm:px-6 lg:px-8 border-b border-gray-200">
+      <div className="flex-1 min-w-0">
+        <h2 className="text-2xl font-bold leading-7 text-gray-900 sm:text-3xl sm:truncate">
+          FAQ Auto-Reply
+        </h2>
       </div>
-      <div className="flex items-center gap-2 sm:gap-3">
+      <div className="flex items-center space-x-4">
+        <button
+          onClick={() => setShowSettingsModal(true)}
+          className="p-2 text-gray-400 hover:text-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+        >
+          <Cog6ToothIcon className="h-6 w-6" aria-hidden="true" />
+        </button>
         {newEmailsCount > 0 && (
           <button
             onClick={handleNewEmailsRefresh}
@@ -3376,6 +3382,26 @@ Support Team`;
     }
   };
 
+  // Add this near other useEffect hooks
+  useEffect(() => {
+    // Load settings from localStorage
+    const savedSettings = localStorage.getItem('faq_autoreply_settings');
+    if (savedSettings) {
+      setSettings(JSON.parse(savedSettings));
+    }
+  }, []);
+
+  const handleSaveSettings = (newSettings: AutoReplySettings) => {
+    setSettings(newSettings);
+    localStorage.setItem('faq_autoreply_settings', JSON.stringify(newSettings));
+
+    // Show success toast
+    toast.success('Settings saved successfully!', {
+      duration: 3000,
+      position: 'top-center'
+    });
+  };
+
   if (authLoading || loading) {
     return (
       <div className="space-y-8">
@@ -3417,6 +3443,12 @@ Support Team`;
         </div>
         {renderAnswerModal()}
         {renderEditReplyModal()}
+        <SettingsModal
+          isOpen={showSettingsModal}
+          onClose={() => setShowSettingsModal(false)}
+          settings={settings}
+          onSave={handleSaveSettings}
+        />
       </Layout>
     </div>
   );
