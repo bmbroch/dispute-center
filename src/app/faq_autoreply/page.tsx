@@ -238,14 +238,14 @@ export default function FAQAutoReplyPage() {
 
     if (editingFaqId) {
       // Update existing FAQ
-      setFaqs(prev => prev.map(faq => 
+      setFaqs(prev => prev.map(faq =>
         faq.id === editingFaqId
           ? {
-              ...faq,
-              question: newFAQ.question.replace(/<[^>]*>/g, ''),
-              replyTemplate: newFAQ.replyTemplate.replace(/<[^>]*>/g, ''),
-              updatedAt: new Date().toISOString()
-            }
+            ...faq,
+            question: newFAQ.question.replace(/<[^>]*>/g, ''),
+            replyTemplate: newFAQ.replyTemplate.replace(/<[^>]*>/g, ''),
+            updatedAt: new Date().toISOString()
+          }
           : faq
       ));
       toast.success('FAQ template updated successfully! ✏️');
@@ -336,7 +336,7 @@ export default function FAQAutoReplyPage() {
       });
 
       console.log('Received response:', response.status, response.statusText);
-      
+
       const responseData = await response.json();
       console.log('Response data:', responseData);
 
@@ -350,7 +350,7 @@ export default function FAQAutoReplyPage() {
       }
 
       setGeneratedQAs(responseData.qas.map((qa: { question: string; answer: string }) => ({ ...qa, isEditing: false })));
-      
+
       if (responseData.qas.length === 0) {
         toast.error('No Q&As could be generated from the text. Please try with different content.');
       } else {
@@ -390,13 +390,13 @@ export default function FAQAutoReplyPage() {
   };
 
   const handleEditQA = (index: number) => {
-    setGeneratedQAs(prev => prev.map((qa, i) => 
+    setGeneratedQAs(prev => prev.map((qa, i) =>
       i === index ? { ...qa, isEditing: true } : qa
     ));
   };
 
   const handleSaveQA = (index: number, updatedQA: { question: string; answer: string }) => {
-    setGeneratedQAs(prev => prev.map((qa, i) => 
+    setGeneratedQAs(prev => prev.map((qa, i) =>
       i === index ? { ...updatedQA, isEditing: false } : qa
     ));
     toast.success('Q&A updated successfully');
@@ -424,7 +424,7 @@ export default function FAQAutoReplyPage() {
             className="relative z-50"
           >
             <div className="fixed inset-0 bg-black/30" aria-hidden="true" />
-            
+
             <div className="fixed inset-0 flex items-center justify-center p-4">
               <Dialog.Panel className="mx-auto max-w-2xl w-full rounded-xl bg-white p-6 shadow-xl">
                 <div className="flex justify-between items-start mb-4">
@@ -461,9 +461,6 @@ export default function FAQAutoReplyPage() {
 
                   {/* Email Formatting Section */}
                   <div>
-                    <h3 className="text-sm font-medium text-gray-900 mb-2">
-                      Email Formatting
-                    </h3>
                     <div className="space-y-4 bg-gray-50 p-4 rounded-lg">
                       <div>
                         <label className="block text-sm text-gray-700 mb-1">
@@ -668,7 +665,7 @@ export default function FAQAutoReplyPage() {
           className="relative z-50"
         >
           <div className="fixed inset-0 bg-black/30" aria-hidden="true" />
-          
+
           <div className="fixed inset-0 flex items-center justify-center p-4">
             <Dialog.Panel className="mx-auto max-w-xl w-full rounded-lg bg-white p-5 shadow-xl">
               <div className="flex justify-between items-start mb-3">
@@ -736,7 +733,7 @@ export default function FAQAutoReplyPage() {
           className="relative z-50"
         >
           <div className="fixed inset-0 bg-black/30" aria-hidden="true" />
-          
+
           <div className="fixed inset-0 flex items-center justify-center p-4">
             <Dialog.Panel className="mx-auto max-w-3xl w-full rounded-lg bg-white p-6 shadow-xl">
               <div className="flex justify-between items-start mb-4">
@@ -798,7 +795,7 @@ export default function FAQAutoReplyPage() {
                                 <textarea
                                   value={qa.question}
                                   onChange={(e) => {
-                                    setGeneratedQAs(prev => prev.map((item, i) => 
+                                    setGeneratedQAs(prev => prev.map((item, i) =>
                                       i === index ? { ...item, question: e.target.value } : item
                                     ));
                                   }}
@@ -811,7 +808,7 @@ export default function FAQAutoReplyPage() {
                                 <textarea
                                   value={qa.answer}
                                   onChange={(e) => {
-                                    setGeneratedQAs(prev => prev.map((item, i) => 
+                                    setGeneratedQAs(prev => prev.map((item, i) =>
                                       i === index ? { ...item, answer: e.target.value } : item
                                     ));
                                   }}
@@ -874,4 +871,4 @@ export default function FAQAutoReplyPage() {
       </div>
     </Layout>
   );
-} 
+}

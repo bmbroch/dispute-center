@@ -17,7 +17,23 @@ export async function POST(req: Request) {
       );
     }
 
-    const { emailId, subject, content, matchedFAQ, questions, answeredFAQs, userEmail } = await req.json();
+    const {
+      emailId,
+      subject,
+      content,
+      matchedFAQ,
+      questions,
+      answeredFAQs,
+      settings,
+      userEmail
+    } = await req.json();
+
+    // Use settings from the settings modal or fallback to defaults
+    const formattingSettings = settings?.emailFormatting || {
+      greeting: "Hi there",
+      signatureStyle: "Sincerely, Our Team",
+      customPrompt: "Please keep responses friendly and human sounding."
+    };
 
     // Create a comprehensive prompt for the AI
     const prompt = `You are a helpful customer support agent. Generate a professional and empathetic email reply.
@@ -30,14 +46,20 @@ Context:
 ${questions.length > 0 ? `- Other Questions from Email: ${questions.map((q: { question: string }) => `"${q.question}"`).join(', ')}` : ''}
 ${answeredFAQs.length > 0 ? `- Related FAQ Answers: ${answeredFAQs.map((faq: { question: string, answer: string }) => `Q: "${faq.question}" A: "${faq.answer}"`).join(' | ')}` : ''}
 
+Email Formatting Guidelines:
+- Use this greeting style: "${formattingSettings.greeting}"
+- Use this signature style: "${formattingSettings.signatureStyle}"
+- Additional formatting instructions: ${formattingSettings.customPrompt}
+
 Instructions:
-1. Start with a polite greeting using the sender's name
+1. Start with a greeting using the provided greeting style, replacing [Name] with the sender's name if applicable
 2. Acknowledge their specific concern/question
 3. Provide a clear, comprehensive answer that incorporates all relevant FAQ information
 4. Add any necessary context or related information from other matched FAQs
-5. End with a professional closing
+5. End with the provided signature style, replacing [Name] with an appropriate name if applicable
 6. Keep the tone helpful, professional, and empathetic
 7. Format the response with appropriate spacing and paragraphs
+8. Follow the additional formatting instructions provided
 
 Generate the email reply:`;
 

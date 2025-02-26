@@ -45,6 +45,10 @@ export default function EmailRenderNew({
     if (typeof content === 'string') {
       setHtmlContent(content);
       setError(null);
+    } else if (!content) {
+      // Handle the case where content is undefined or null
+      setError('No content available');
+      setHtmlContent(null);
     } else {
       if (content.error) {
         setError(content.error);
