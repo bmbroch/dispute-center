@@ -3262,36 +3262,44 @@ ${signature}`;
       if (!response.ok) {
         // Check if this is an auth error (401)
         if (response.status === 401) {
-          console.log('Access token expired, attempting to refresh...');
-          const newToken = await refreshAccessToken();
+          // Try to parse the response to check for TOKEN_EXPIRED error
+          try {
+            const errorData = await response.json();
+            if (errorData.error === 'TOKEN_EXPIRED') {
+              console.log('Access token expired, attempting to refresh...');
+              const newToken = await refreshAccessToken();
 
-          // If we got a new token, retry the request
-          if (newToken) {
-            console.log('Token refreshed, retrying request');
-            const retryResponse = await fetch('/api/emails/check-new', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${newToken}`
-              },
-              body: JSON.stringify({
-                lastEmailTimestamp,
-                existingThreadIds: emails.map(e => e.threadId).filter(Boolean)
-              }),
-            });
+              // If we got a new token, retry the request
+              if (newToken) {
+                console.log('Token refreshed, retrying request');
+                const retryResponse = await fetch('/api/emails/check-new', {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${newToken}`
+                  },
+                  body: JSON.stringify({
+                    lastEmailTimestamp,
+                    existingThreadIds: emails.map(e => e.threadId).filter(Boolean)
+                  }),
+                });
 
-            if (retryResponse.ok) {
-              const data = await retryResponse.json();
-              setNewEmailsCount(data.newEmailsCount || 0);
-              if (data.newThreadIds) {
-                setNewThreadIds(data.newThreadIds);
+                if (retryResponse.ok) {
+                  const data = await retryResponse.json();
+                  setNewEmailsCount(data.newEmailsCount || 0);
+                  if (data.newThreadIds) {
+                    setNewThreadIds(data.newThreadIds);
+                  }
+                  return;
+                }
+              } else {
+                console.error('Failed to refresh token');
+                toast.error('Your session has expired. Please refresh the page and sign in again.');
+                return;
               }
-              return;
             }
-          } else {
-            console.error('Failed to refresh token');
-            toast.error('Your session has expired. Please refresh the page and sign in again.');
-            return;
+          } catch (parseError) {
+            console.error('Error parsing response:', parseError);
           }
         }
 
