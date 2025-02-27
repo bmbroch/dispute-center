@@ -28,8 +28,8 @@ export const AuthContext = createContext<AuthContextType>({
   user: null,
   loading: true,
   error: null,
-  signIn: async () => {},
-  signOut: async () => {},
+  signIn: async () => { },
+  signOut: async () => { },
   refreshAccessToken: async () => null,
   checkGmailAccess: async () => false,
 });
@@ -67,98 +67,78 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const loadSavedAuth = async () => {
       try {
         setLoading(true);
-        const savedTokens = localStorage.getItem('auth_tokens');
-        const savedUserInfo = localStorage.getItem('user_info');
 
-        if (!savedTokens) {
+        // Check for saved tokens in localStorage
+        const savedTokensStr = localStorage.getItem('auth_tokens');
+        if (!savedTokensStr) {
           setLoading(false);
           return;
         }
 
-        const tokens = JSON.parse(savedTokens);
-        const userInfo = savedUserInfo ? JSON.parse(savedUserInfo) : null;
+        const savedTokens = JSON.parse(savedTokensStr);
 
-        // Validate token structure
-        if (!tokens.access_token) {
-          throw new Error('Invalid token structure');
+        // Check if we have valid tokens
+        if (!savedTokens.access_token || !savedTokens.refresh_token) {
+          localStorage.removeItem('auth_tokens');
+          setLoading(false);
+          return;
         }
 
-        // Set the tokens in the service
-        googleAuthService.setTokens(tokens);
+        // Set tokens in the Google Auth service
+        googleAuthService.setTokens({
+          access_token: savedTokens.access_token,
+          refresh_token: savedTokens.refresh_token,
+          id_token: savedTokens.id_token,
+          expires_in: savedTokens.expires_in
+        });
 
+        // Try to get user info with the current token
         try {
-          // Try to get user info with current token
-          const freshUserInfo = await googleAuthService.getUserInfo();
-          const newUser = {
-            email: freshUserInfo.email,
-            name: freshUserInfo.name,
-            picture: freshUserInfo.picture,
-            accessToken: tokens.access_token,
-            refreshToken: tokens.refresh_token || null,
-          };
-          setUser(newUser);
-          // Save the user info
-          localStorage.setItem('user_info', JSON.stringify({
-            email: freshUserInfo.email,
-            name: freshUserInfo.name,
-            picture: freshUserInfo.picture,
-          }));
-        } catch (userInfoError) {
-          console.log('Token expired, attempting refresh...');
-          // If user info fails, try to refresh the token
-          if (tokens.refresh_token) {
-            try {
-              const newTokens = await googleAuthService.refreshTokens();
-              // Retry getting user info with new token
-              const freshUserInfo = await googleAuthService.getUserInfo();
-              const newUser = {
-                email: freshUserInfo.email,
-                name: freshUserInfo.name,
-                picture: freshUserInfo.picture,
-                accessToken: newTokens.access_token,
-                refreshToken: newTokens.refresh_token || tokens.refresh_token,
-              };
-              setUser(newUser);
+          const userInfo = await googleAuthService.getUserInfo();
 
-              // Save the new tokens and user info
-              localStorage.setItem('auth_tokens', JSON.stringify({
-                access_token: newTokens.access_token,
-                refresh_token: newTokens.refresh_token || tokens.refresh_token,
-                id_token: newTokens.id_token,
-                expires_in: newTokens.expires_in
-              }));
-              localStorage.setItem('user_info', JSON.stringify({
-                email: freshUserInfo.email,
-                name: freshUserInfo.name,
-                picture: freshUserInfo.picture,
-              }));
-            } catch (refreshError) {
-              console.error('Error refreshing token:', refreshError);
-              // Only clear tokens if refresh explicitly fails
-              if (refreshError instanceof Error && refreshError.message === 'Invalid refresh token') {
-                localStorage.removeItem('auth_tokens');
-                localStorage.removeItem('user_info');
-                googleAuthService.clearTokens();
-              }
-              setUser(null);
-            }
-          } else {
-            // No refresh token available
+          // If we get here, the token is still valid
+          setUser({
+            email: userInfo.email,
+            name: userInfo.name,
+            picture: userInfo.picture,
+            accessToken: savedTokens.access_token,
+            refreshToken: savedTokens.refresh_token
+          });
+        } catch (error) {
+          console.log('Access token expired, attempting to refresh...');
+
+          // Token is invalid, try to refresh
+          try {
+            const newTokens = await googleAuthService.refreshTokens();
+
+            // Update stored tokens
+            localStorage.setItem('auth_tokens', JSON.stringify({
+              access_token: newTokens.access_token,
+              refresh_token: newTokens.refresh_token || savedTokens.refresh_token,
+              id_token: newTokens.id_token,
+              expires_in: newTokens.expires_in
+            }));
+
+            // Get user info with the new token
+            const userInfo = await googleAuthService.getUserInfo();
+
+            setUser({
+              email: userInfo.email,
+              name: userInfo.name,
+              picture: userInfo.picture,
+              accessToken: newTokens.access_token,
+              refreshToken: newTokens.refresh_token || savedTokens.refresh_token
+            });
+          } catch (refreshError) {
+            console.error('Failed to refresh token on load:', refreshError);
             localStorage.removeItem('auth_tokens');
-            localStorage.removeItem('user_info');
-            googleAuthService.clearTokens();
             setUser(null);
           }
         }
       } catch (error) {
-        console.error('Error loading saved auth:', error);
-        // Only clear tokens on critical errors
-        if (error instanceof Error && error.message === 'Invalid token structure') {
-          localStorage.removeItem('auth_tokens');
-          localStorage.removeItem('user_info');
-          googleAuthService.clearTokens();
-          setUser(null);
-        }
+        console.error('Error loading saved authentication:', error);
+        localStorage.removeItem('auth_tokens');
+        setUser(null);
       } finally {
         setLoading(false);
       }

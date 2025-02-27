@@ -33,11 +33,13 @@ import {
   LinkIcon,
   SmileIcon,
   User,
+  MailCheckIcon,
+  MailIcon,
 } from 'lucide-react';
 import { Dialog, Transition } from '@headlessui/react';
 import { Fragment } from 'react';
 import { getFirebaseDB } from '@/lib/firebase/firebase';
-import { collection, doc, setDoc, getDoc, getDocs, query, where, deleteDoc } from 'firebase/firestore';
+import { collection, doc, setDoc, getDoc, getDocs, query, where, deleteDoc, writeBatch } from 'firebase/firestore';
 import type { Email, ExtendedEmail, EmailContent, BaseEmail } from '@/types/email';
 import { GenericFAQ, IrrelevanceAnalysis } from '@/types/faq';
 import { calculatePatternSimilarity } from '@/lib/utils/similarity';
@@ -156,13 +158,59 @@ const loadFromCache = (key: string): CacheData | null => {
 
 const saveToCache = (key: string, data: any) => {
   try {
+    // If we're caching emails, create a lightweight version to save space
+    if (key === CACHE_KEYS.EMAILS && Array.isArray(data)) {
+      // Limit to maximum 50 emails to prevent quota issues
+      const emailsToCache = data.slice(0, 50).map(email => {
+        // Create a lightweight version of each email
+        const { id, threadId, subject, sender, timestamp, isReplied, status, matchedFAQ } = email;
+        return {
+          id, threadId, subject, sender, timestamp, isReplied, status, matchedFAQ,
+          // Only include the first 200 chars of content as a preview if it exists
+          content: email.content ?
+            (typeof email.content === 'string' ?
+              email.content.substring(0, 200) :
+              { html: email.content.html?.substring(0, 200) || null, text: email.content.text?.substring(0, 200) || null })
+            : email.content
+        };
+      });
+
+      data = emailsToCache;
+    }
+
     const cacheData = {
       data,
       timestamp: Date.now()
     };
-    localStorage.setItem(key, JSON.stringify(cacheData));
+
+    // Check approximate size before trying to save
+    const serialized = JSON.stringify(cacheData);
+    // If data is larger than 2MB, don't save to cache
+    if (serialized.length > 2 * 1024 * 1024) {
+      console.warn(`Data for ${key} is too large (${Math.round(serialized.length / 1024 / 1024)}MB) to cache safely. Skipping cache.`);
+      return;
+    }
+
+    localStorage.setItem(key, serialized);
   } catch (error) {
     console.error('Error saving to cache:', error);
+
+    // Handle quota exceeded error specifically
+    if (
+      error instanceof DOMException &&
+      (error.name === 'QuotaExceededError' ||
+        error.name === 'NS_ERROR_DOM_QUOTA_REACHED')
+    ) {
+      console.warn('Storage quota exceeded. Clearing cache to allow app to continue functioning.');
+
+      // If this was for emails cache, clear that first
+      if (key === CACHE_KEYS.EMAILS) {
+        localStorage.removeItem(CACHE_KEYS.EMAILS);
+      } else {
+        // Otherwise try clearing all caches
+        clearCache();
+      }
+    }
   }
 };
 
@@ -225,13 +273,42 @@ const loadingState = {
 const FIREBASE_CACHE_COLLECTION = 'email_cache';
 const FIREBASE_CACHE_DURATION = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
 
-// Add isEmailReadyForReply helper function
-const isEmailReadyForReply = (email: ExtendedEmail, emailQuestions: Map<string, GenericFAQ[]>) => {
+// Check if the authenticated user was the last to send a message in this thread
+const isUserLastSender = (email: ExtendedEmail, user: any): boolean => {
+  if (!email?.threadMessages || !email.threadMessages.length || !user?.email) return false;
+
+  // Get the most recent message in the thread
+  const lastMessage = email.threadMessages[email.threadMessages.length - 1];
+
+  // Add more defensive checks for undefined values
+  if (!lastMessage?.sender) return false;
+
+  // Check if the sender of the last message includes the authenticated user's email
+  return lastMessage.sender.toLowerCase().includes(user.email.toLowerCase());
+};
+
+// Determine if email is ready for reply (updated to check if user was NOT the last sender)
+const isEmailReadyForReply = (email: ExtendedEmail, emailQuestions: Map<string, GenericFAQ[]>, user: any) => {
   const questions = email.id ? emailQuestions.get(email.id) : undefined;
+
+  // Don't consider emails where the authenticated user was the last to reply
+  const userWasLastSender = isUserLastSender(email, user);
+
+  // If there are no questions extracted yet, the email is not ready for reply
+  if (!questions || questions.length === 0) {
+    return false;
+  }
+
+  // Check if all questions have answers in the FAQ library
+  const allQuestionsHaveAnswers = questions.every(question =>
+    question.answer && question.answer.trim() !== ''
+  );
+
   return (
-    (!email.matchedFAQ || !questions || questions.length === 0) &&
     !email.isNotRelevant &&
-    !email.isReplied
+    !email.isReplied &&
+    !userWasLastSender &&
+    allQuestionsHaveAnswers
   );
 };
 
@@ -316,16 +393,88 @@ const loadEmailsFromFirebase = async () => {
   }
 };
 
-const saveEmailsToFirebase = async (emails: Email[]) => {
+const saveEmailsToFirebase = async (emails: (Email | ExtendedEmail)[]) => {
   try {
     const db = getFirebaseDB();
     if (!db) return;
 
-    const cacheRef = doc(db, FIREBASE_CACHE_COLLECTION, 'latest');
-    await setDoc(cacheRef, {
-      emails,
-      timestamp: Date.now()
-    });
+    // Helper function to sanitize an object by removing undefined values
+    const sanitizeObject = (obj: any): any => {
+      if (obj === null || obj === undefined) return null;
+      if (typeof obj !== 'object') return obj;
+
+      // Handle arrays
+      if (Array.isArray(obj)) {
+        return obj.map(item => sanitizeObject(item));
+      }
+
+      // Handle objects
+      const sanitized: any = {};
+      Object.entries(obj).forEach(([key, value]) => {
+        // Skip undefined values
+        if (value === undefined) return;
+        // Recursively sanitize nested objects
+        sanitized[key] = sanitizeObject(value);
+      });
+      return sanitized;
+    };
+
+    let savedCount = 0;
+
+    // Save each email individually to the email_cache collection
+    for (const email of emails) {
+      if (!email || !email.id) {
+        console.warn('Skipping invalid email without ID');
+        continue;
+      }
+
+      // First convert receivedAt if it's a number
+      const normalizedEmail = {
+        ...email,
+        receivedAt: typeof email.receivedAt === 'number'
+          ? email.receivedAt.toString()
+          : email.receivedAt,
+        // Add lastUpdated timestamp
+        lastUpdated: Date.now()
+      };
+
+      // Then sanitize the entire object
+      const sanitizedEmail = sanitizeObject(normalizedEmail);
+
+      try {
+        // Save to individual email document
+        const emailRef = doc(db, FIREBASE_COLLECTIONS.EMAIL_CACHE, email.id);
+        await setDoc(emailRef, sanitizedEmail);
+
+        // If thread ID exists, update thread cache too
+        if (email.threadId) {
+          const threadRef = doc(db, FIREBASE_COLLECTIONS.THREAD_CACHE, email.threadId);
+          await setDoc(threadRef, {
+            emailId: email.id,
+            threadId: email.threadId,
+            subject: email.subject,
+            sender: email.sender,
+            receivedAt: email.receivedAt,
+            lastUpdated: Date.now()
+          }, { merge: true });
+        }
+
+        // If email has content and it's not already in the content collection, save it
+        if (email.content) {
+          const emailContentRef = doc(db, 'email_content', email.id);
+          await setDoc(emailContentRef, {
+            content: email.content,
+            timestamp: Date.now()
+          });
+        }
+
+        savedCount++;
+      } catch (error) {
+        console.error(`Error saving email ${email.id} to Firebase:`, error);
+      }
+    }
+
+    console.log(`Saved ${savedCount} emails to Firebase`);
   } catch (error) {
     console.error('Error saving emails to Firebase:', error);
   }
@@ -583,7 +732,9 @@ const extractEmailAddress = (sender: string) => {
   return matches[1] || sender;
 };
 
+// Replace the existing AutoReplySettings interface with this unified one
 interface AutoReplySettings {
+  similarityThreshold: number;
   confidenceThreshold: number;
   emailFormatting: {
     greeting: string;
@@ -591,17 +742,24 @@ interface AutoReplySettings {
     spacing: 'compact' | 'normal' | 'spacious';
     signatureStyle: string;
     customPrompt: string;
+    useHtml: boolean;
+    includeSignature: boolean;
+    signatureText: string;
   };
 }
 
 const DEFAULT_SETTINGS: AutoReplySettings = {
-  confidenceThreshold: 80,
+  similarityThreshold: 0.7,
+  confidenceThreshold: 0.8,
   emailFormatting: {
     greeting: "Hi [Name]",
     listStyle: 'bullet',
     spacing: 'normal',
     signatureStyle: "Best,\nInterview Sidekick team",
-    customPrompt: "Please keep responses friendly but professional."
+    customPrompt: "Please keep responses friendly but professional.",
+    useHtml: true,
+    includeSignature: true,
+    signatureText: 'Best regards,\nSupport Team'
   }
 };
 
@@ -611,7 +769,7 @@ export default function FAQAutoReplyV2() {
   const [emails, setEmails] = useState<ExtendedEmail[]>([]);
   const [potentialFAQs, setPotentialFAQs] = useState<PotentialFAQ[]>([]);
   const [genericFAQs, setGenericFAQs] = useState<GenericFAQ[]>([]);
-  const [activeTab, setActiveTab] = useState<'unanswered' | 'suggested' | 'faq_library' | 'not_relevant' | 'all'>('unanswered');
+  const [activeTab, setActiveTab] = useState<'unanswered' | 'suggested' | 'faq_library' | 'not_relevant' | 'all' | 'answered'>('unanswered');
   const [loading, setLoading] = useState(true);
   const [loadingFAQs, setLoadingFAQs] = useState(true);
   const [initialized, setInitialized] = useState(false);
@@ -652,6 +810,215 @@ export default function FAQAutoReplyV2() {
   const [processingUndoNotRelevant, setProcessingUndoNotRelevant] = useState<Set<string>>(new Set());
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [settings, setSettings] = useState<AutoReplySettings>(DEFAULT_SETTINGS);
+  // Add state to track if initial data has loaded
+  const [initialDataLoaded, setInitialDataLoaded] = useState(false);
+  // Add state to track if we should show the new emails button
+  const [showNewEmailsButton, setShowNewEmailsButton] = useState(false);
+  // Add state to track when new emails are being loaded
+  const [loadingNewEmails, setLoadingNewEmails] = useState(false);
+  // Add state for tracking manual refresh
+  const [manualRefreshTriggered, setManualRefreshTriggered] = useState(false);
+
+  // Add a ref to track emails length to avoid unnecessary effect triggers
+  const emailsLengthRef = useRef(0);
+
+  // Update the emailsLengthRef whenever emails change
+  useEffect(() => {
+    emailsLengthRef.current = emails.length;
+  }, [emails.length]);
+
+  // Automatically check for new emails after page load
+  useEffect(() => {
+    if (user && initialDataLoaded) {
+      const timer = setTimeout(() => {
+        // Make sure emails are loaded before checking for new ones
+        if (Array.isArray(emails) && emails.length > 0) {
+          autoCheckNewEmails();
+        } else {
+          console.log('Skipping automatic email check because emails not yet loaded');
+          // Try again after another delay if needed
+          const retryTimer = setTimeout(() => {
+            autoCheckNewEmails();
+          }, 5000);
+
+          return () => clearTimeout(retryTimer);
+        }
+      }, 10000); // Increased from 5 seconds to 10 seconds after page load
+
+      return () => clearTimeout(timer);
+    }
+  }, [user, initialDataLoaded, emails.length]);
+
+  // Function to automatically check for new emails without showing toast notifications
+  const autoCheckNewEmails = async () => {
+    if (!user) return;
+
+    try {
+      // Check if emails array is valid and ready to use
+      if (!Array.isArray(emails)) {
+        console.warn('Emails not yet initialized for autoCheckNewEmails');
+        return; // Exit early - we'll try again later when emails are loaded
+      }
+
+      // Get the timestamp of the most recent email we have
+      let latestEmailTimestamp = Date.now() - 30 * 24 * 60 * 60 * 1000; // Default: 30 days ago
+
+      if (emails.length > 0) {
+        try {
+          // Safely calculate the maximum timestamp
+          const timestamps = emails
+            .filter(e => e && e.receivedAt) // Filter out any invalid emails
+            .map(e => {
+              // Handle both string and number formats
+              if (typeof e.receivedAt === 'number') return e.receivedAt;
+              if (typeof e.receivedAt === 'string') {
+                const parsed = new Date(e.receivedAt).getTime();
+                return isNaN(parsed) ? 0 : parsed;
+              }
+              return 0;
+            })
+            .filter(timestamp => timestamp > 0); // Filter out any invalid timestamps
+
+          if (timestamps.length > 0) {
+            latestEmailTimestamp = Math.max(...timestamps);
+          }
+        } catch (err) {
+          console.error('Error calculating latest email timestamp:', err);
+          // Continue with the default timestamp
+        }
+      }
+
+      // Safely extract thread IDs
+      const existingThreadIds = emails
+        .filter(e => e && e.threadId) // Filter out invalid entries
+        .map(e => e.threadId)
+        .filter(Boolean); // Filter out nulls/undefined/empty strings
+
+      const response = await fetch('/api/emails/check-new', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${user.accessToken}`
+        },
+        body: JSON.stringify({
+          lastEmailTimestamp: latestEmailTimestamp,
+          existingThreadIds
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        console.error('Failed to check for new emails:', errorData.error);
+        return;
+      }
+
+      const data = await response.json();
+
+      if (data.newEmailsCount > 0) {
+        setNewEmailsCount(data.newEmailsCount);
+        setNewThreadIds(data.newThreadIds || []);
+        setShowNewEmailsButton(true);
+      }
+    } catch (error) {
+      console.error('Error checking for new emails:', error);
+    }
+  };
+
+  // Function to load new emails when the button is clicked
+  const handleLoadNewEmails = async () => {
+    if (newEmailsCount > 0) {
+      try {
+        setLoadingNewEmails(true);
+        // Wait a short time to show the loading state
+        await new Promise(resolve => setTimeout(resolve, 300));
+
+        console.log("Loading new emails with thread IDs:", newThreadIds);
+
+        if (!user?.accessToken) {
+          console.error("No access token available");
+          toast.error("Authentication error. Please sign in again.");
+          setLoadingNewEmails(false);
+          return;
+        }
+
+        // Use the refresh-batch endpoint which accepts thread IDs
+        const response = await fetch('/api/emails/refresh-batch', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${user.accessToken}`
+          },
+          body: JSON.stringify({
+            threadIds: newThreadIds
+          })
+        });
+
+        if (!response.ok) {
+          throw new Error(`Failed to fetch new emails: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+        console.log("Fetched emails from Gmail API:", data);
+
+        if (data.refreshedEmails && data.refreshedEmails.length > 0) {
+          // Format the emails in the same structure as our existing emails
+          const newEmails = data.refreshedEmails.map((email: any) => ({
+            ...email,
+            sortTimestamp: new Date(email.receivedAt).getTime()
+          }));
+
+          // Filter out any emails we already have
+          const existingIds = new Set(emails.map(e => e.id));
+          const uniqueNewEmails = newEmails.filter((e: any) => !existingIds.has(e.id));
+
+          console.log("New unique emails found:", uniqueNewEmails.length);
+
+          if (uniqueNewEmails.length > 0) {
+            // Merge with existing emails and sort
+            const mergedEmails = [...emails, ...uniqueNewEmails].sort((a, b) =>
+              (b.sortTimestamp || 0) - (a.sortTimestamp || 0)
+            );
+
+            // Update the emails state with the merged list
+            setEmails(mergedEmails);
+
+            // Filter out any potentially undefined or invalid emails
+            const validUniqueEmails = uniqueNewEmails.filter((email: any) => email && email.id);
+
+            if (validUniqueEmails.length > 0) {
+              // Save the new emails to Firebase
+              await saveEmailsToFirebase(validUniqueEmails);
+              console.log(`Saved ${validUniqueEmails.length} valid new emails to Firebase`);
+            } else {
+              console.warn('No valid emails to save to Firebase');
+            }
+
+            // Update the cache
+            saveToCache(CACHE_KEYS.EMAILS, {
+              emails: mergedEmails,
+              timestamp: Date.now()
+            });
+
+            // Reset the new emails button state
+            setShowNewEmailsButton(false);
+            setNewEmailsCount(0);
+            setNewThreadIds([]);
+
+            toast.success(`Loaded ${uniqueNewEmails.length} new email${uniqueNewEmails.length === 1 ? '' : 's'}`);
+          } else {
+            toast.info("No new emails found");
+          }
+        } else {
+          toast.info("No new emails found");
+        }
+      } catch (error) {
+        console.error("Error loading new emails:", error);
+        toast.error(error instanceof Error ? error.message : "Failed to load new emails");
+      } finally {
+        setLoadingNewEmails(false);
+      }
+    }
+  };
 
   // Add readyToReplyCount calculation
   const readyToReplyCount = useMemo(() => emails.filter(e =>
@@ -853,22 +1220,52 @@ export default function FAQAutoReplyV2() {
 
       // Add cache check
       const cached = !skipCache ? loadFromCache(CACHE_KEYS.EMAILS) : null;
-      if (cached) {
-        // Cast the cached data to the correct type before setting
-        setEmails(cached as ExtendedEmail[]);
-        setLastFetchTimestamp(Date.now());
-        return;
+      if (cached && !skipCache) {
+        // Handle both formats: direct array or nested in emails property
+        const emailsData = Array.isArray(cached) ? cached : cached.emails;
+        if (emailsData && emailsData.length > 0) {
+          // Cast the cached data to the correct type before setting
+          setEmails(emailsData as ExtendedEmail[]);
+          setLastFetchTimestamp(Date.now());
+          return;
+        }
       }
 
-      // Actual fetch logic here...
+      console.log("Loading fresh emails...");
+
+      // Actual fetch logic here - loading from Firebase
+      const firebaseEmails = await loadEmailsFromFirebase();
+      const readyToReplyEmails = await loadReadyToReplyFromFirebase();
+
+      if (firebaseEmails && firebaseEmails.length > 0) {
+        console.log(`Loaded ${firebaseEmails.length} emails from Firebase`);
+
+        // Sort emails by timestamp (most recent first)
+        const sortedEmails = [...firebaseEmails].sort((a, b) =>
+          (b.sortTimestamp || 0) - (a.sortTimestamp || 0)
+        );
+
+        setEmails(sortedEmails);
+
+        // Save to cache - directly save the emails array without extra nesting
+        saveToCache(CACHE_KEYS.EMAILS, sortedEmails);
+
+        setLastFetchTimestamp(Date.now());
+      } else {
+        console.log("No emails found in Firebase, keeping current emails");
+      }
 
       // Update last load time
       lastLoadTime.current = Date.now();
 
+    } catch (error) {
+      console.error("Error loading emails:", error);
+      toast.error("Failed to load emails");
     } finally {
       setIsLoading(false);
+      setManualRefreshTriggered(false);
     }
-  }, [user?.accessToken, page, MIN_FETCH_INTERVAL]);
+  }, [user?.accessToken, page, MIN_FETCH_INTERVAL, setManualRefreshTriggered]);
 
   useEffect(() => {
     // Check if analysis is enabled via environment variable
@@ -888,11 +1285,17 @@ export default function FAQAutoReplyV2() {
 
       try {
         setLoading(true);
+        // Ensure the manual refresh indicator is false during initialization
+        setManualRefreshTriggered(false);
 
         // First try to load from local cache
         const cachedData = loadFromCache(CACHE_KEYS.EMAILS);
-        if (cachedData?.emails) {
-          setEmails(cachedData.emails as ExtendedEmail[]);
+        if (cachedData) {
+          // Handle both formats: direct array or nested in emails property
+          const emailsData = Array.isArray(cachedData) ? cachedData : cachedData.emails;
+          if (emailsData && emailsData.length > 0) {
+            setEmails(emailsData as ExtendedEmail[]);
+          }
         }
 
         // Then try Firebase cache and load refresh timestamp
@@ -972,11 +1375,15 @@ export default function FAQAutoReplyV2() {
         // Finally, load fresh emails
         await loadEmails(true);
 
+        // Mark initial data as loaded
+        setInitialDataLoaded(true);
+
       } catch (error) {
-        console.error('Error initializing:', error);
-        toast.error('Failed to load emails');
+        console.error('Error initializing data:', error);
       } finally {
         setLoading(false);
+        // Mark initial data as loaded even if there was an error
+        setInitialDataLoaded(true);
       }
     };
 
@@ -984,11 +1391,8 @@ export default function FAQAutoReplyV2() {
 
     return () => {
       controller.abort();
-      if (loadTimeout.current) {
-        clearTimeout(loadTimeout.current);
-      }
     };
-  }, [user?.accessToken, checkGmailAccess, loadEmails]);
+  }, [user?.accessToken]);
 
   // Update the FAQ loading effect
   useEffect(() => {
@@ -1045,7 +1449,22 @@ export default function FAQAutoReplyV2() {
     const updateEmails = async () => {
       const updatedEmails = await Promise.all(emails.map(async (email) => {
         const questions = emailQuestions.get(email.id) || [];
-        if (questions.length === 0) return email;
+
+        // If no questions have been extracted yet, don't process this email
+        if (questions.length === 0) {
+          return email;
+        }
+
+        // Check if all questions have answers in the FAQ library
+        const allQuestionsHaveAnswers = questions.every(question =>
+          question.answer && question.answer.trim() !== ''
+        );
+
+        // Skip emails that have already been processed, marked not relevant,
+        // or don't have all questions answered
+        if (!isEmailReadyForReply(email, emailQuestions, user) || !allQuestionsHaveAnswers) {
+          return email;
+        }
 
         const matchedFAQ = checkEmailAnsweredStatus(email);
 
@@ -1126,7 +1545,7 @@ export default function FAQAutoReplyV2() {
       console.error('Error updating emails:', error);
     });
 
-  }, [answeredFAQs, checkEmailAnsweredStatus, emailQuestions, calculatePatternSimilarity, similarityThreshold]);
+  }, [answeredFAQs, checkEmailAnsweredStatus, emailQuestions, calculatePatternSimilarity, similarityThreshold, user]);
 
   const handleLoadMore = () => {
     if (!isLoading && hasMore) {
@@ -1135,26 +1554,62 @@ export default function FAQAutoReplyV2() {
   };
 
   const handleAutoReply = async (email: ExtendedEmail) => {
-    try {
-      // Get matched FAQs for this email
-      const matchedFAQs = emailQuestions.get(email.id) || [];
+    // Skip generating replies for emails where the user was last to reply
+    if (isUserLastSender(email, user)) {
+      console.log('Skipping AI reply generation - user was last to reply:', email.id);
+      return;
+    }
 
-      const response = await fetch('/api/emails/auto-reply', {
+    const questions = emailQuestions.get(email.id) || [];
+
+    // Skip if there are no questions extracted yet
+    if (questions.length === 0) {
+      console.log('Skipping AI reply generation - no questions extracted:', email.id);
+      toast.warning('No questions extracted from this email yet');
+      return;
+    }
+
+    // Check if all questions have answers in the FAQ library
+    const allQuestionsHaveAnswers = questions.every(question =>
+      question.answer && question.answer.trim() !== ''
+    );
+
+    if (!allQuestionsHaveAnswers) {
+      console.log('Skipping AI reply generation - not all questions have answers:', email.id);
+      toast.warning('Cannot generate reply: not all questions have answers in the FAQ library');
+      return;
+    }
+
+    setAnalyzingEmails(prev => new Set(prev).add(email.id));
+
+    try {
+      const response = await fetch('/api/knowledge/generate-reply', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          email,
-          matchedFAQs,
-          userEmail: user?.email || 'unknown'
+          emailId: email.id,
+          subject: email.subject,
+          content: email.content,
+          matchedFAQ: email.matchedFAQ,
+          questions: questions,
+          answeredFAQs: answeredFAQs.filter(faq =>
+            questions.some((q: GenericFAQ) =>
+              calculatePatternSimilarity(q.question, faq.question) > similarityThreshold
+            )
+          )
         })
       });
 
       if (response.ok) {
-        // Remove from ready to reply cache
+        const data = await response.json();
+        const emailWithReply = {
+          ...email,
+          suggestedReply: data.reply
+        };
+
+        // Cache the ready to reply email
         const readyToReplyEmails = loadFromCache(CACHE_KEYS.READY_TO_REPLY)?.emails || [];
-        const updatedReadyToReply = readyToReplyEmails.filter(e => e.id !== email.id);
+        const updatedReadyToReply = [...readyToReplyEmails, emailWithReply];
         saveToCache(CACHE_KEYS.READY_TO_REPLY, {
           emails: updatedReadyToReply,
           timestamp: Date.now()
@@ -1168,6 +1623,13 @@ export default function FAQAutoReplyV2() {
       }
     } catch (error) {
       toast.error('Failed to send auto-reply');
+    } finally {
+      // Remove this email from loading state
+      setAnalyzingEmails(prev => {
+        const updated = new Set(prev);
+        updated.delete(email.id);
+        return updated;
+      });
     }
   };
 
@@ -1408,94 +1870,106 @@ export default function FAQAutoReplyV2() {
   };
 
   const handleMarkNotRelevant = async (email: ExtendedEmail) => {
+    // Immediately update UI for a responsive feel (optimistic update)
+    setEmails(prev =>
+      prev.map(e => e.id === email.id ? { ...e, isNotRelevant: true, status: 'not_relevant' } : e)
+    );
+
+    // Show immediate feedback to user
+    toast.success('Email marked as not relevant');
+
     try {
-      // Add email ID to processing set
-      setProcessingNotRelevant(prev => new Set(prev).add(email.id));
+      const firebaseDB = getFirebaseDB();
+      if (firebaseDB && email.id) {
+        // Save to not_relevant_emails collection
+        const notRelevantRef = doc(firebaseDB, FIREBASE_COLLECTIONS.NOT_RELEVANT, email.id);
+        await setDoc(notRelevantRef, {
+          emailId: email.id,
+          threadId: email.threadId,
+          markedAt: new Date().toISOString(),
+          markedBy: user?.email || 'unknown'
+        });
 
-      // Optimistically update UI state
-      setEmails(prev => prev.map(e =>
-        e.id === email.id
-          ? {
-            ...e,
-            isNotRelevant: true,
-            status: 'not_relevant'
-          }
-          : e
-      ));
+        // Update (or create) the email document in emails collection
+        // Using setDoc with merge:true instead of updateDoc to handle cases where the document doesn't exist
+        const emailRef = doc(firebaseDB, FIREBASE_COLLECTIONS.EMAILS, email.id);
+        await setDoc(emailRef, {
+          id: email.id,
+          threadId: email.threadId,
+          status: 'not_relevant',
+          subject: email.subject || '',
+          sender: email.sender || '',
+          receivedAt: email.receivedAt || new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        }, { merge: true });
 
-      // Remove from questions if present
-      const updatedQuestions = new Map(emailQuestions);
-      updatedQuestions.delete(email.id);
-      setEmailQuestions(updatedQuestions);
-
-      // Update cache with the new state
-      const cachedData = loadFromCache(CACHE_KEYS.ANSWERED_FAQS) || {};
-      const updatedEmails = (cachedData.emails || []).map(e =>
-        e.id === email.id
-          ? {
-            ...e,
-            isNotRelevant: true,
-            status: 'not_relevant'
-          }
-          : e
-      );
-      saveToCache(CACHE_KEYS.ANSWERED_FAQS, {
-        ...cachedData,
-        emails: updatedEmails,
-        timestamp: Date.now()
-      });
-
-      // Get Firebase instance
-      const db = getFirebaseDB();
-      if (!db) throw new Error('Firebase DB not initialized');
-
-      // Update the email in the email_cache collection instead of creating a new document
-      const emailRef = doc(db, FIREBASE_COLLECTIONS.EMAIL_CACHE, email.id);
-      await setDoc(emailRef, {
-        isNotRelevant: true,
-        status: 'not_relevant',
-        markedNotRelevantAt: new Date().toISOString()
-      }, { merge: true });
-
-      toast.success('Email marked as not relevant');
+        // Also update the email_cache entry to ensure consistency across refreshes
+        const emailCacheRef = doc(firebaseDB, FIREBASE_COLLECTIONS.EMAIL_CACHE, email.id);
+        await setDoc(emailCacheRef, {
+          status: 'not_relevant',
+          isNotRelevant: true,
+          updatedAt: new Date().toISOString()
+        }, { merge: true });
+      }
     } catch (error) {
       console.error('Error marking email as not relevant:', error);
+      // Only show error toast if the operation fails
+      toast.error('Failed to mark email as not relevant');
 
-      // Revert optimistic updates on error
-      setEmails(prev => prev.map(e =>
-        e.id === email.id
-          ? {
-            ...e,
-            isNotRelevant: false,
-            status: 'pending'
-          }
-          : e
-      ));
-
-      // Revert cache on error
-      const cachedData = loadFromCache(CACHE_KEYS.ANSWERED_FAQS) || {};
-      const revertedEmails = (cachedData.emails || []).map(e =>
-        e.id === email.id
-          ? {
-            ...e,
-            isNotRelevant: false,
-            status: 'pending'
-          }
-          : e
+      // Revert the optimistic update if the operation failed
+      setEmails(prev =>
+        prev.map(e => e.id === email.id ? { ...e, isNotRelevant: false, status: email.status === 'not_relevant' ? 'pending' : email.status } : e)
       );
-      saveToCache(CACHE_KEYS.ANSWERED_FAQS, {
-        ...cachedData,
-        emails: revertedEmails,
-        timestamp: Date.now()
-      });
+    }
+  };
 
-      toast.error('Error marking email as not relevant');
+  const handleUndoNotRelevant = async (email: ExtendedEmail) => {
+    // Immediately update UI for a responsive feel (optimistic update)
+    setEmails(prev =>
+      prev.map(e => e.id === email.id ? { ...e, isNotRelevant: false, status: 'pending' } : e)
+    );
+
+    // Show immediate feedback to user
+    toast.success('Email marked as relevant again');
+
+    // Tracking for UI loading indicator
+    setProcessingUndoNotRelevant(prev => new Set(prev).add(email.id));
+
+    try {
+      const firebaseDB = getFirebaseDB();
+      if (firebaseDB && email.id) {
+        // Remove from not_relevant_emails collection
+        const notRelevantRef = doc(firebaseDB, FIREBASE_COLLECTIONS.NOT_RELEVANT, email.id);
+        await deleteDoc(notRelevantRef);
+
+        // Update the email document in emails collection
+        const emailRef = doc(firebaseDB, FIREBASE_COLLECTIONS.EMAILS, email.id);
+        await setDoc(emailRef, {
+          status: 'pending',
+          updatedAt: new Date().toISOString()
+        }, { merge: true });
+
+        // Also update the email_cache entry to ensure consistency across refreshes
+        const emailCacheRef = doc(firebaseDB, FIREBASE_COLLECTIONS.EMAIL_CACHE, email.id);
+        await setDoc(emailCacheRef, {
+          status: 'pending',
+          isNotRelevant: false,
+          updatedAt: new Date().toISOString()
+        }, { merge: true });
+      }
+    } catch (error) {
+      console.error('Error marking email as relevant:', error);
+      toast.error('Failed to mark email as relevant');
+
+      // Revert the optimistic update if the operation failed
+      setEmails(prev =>
+        prev.map(e => e.id === email.id ? { ...e, isNotRelevant: true, status: 'not_relevant' } : e)
+      );
     } finally {
-      // Remove email ID from processing set
-      setProcessingNotRelevant(prev => {
-        const next = new Set(prev);
-        next.delete(email.id);
-        return next;
+      setProcessingUndoNotRelevant(prev => {
+        const updated = new Set(prev);
+        updated.delete(email.id);
+        return updated;
       });
     }
   };
@@ -1506,9 +1980,34 @@ export default function FAQAutoReplyV2() {
       const db = getFirebaseDB();
       if (!db) return false;
 
-      const notRelevantRef = doc(db, 'not_relevant_emails', emailId);
+      // Check multiple sources to be resilient
+      // 1. First check the not_relevant_emails collection
+      const notRelevantRef = doc(db, FIREBASE_COLLECTIONS.NOT_RELEVANT, emailId);
       const docSnap = await getDoc(notRelevantRef);
-      return docSnap.exists();
+
+      if (docSnap.exists()) {
+        return true;
+      }
+
+      // 2. If not found there, check the email status in the emails collection
+      const emailRef = doc(db, FIREBASE_COLLECTIONS.EMAILS, emailId);
+      const emailSnap = await getDoc(emailRef);
+
+      if (emailSnap.exists() && emailSnap.data()?.status === 'not_relevant') {
+        return true;
+      }
+
+      // 3. Finally check the email_cache collection
+      const emailCacheRef = doc(db, FIREBASE_COLLECTIONS.EMAIL_CACHE, emailId);
+      const cacheSnap = await getDoc(emailCacheRef);
+
+      if (cacheSnap.exists() &&
+        (cacheSnap.data()?.status === 'not_relevant' ||
+          cacheSnap.data()?.isNotRelevant === true)) {
+        return true;
+      }
+
+      return false;
     } catch (error) {
       console.error('Error checking not relevant status:', error);
       return false;
@@ -1615,17 +2114,55 @@ export default function FAQAutoReplyV2() {
         console.error('Error saving questions to Firebase:', error);
       });
 
-      // Update the email object with the questions
+      // Check if all questions have answers - this is needed for "Ready to Reply"
+      const allQuestionsHaveAnswers = allQuestions.length > 0 &&
+        allQuestions.every(question => question.answer && question.answer.trim() !== '');
+
+      // Find the best match for this email if all questions have answers
+      let matchedFAQ = null;
+      if (allQuestionsHaveAnswers) {
+        // Find the best matched FAQ to use as the primary match
+        const bestMatch = allQuestions.reduce((best, current) => {
+          if (!current.answer || !current.confidence) return best;
+          if (!best || (best.confidence || 0) < current.confidence) return current;
+          return best;
+        }, null as GenericFAQ | null);
+
+        if (bestMatch && bestMatch.answer) {
+          matchedFAQ = {
+            question: bestMatch.question,
+            answer: bestMatch.answer,
+            confidence: bestMatch.confidence
+          };
+        }
+      }
+
+      // Update the email object with the questions and status
+      const updatedEmail: ExtendedEmail = {
+        ...email,
+        questions: allQuestions,
+        status: allQuestionsHaveAnswers && matchedFAQ ? 'processed' : 'pending',
+        matchedFAQ: matchedFAQ || undefined
+      };
+
+      // Update emails state
       setEmails(prev => prev.map(e =>
-        e.id === email.id
-          ? { ...e, questions: allQuestions }
-          : e
+        e.id === email.id ? updatedEmail : e
       ));
 
       // Save to cache in the background
       const updatedQuestions = new Map(emailQuestions);
       updatedQuestions.set(email.id, allQuestions);
       saveToCache(CACHE_KEYS.QUESTIONS, Object.fromEntries(updatedQuestions));
+
+      // If all questions have answers and there's a matched FAQ, generate a reply
+      if (allQuestionsHaveAnswers && matchedFAQ) {
+        console.log('All questions have answers, generating reply...');
+        // Save updated email status to Firebase
+        saveEmailsToFirebase([updatedEmail]);
+        // Generate a reply so the email appears in Ready to Reply
+        generateContextualReply(updatedEmail);
+      }
 
       // Only show success toasts for single email operations
       const isBatchOperation = analyzingEmails.size > 1;
@@ -1947,11 +2484,21 @@ ${signature}`;
   const renderEmailContent = (email: ExtendedEmail) => {
     const isLoading = loadingContent.has(email.id);
 
+    // Add validation for the date
+    const isValidDate = (dateValue: any) => {
+      if (!dateValue) return false;
+      const date = new Date(dateValue);
+      return !isNaN(date.getTime());
+    };
+
+    // Use fallback date if receivedAt is invalid
+    const receivedAt = isValidDate(email.receivedAt) ? email.receivedAt : new Date().toISOString();
+
     return (
       <div className="bg-white rounded-lg border border-gray-200 p-4 mb-4 hover:shadow-sm transition-shadow">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2 text-sm text-gray-500">
-            {new Date(email.receivedAt).toLocaleString()}
+            {new Date(receivedAt).toLocaleString()}
             <button
               onClick={() => refreshSingleEmail(email)}
               className="text-gray-400 hover:text-gray-600 transition-colors p-1 hover:bg-gray-50 rounded-full"
@@ -1973,11 +2520,34 @@ ${signature}`;
   };
 
   const renderTabs = () => {
-    const readyToReplyCount = emails.filter(e =>
-      e.status === 'processed' &&
-      e.matchedFAQ &&
-      !e.isReplied &&
-      e.suggestedReply
+    const readyToReplyCount = emails.filter(e => {
+      // Get the questions for this email
+      const questions = emailQuestions.get(e.id) || [];
+
+      // Check if all questions have been answered
+      const allQuestionsHaveAnswers = questions.length > 0 && questions.every(question =>
+        question.answer && question.answer.trim() !== ''
+      );
+
+      return e.status === 'processed' &&
+        e.matchedFAQ &&
+        !e.isReplied &&
+        e.suggestedReply &&
+        !isUserLastSender(e, user) && // Don't include emails where the user was last to reply
+        allQuestionsHaveAnswers; // Only include if all questions have answers
+    }).length;
+
+    const answeredCount = emails.filter(e =>
+      isUserLastSender(e, user) // Emails where the user was the last to reply
+    ).length;
+
+    // Calculate unanswered count using the same filter criteria as renderUnansweredEmails
+    const unansweredCount = emails.filter(email =>
+      !email.isReplied &&
+      email.status !== 'not_relevant' &&
+      (!email.matchedFAQ || !(email.id && ((emailQuestions.get(email.id)?.length ?? 0) > 0))) &&
+      email.status !== 'processed' &&
+      !isUserLastSender(email, user) // Exclude emails where the user is the last sender
     ).length;
 
     const tabData = [
@@ -1986,7 +2556,7 @@ ${signature}`;
         label: 'Unanswered',
         mobileLabel: 'New',
         icon: MessageCircleIcon,
-        count: emails.filter(e => !e.isReplied && !e.isNotRelevant && !e.matchedFAQ).length,
+        count: unansweredCount,
         description: 'Match FAQs to incoming customer emails'
       },
       {
@@ -2012,6 +2582,14 @@ ${signature}`;
         icon: XCircleIcon,
         count: emails.filter(e => e.isNotRelevant).length,
         description: 'View emails marked as not requiring FAQ matching'
+      },
+      {
+        id: 'answered',
+        label: 'Answered',
+        mobileLabel: 'Ans',
+        icon: MailCheckIcon,
+        count: answeredCount,
+        description: 'Emails where you were the last to reply'
       }
     ];
 
@@ -2087,15 +2665,36 @@ ${signature}`;
   const shouldShowDate = (currentEmail: ExtendedEmail, index: number, emails: ExtendedEmail[]) => {
     if (index === 0) return true;
 
-    const currentDate = new Date(currentEmail.receivedAt);
+    // Helper function to check if a date is valid
+    const isValidDate = (dateValue: any) => {
+      if (!dateValue) return false;
+      const date = new Date(dateValue);
+      return !isNaN(date.getTime());
+    };
+
+    // Use fallback dates if receivedAt is invalid
+    const currentReceivedAt = isValidDate(currentEmail.receivedAt) ? currentEmail.receivedAt : new Date().toISOString();
+    const currentDate = new Date(currentReceivedAt);
+
     const prevEmail = emails[index - 1];
-    const prevDate = new Date(prevEmail.receivedAt);
+    const prevReceivedAt = isValidDate(prevEmail.receivedAt) ? prevEmail.receivedAt : new Date().toISOString();
+    const prevDate = new Date(prevReceivedAt);
 
     return currentDate.toDateString() !== prevDate.toDateString();
   };
 
   const renderEmailTimeline = (email: ExtendedEmail, index: number, allEmails: ExtendedEmail[]) => {
-    const date = new Date(email.receivedAt);
+    // Add validation for receivedAt to handle invalid dates
+    const isValidDate = (dateValue: any) => {
+      if (!dateValue) return false;
+      const date = new Date(dateValue);
+      return !isNaN(date.getTime());
+    };
+
+    // Use fallback date if receivedAt is invalid
+    const receivedAt = isValidDate(email.receivedAt) ? email.receivedAt : new Date().toISOString();
+    const date = new Date(receivedAt);
+
     const formattedTime = date.toLocaleTimeString('en-US', {
       hour: 'numeric',
       minute: '2-digit',
@@ -2125,7 +2724,8 @@ ${signature}`;
       !email.isReplied &&
       email.status !== 'not_relevant' &&
       (!email.matchedFAQ || !(email.id && ((emailQuestions.get(email.id)?.length ?? 0) > 0))) &&
-      email.status !== 'processed'
+      email.status !== 'processed' &&
+      !isUserLastSender(email, user) // Exclude emails where the user is the last sender
     );
 
     if (filteredEmails.length === 0) {
@@ -2144,6 +2744,23 @@ ${signature}`;
 
     return (
       <div className="space-y-8 relative pl-[4.5rem]">
+        {showNewEmailsButton && newEmailsCount > 0 && !loadingNewEmails && (
+          <button
+            onClick={handleLoadNewEmails}
+            className="w-full h-[60px] bg-blue-50 hover:bg-blue-100 text-blue-700 font-medium rounded-lg flex items-center justify-center transition-colors duration-200 mb-4 shadow-sm"
+          >
+            <MailIcon className="h-5 w-5 mr-2" />
+            Load {newEmailsCount} new email{newEmailsCount === 1 ? '' : 's'}
+          </button>
+        )}
+        {loadingNewEmails && (
+          <div className="w-full h-[60px] bg-gray-50 rounded-lg mb-4 animate-pulse flex items-center justify-center">
+            <div className="flex items-center space-x-2">
+              <div className="h-5 w-5 bg-gray-200 rounded-full animate-pulse"></div>
+              <div className="h-4 w-48 bg-gray-200 rounded"></div>
+            </div>
+          </div>
+        )}
         {filteredEmails.map((email, index) => {
           const questions = emailQuestions.get(email.id) || [];
           const hasQuestions = questions.length > 0;
@@ -2308,12 +2925,22 @@ ${signature}`;
   };
 
   const renderSuggestedReplies = () => {
-    const readyEmails = emails.filter(email =>
-      email.status === 'processed' &&
-      email.matchedFAQ &&
-      !email.isReplied &&
-      email.suggestedReply
-    );
+    const readyEmails = emails.filter(email => {
+      // Get the questions for this email
+      const questions = emailQuestions.get(email.id) || [];
+
+      // Check if all questions have been answered
+      const allQuestionsHaveAnswers = questions.length > 0 && questions.every(question =>
+        question.answer && question.answer.trim() !== ''
+      );
+
+      return email.status === 'processed' &&
+        email.matchedFAQ &&
+        !email.isReplied &&
+        email.suggestedReply &&
+        !isUserLastSender(email, user) && // Don't include emails where the user was last to reply
+        allQuestionsHaveAnswers; // Only include if all questions have answers
+    });
 
     if (readyEmails.length === 0) {
       return (
@@ -2515,7 +3142,7 @@ ${signature}`;
   };
 
   const renderNotRelevantEmails = () => {
-    const notRelevantEmails = emails.filter(email => email.status === 'not_relevant');
+    const notRelevantEmails = emails.filter(email => email.isNotRelevant);
 
     if (notRelevantEmails.length === 0) {
       return (
@@ -2595,6 +3222,51 @@ ${signature}`;
     return <div>All Emails</div>;
   };
 
+  const renderAnsweredEmails = () => {
+    const answeredEmails = emails.filter(email => isUserLastSender(email, user));
+
+    if (answeredEmails.length === 0) {
+      return (
+        <div className="text-center py-12">
+          <div className="mx-auto h-12 w-12 text-gray-400 mb-4">
+            <MailCheckIcon className="h-12 w-12" />
+          </div>
+          <h3 className="text-lg font-medium text-gray-900">No answered emails</h3>
+          <p className="mt-2 text-sm text-gray-500">
+            Emails where you were the last to reply will appear here
+          </p>
+        </div>
+      );
+    }
+
+    return (
+      <div className="space-y-8 relative pl-[4.5rem]">
+        {answeredEmails.map((email, index) => (
+          <div
+            key={email.id}
+            className="bg-white rounded-lg shadow-sm pt-4 pb-6 px-6 space-y-4 relative"
+            style={{ marginBottom: '2rem' }}
+          >
+            {renderEmailTimeline(email, index, answeredEmails)}
+            <div className="flex justify-between items-start">
+              <div className="space-y-1">
+                <h3 className="text-lg font-medium text-gray-900">
+                  {email.subject}
+                </h3>
+                <div className="text-sm text-gray-500">
+                  From: {email.sender}
+                </div>
+              </div>
+            </div>
+
+            {/* Email Content with Thread Support */}
+            {renderEmailContent(email)}
+          </div>
+        ))}
+      </div>
+    );
+  };
+
   const renderMainContent = () => {
     switch (activeTab) {
       case 'unanswered':
@@ -2607,6 +3279,8 @@ ${signature}`;
         return renderNotRelevantEmails();
       case 'all':
         return renderAllEmails();
+      case 'answered':
+        return renderAnsweredEmails();
       default:
         return null;
     }
@@ -2998,254 +3672,244 @@ ${signature}`;
 
   // Add function to process email batch
   const processEmailBatch = async (emails: ExtendedEmail[]) => {
+    const emailsToProcess = emails.filter(email =>
+      !email.isReplied &&
+      !email.isNotRelevant &&
+      !analyzingEmails.has(email.id)
+    );
+
+    if (emailsToProcess.length === 0) {
+      console.log('No emails to process.');
+      return;
+    }
+
+    setAnalyzing(true);
+    console.log(`Processing batch of ${emailsToProcess.length} emails`);
+
+    // Initialize counters for email processing stats
+    let totalMatchedFAQs = 0;
+    let totalNewQuestions = 0;
+    let processedEmails = 0;
+
     try {
-      let totalMatchedFAQs = 0;
-      let totalNewQuestions = 0;
-      let processedEmails = 0;
+      const resultEmails = await Promise.all(
+        emailsToProcess.map(async (email) => {
+          // First, check if user was the last to reply - if so, mark as "answered" but don't process
+          if (isUserLastSender(email, user)) {
+            return {
+              ...email,
+              isReplied: false, // Not technically replied to by customer
+              isAnswered: true  // But answered by us
+            };
+          }
 
-      // Process each email in the batch
-      await Promise.all(emails.map(async (email) => {
-        // Check if email is already processed
-        const isProcessed = email.status === 'processed' || email.isNotRelevant;
-        if (isProcessed) return;
+          setAnalyzingEmails(prev => new Set(prev).add(email.id));
 
-        // Check if email is marked as not relevant
-        const notRelevant = await isEmailMarkedNotRelevant(email.id);
-        if (notRelevant) {
-          setEmails(prev => prev.map(e =>
-            e.id === email.id ? { ...e, isNotRelevant: true } : e
-          ));
-          return;
-        }
+          // Check if email is marked as not relevant
+          const notRelevant = await isEmailMarkedNotRelevant(email.id);
+          if (notRelevant) {
+            setEmails(prev => prev.map(e =>
+              e.id === email.id ? { ...e, isNotRelevant: true } : e
+            ));
+            return { ...email, isNotRelevant: true };
+          }
 
-        // Try to extract questions if none exist
-        const existingQuestions = emailQuestions.get(email.id);
-        if (!existingQuestions || existingQuestions.length === 0) {
-          await handleCreateFAQ(email);
-          // Get the updated questions after processing
-          const updatedQuestions = emailQuestions.get(email.id) || [];
-          const matched = updatedQuestions.filter(q => 'faqId' in q && q.faqId !== undefined).length;
-          const newOnes = updatedQuestions.filter(q => !('faqId' in q) || q.faqId === undefined).length;
-          totalMatchedFAQs += matched;
-          totalNewQuestions += newOnes;
-          processedEmails++;
-        }
-      }));
+          // Try to extract questions if none exist
+          const existingQuestions = emailQuestions.get(email.id);
+          if (!existingQuestions || existingQuestions.length === 0) {
+            await handleCreateFAQ(email);
+            // Get the updated questions after processing
+            const updatedQuestions = emailQuestions.get(email.id) || [];
+            const matched = updatedQuestions.filter(q => 'faqId' in q && q.faqId !== undefined).length;
+            const newOnes = updatedQuestions.filter(q => !('faqId' in q) || q.faqId === undefined).length;
+            totalMatchedFAQs += matched;
+            totalNewQuestions += newOnes;
+            processedEmails++;
 
-      // Show summary toast for batch operations if any emails were processed
-      if (processedEmails > 0) {
-        const summaryParts = [];
-        if (totalMatchedFAQs > 0) {
-          summaryParts.push(`${totalMatchedFAQs} matching FAQ${totalMatchedFAQs !== 1 ? 's' : ''}`);
-        }
-        if (totalNewQuestions > 0) {
-          summaryParts.push(`${totalNewQuestions} new question${totalNewQuestions !== 1 ? 's' : ''}`);
-        }
-        if (summaryParts.length > 0) {
-          toast.success(`Found ${summaryParts.join(' and ')} in ${processedEmails} email${processedEmails !== 1 ? 's' : ''}`);
-        }
+            // After extracting questions, check if they all have answers
+            // If not all questions have answers, don't proceed with generating a reply yet
+            const questions = emailQuestions.get(email.id) || [];
+            const allQuestionsHaveAnswers = questions.length > 0 && questions.every(question =>
+              question.answer && question.answer.trim() !== ''
+            );
+
+            if (!allQuestionsHaveAnswers) {
+              console.log(`Email ${email.id} has questions without answers. Skipping reply generation.`);
+              return email;
+            }
+          }
+
+          // Check if email is ready for reply using our updated function that checks for answered questions
+          const readyToReply = isEmailReadyForReply(email, emailQuestions, user);
+
+          if (readyToReply) {
+            try {
+              const response = await fetch('/api/knowledge/generate-reply', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  emailId: email.id,
+                  subject: email.subject,
+                  content: email.content,
+                  matchedFAQ: email.matchedFAQ,
+                  questions: existingQuestions || [],
+                  answeredFAQs: answeredFAQs.filter(faq =>
+                    existingQuestions?.some(q =>
+                      calculatePatternSimilarity(q.question, faq.question) > similarityThreshold
+                    ) ||
+                    answeredFAQs.some(faq =>
+                      calculatePatternSimilarity(faq.question, email.matchedFAQ?.question || '') > similarityThreshold
+                    )
+                  )
+                })
+              });
+
+              if (response.ok) {
+                const data = await response.json();
+                const emailWithReply = {
+                  ...email,
+                  suggestedReply: data.reply
+                };
+
+                // Cache the ready to reply email
+                const readyToReplyEmails = loadFromCache(CACHE_KEYS.READY_TO_REPLY)?.emails || [];
+                const updatedReadyToReply = [...readyToReplyEmails, emailWithReply];
+                saveToCache(CACHE_KEYS.READY_TO_REPLY, {
+                  emails: updatedReadyToReply,
+                  timestamp: Date.now()
+                });
+                saveReadyToReplyToFirebase(updatedReadyToReply);
+
+                return emailWithReply;
+              }
+            } catch (error) {
+              console.error('Error generating reply:', error);
+            }
+          }
+
+          // Remove this email from loading state
+          setAnalyzingEmails(prev => {
+            const updated = new Set(prev);
+            updated.delete(email.id);
+            return updated;
+          });
+
+          return email;
+        })
+      );
+
+      // Update the emails state with the processed results
+      if (resultEmails.length > 0) {
+        setEmails(prev => {
+          const updated = [...prev];
+          resultEmails.forEach(result => {
+            const index = updated.findIndex(e => e.id === result.id);
+            if (index !== -1) {
+              updated[index] = result;
+            }
+          });
+          return updated;
+        });
       }
     } catch (error) {
       console.error('Error processing email batch:', error);
       toast.error('Error processing some emails');
+    } finally {
+      setAnalyzing(false);
     }
   };
 
-  // Add the handleRefresh function
-  const handleRefresh = async () => {
+  // Add the renderHeader function
+  const renderHeader = () => {
+    return (
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-4">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">FAQ Auto Reply</h1>
+          <p className="text-gray-500 mt-1">
+            Automatically match and reply to customer support emails
+          </p>
+        </div>
+        <div className="mt-4 md:mt-0 flex items-center space-x-3">
+          <button
+            onClick={() => {
+              refreshAllEmailsFromGmail();
+            }}
+            disabled={isLoading}
+            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:bg-blue-300"
+          >
+            <RefreshCw className={`h-4 w-4 mr-2 ${isLoading && manualRefreshTriggered ? 'animate-spin' : ''}`} />
+            Refresh
+          </button>
+          <button
+            onClick={() => setShowSettingsModal(true)}
+            className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+          >
+            <Cog6ToothIcon className="h-4 w-4 mr-2" />
+            Settings
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  // Add the handleSaveSettings function before the return statement
+  const handleSaveSettings = (newSettings: AutoReplySettings) => {
+    setSettings(newSettings);
+    // Save settings to localStorage
+    localStorage.setItem('faq_autoreply_settings', JSON.stringify(newSettings));
+    toast.success('Settings saved successfully');
+    setShowSettingsModal(false);
+  };
+
+  // Add checkNewEmails function after the loadEmails function
+  const checkNewEmails = async () => {
+    if (!user) {
+      toast.error('You need to be logged in to check for new emails');
+      return;
+    }
+
     try {
       setIsLoading(true);
-      setLoadError(null);
+      toast.info('Checking for new emails...');
 
-      // Get the access token from the user object
-      if (!user?.accessToken) {
-        throw new Error('No access token available');
+      // Check if emails array is valid and ready to use
+      if (!Array.isArray(emails)) {
+        throw new Error('Emails not properly initialized. Please try again in a few moments.');
       }
 
-      // Get all unique thread IDs from existing emails
-      const threadIds = Array.from(new Set(emails
-        .filter(email => email.threadId) // Only include emails with threadId
-        .map(email => email.threadId as string)
-      ));
+      // Get the timestamp of the most recent email we have
+      let latestEmailTimestamp = Date.now() - 30 * 24 * 60 * 60 * 1000; // Default: 30 days ago
 
-      const makeRequest = async (token: string) => {
-        return fetch('/api/emails/refresh-batch', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-          },
-          body: JSON.stringify({
-            lastFetchTimestamp,
-            nextPageToken,
-            threadIds // Add the thread IDs to the request
-          }),
-        });
-      };
+      if (emails.length > 0) {
+        try {
+          // Safely calculate the maximum timestamp
+          const timestamps = emails
+            .filter(e => e && e.receivedAt) // Filter out any invalid emails
+            .map(e => {
+              // Handle both string and number formats
+              if (typeof e.receivedAt === 'number') return e.receivedAt;
+              if (typeof e.receivedAt === 'string') {
+                const parsed = new Date(e.receivedAt).getTime();
+                return isNaN(parsed) ? 0 : parsed;
+              }
+              return 0;
+            })
+            .filter(timestamp => timestamp > 0); // Filter out any invalid timestamps
 
-      let response = await makeRequest(user.accessToken);
-
-      // Handle token expiration
-      if (response.status === 401) {
-        console.log('Access token expired, attempting to refresh...');
-        const newToken = await refreshAccessToken();
-
-        if (newToken) {
-          console.log('Token refreshed, retrying request');
-          response = await makeRequest(newToken);
-        } else {
-          throw new Error('Failed to refresh authentication token');
+          if (timestamps.length > 0) {
+            latestEmailTimestamp = Math.max(...timestamps);
+          }
+        } catch (err) {
+          console.error('Error calculating latest email timestamp:', err);
+          // Continue with the default timestamp
         }
       }
 
-      if (!response.ok) {
-        throw new Error(`Failed to refresh emails: ${response.status} ${response.statusText}`);
-      }
-
-      const data = await response.json();
-      const refreshedEmails = data.refreshedEmails || [];
-
-      if (refreshedEmails.length > 0) {
-        // Update state with new emails
-        setEmails((prevEmails) => {
-          const newEmails = [...prevEmails];
-          refreshedEmails.forEach((email: ExtendedEmail) => {
-            const index = newEmails.findIndex((e) => e.id === email.id);
-            if (index === -1) {
-              newEmails.push(email);
-            } else {
-              newEmails[index] = email;
-            }
-          });
-          return newEmails;
-        });
-
-        // Process the new emails
-        await processEmailBatch(refreshedEmails);
-      }
-
-      setNextPageToken(data.nextPageToken || null);
-      setTotalEmails(data.totalEmails || 0);
-      setLastFetchTimestamp(Date.now());
-      setHasRefreshedOnce(true);
-    } catch (error) {
-      console.error('Error refreshing emails:', error);
-      setLoadError(error instanceof Error ? error.message : 'Unknown error refreshing emails');
-      toast.error('Failed to refresh emails. Please try again.');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  // Add this function near the other handlers
-  const handleUndoNotRelevant = async (email: ExtendedEmail) => {
-    try {
-      // Add email ID to processing set
-      setProcessingUndoNotRelevant(prev => new Set(prev).add(email.id));
-
-      // Optimistically update UI state
-      setEmails(prev => prev.map(e =>
-        e.id === email.id
-          ? {
-            ...e,
-            isNotRelevant: false,
-            status: 'pending',
-            irrelevanceReason: undefined,
-            irrelevanceCategory: undefined,
-            irrelevanceConfidence: undefined,
-            irrelevanceDetails: undefined
-          }
-          : e
-      ));
-
-      // Update cache with the new state
-      const cachedData = loadFromCache(CACHE_KEYS.ANSWERED_FAQS) || {};
-      const updatedEmails = (cachedData.emails || []).map(e =>
-        e.id === email.id
-          ? {
-            ...e,
-            isNotRelevant: false,
-            status: 'pending',
-            irrelevanceReason: undefined,
-            irrelevanceCategory: undefined,
-            irrelevanceConfidence: undefined,
-            irrelevanceDetails: undefined
-          }
-          : e
-      );
-      saveToCache(CACHE_KEYS.ANSWERED_FAQS, {
-        ...cachedData,
-        emails: updatedEmails,
-        timestamp: Date.now()
-      });
-
-      // Update Firebase
-      const db = getFirebaseDB();
-      if (!db) throw new Error('Firebase DB not initialized');
-
-      // Update the email in email_cache collection
-      const emailRef = doc(db, FIREBASE_COLLECTIONS.EMAIL_CACHE, email.id);
-      await setDoc(emailRef, {
-        isNotRelevant: false,
-        status: 'pending',
-        irrelevanceReason: null,
-        irrelevanceCategory: null,
-        irrelevanceConfidence: null,
-        irrelevanceDetails: null,
-        markedNotRelevantAt: null
-      }, { merge: true });
-
-      toast.success('Email restored to processing queue');
-    } catch (error) {
-      console.error('Error undoing not relevant status:', error);
-
-      // Revert optimistic updates on error
-      setEmails(prev => prev.map(e =>
-        e.id === email.id
-          ? {
-            ...e,
-            isNotRelevant: true,
-            status: 'not_relevant'
-          }
-          : e
-      ));
-
-      // Revert cache on error
-      const cachedData = loadFromCache(CACHE_KEYS.ANSWERED_FAQS) || {};
-      const revertedEmails = (cachedData.emails || []).map(e =>
-        e.id === email.id
-          ? {
-            ...e,
-            isNotRelevant: true,
-            status: 'not_relevant'
-          }
-          : e
-      );
-      saveToCache(CACHE_KEYS.ANSWERED_FAQS, {
-        ...cachedData,
-        emails: revertedEmails,
-        timestamp: Date.now()
-      });
-
-      toast.error('Failed to restore email');
-    } finally {
-      // Remove email ID from processing set
-      setProcessingUndoNotRelevant(prev => {
-        const next = new Set(prev);
-        next.delete(email.id);
-        return next;
-      });
-    }
-  };
-
-  // Add function to check for new emails
-  const checkForNewEmails = async () => {
-    try {
-      if (!user?.accessToken) return;
-
-      // Get the most recent email's timestamp
-      const mostRecentEmail = emails[0]; // Assuming emails are sorted by date
-      const lastEmailTimestamp = mostRecentEmail ? new Date(mostRecentEmail.receivedAt).getTime() : 0;
+      // Safely extract thread IDs
+      const existingThreadIds = emails
+        .filter(e => e && e.threadId) // Filter out invalid entries
+        .map(e => e.threadId)
+        .filter(Boolean); // Filter out nulls/undefined/empty strings
 
       const response = await fetch('/api/emails/check-new', {
         method: 'POST',
@@ -3254,306 +3918,369 @@ ${signature}`;
           'Authorization': `Bearer ${user.accessToken}`
         },
         body: JSON.stringify({
-          lastEmailTimestamp,
-          existingThreadIds: emails.map(e => e.threadId).filter(Boolean)
-        }),
+          lastEmailTimestamp: latestEmailTimestamp,
+          existingThreadIds
+        })
       });
 
       if (!response.ok) {
-        // Check if this is an auth error (401)
-        if (response.status === 401) {
-          // Try to parse the response to check for TOKEN_EXPIRED error
-          try {
-            const errorData = await response.json();
-            if (errorData.error === 'TOKEN_EXPIRED') {
-              console.log('Access token expired, attempting to refresh...');
-              const newToken = await refreshAccessToken();
-
-              // If we got a new token, retry the request
-              if (newToken) {
-                console.log('Token refreshed, retrying request');
-                const retryResponse = await fetch('/api/emails/check-new', {
-                  method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${newToken}`
-                  },
-                  body: JSON.stringify({
-                    lastEmailTimestamp,
-                    existingThreadIds: emails.map(e => e.threadId).filter(Boolean)
-                  }),
-                });
-
-                if (retryResponse.ok) {
-                  const data = await retryResponse.json();
-                  setNewEmailsCount(data.newEmailsCount || 0);
-                  if (data.newThreadIds) {
-                    setNewThreadIds(data.newThreadIds);
-                  }
-                  return;
-                }
-              } else {
-                console.error('Failed to refresh token');
-                toast.error('Your session has expired. Please refresh the page and sign in again.');
-                return;
-              }
-            }
-          } catch (parseError) {
-            console.error('Error parsing response:', parseError);
-          }
-        }
-
-        console.error('Error checking for new emails:', await response.text());
-        return;
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to check for new emails');
       }
 
       const data = await response.json();
-      setNewEmailsCount(data.newEmailsCount || 0);
-      // Store the new thread IDs when we find them
-      if (data.newThreadIds) {
-        setNewThreadIds(data.newThreadIds);
+
+      if (data.newEmailsCount > 0) {
+        toast.success(`${data.newEmailsCount} new email${data.newEmailsCount === 1 ? '' : 's'} found! Click 'Refresh Emails' to load them.`);
+        setNewEmailsCount(data.newEmailsCount);
+        setNewThreadIds(data.newThreadIds || []);
+        setShowNewEmailsButton(true);
+      } else {
+        toast.info('No new emails found.');
       }
     } catch (error) {
       console.error('Error checking for new emails:', error);
-    }
-  };
-
-  // Add effect to check for new emails periodically
-  useEffect(() => {
-    if (!user?.accessToken) return;
-
-    // Check immediately on mount
-    checkForNewEmails();
-
-    // Then check every minute
-    const interval = setInterval(checkForNewEmails, 60000);
-
-    return () => clearInterval(interval);
-  }, [user?.accessToken, emails]);
-
-  // Update the header section to use the new function
-  const renderHeader = () => (
-    <div className="flex items-center justify-between px-4 py-4 sm:px-6 lg:px-8 border-b border-gray-200">
-      <div className="flex-1 min-w-0">
-        <h2 className="text-2xl font-bold leading-7 text-gray-900 sm:text-3xl sm:truncate">
-          FAQ Auto-Reply
-        </h2>
-      </div>
-      <div className="flex items-center space-x-4">
-        <button
-          onClick={() => setShowSettingsModal(true)}
-          className="p-2 text-gray-400 hover:text-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
-        >
-          <Cog6ToothIcon className="h-6 w-6" aria-hidden="true" />
-        </button>
-        {newEmailsCount > 0 && (
-          <button
-            onClick={handleNewEmailsRefresh}
-            className="inline-flex items-center px-3 py-1.5 text-white bg-blue-600 hover:bg-blue-700 rounded-md text-sm font-medium transition-colors"
-            disabled={isLoading}
-          >
-            {isLoading ? (
-              <>
-                <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                </svg>
-                Loading...
-              </>
-            ) : (
-              <>
-                <InboxIcon className="h-4 w-4 mr-1.5" />
-                {newEmailsCount} new email{newEmailsCount !== 1 ? 's' : ''} available
-              </>
-            )}
-          </button>
-        )}
-        {lastFetchTimestamp > 0 && (
-          <div className="text-[11px] text-gray-400 hidden sm:block">
-            Last updated: {new Date(lastFetchTimestamp).toLocaleTimeString()}
-          </div>
-        )}
-        <button
-          onClick={handleRefresh}
-          disabled={isLoading}
-          className="inline-flex items-center px-2 py-1 border border-gray-300 shadow-sm text-[11px] font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
-        >
-          {isLoading ? (
-            <>
-              <svg className="animate-spin h-3 w-3 mr-1" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-              </svg>
-              <span className="hidden sm:inline">Refresh</span>
-              <span className="sm:hidden">↻</span>
-            </>
-          ) : (
-            <>
-              <ClockIcon className="h-3 w-3 mr-1" />
-              <span className="hidden sm:inline">Refresh</span>
-              <span className="sm:hidden">↻</span>
-            </>
-          )}
-        </button>
-      </div>
-    </div>
-  );
-
-  // Add function to handle refreshing only new emails
-  const handleNewEmailsRefresh = async () => {
-    try {
-      setIsLoading(true);
-      setLoadError(null);
-
-      if (!user?.accessToken || !newThreadIds.length) {
-        return;
-      }
-
-      const makeRequest = async (token: string) => {
-        return fetch('/api/emails/refresh-batch', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-          },
-          body: JSON.stringify({
-            threadIds: newThreadIds // Only send the new thread IDs
-          }),
-        });
-      };
-
-      let response = await makeRequest(user.accessToken);
-
-      // Handle token expiration
-      if (response.status === 401) {
-        console.log('Access token expired, attempting to refresh...');
-        const newToken = await refreshAccessToken();
-
-        if (newToken) {
-          console.log('Token refreshed, retrying request');
-          response = await makeRequest(newToken);
-        } else {
-          throw new Error('Failed to refresh authentication token');
-        }
-      }
-
-      if (!response.ok) {
-        throw new Error(`Failed to refresh new emails: ${response.status} ${response.statusText}`);
-      }
-
-      const data = await response.json();
-      const refreshedEmails = data.refreshedEmails || [];
-
-      if (refreshedEmails.length > 0) {
-        // Update state with new emails
-        setEmails((prevEmails) => {
-          const allEmails = [...prevEmails];
-
-          refreshedEmails.forEach((email: ExtendedEmail) => {
-            // Store the email content in Firebase
-            const firebaseDB = getFirebaseDB();
-            if (firebaseDB) {
-              const emailContentRef = doc(firebaseDB, 'email_content', email.id);
-              setDoc(emailContentRef, {
-                content: email.content,
-                timestamp: Date.now()
-              });
-            }
-
-            const index = allEmails.findIndex((e) => e.id === email.id);
-            const enrichedEmail = {
-              ...email,
-              content: email.content || '', // Ensure content is included
-              sortTimestamp: new Date(email.receivedAt).getTime()
-            };
-
-            if (index === -1) {
-              allEmails.push(enrichedEmail);
-            } else {
-              allEmails[index] = {
-                ...allEmails[index],
-                ...enrichedEmail
-              };
-            }
-          });
-
-          // Sort emails by timestamp, newest first
-          return allEmails.sort((a, b) => {
-            const aTime = a.sortTimestamp || new Date(a.receivedAt).getTime();
-            const bTime = b.sortTimestamp || new Date(b.receivedAt).getTime();
-            return bTime - aTime;
-          });
-        });
-
-        // Process the new emails in the background
-        processEmailBatch(refreshedEmails).catch(error => {
-          console.error('Error processing new emails:', error);
-          toast.error('Some emails may need to be processed again');
-        });
-      }
-
-      // Clear the new emails count and thread IDs since we've loaded them
-      setNewEmailsCount(0);
-      setNewThreadIds([]);
-      setLastFetchTimestamp(Date.now());
-
-    } catch (error) {
-      console.error('Error refreshing new emails:', error);
-      setLoadError(error instanceof Error ? error.message : 'Failed to refresh new emails');
-      toast.error('Failed to refresh new emails. Please try again.');
+      toast.error(error instanceof Error ? error.message : 'Failed to check for new emails');
     } finally {
       setIsLoading(false);
     }
   };
 
-  // Add this near other useEffect hooks
-  useEffect(() => {
-    // Load settings from localStorage
-    const savedSettings = localStorage.getItem('faq_autoreply_settings');
-    if (savedSettings) {
-      setSettings(JSON.parse(savedSettings));
+  // Add a function to refresh all emails directly from Gmail API
+  const refreshAllEmailsFromGmail = async () => {
+    if (!user?.accessToken) {
+      toast.error('Please sign in to refresh emails');
+      return;
     }
-  }, []);
 
-  const handleSaveSettings = (newSettings: AutoReplySettings) => {
-    setSettings(newSettings);
-    localStorage.setItem('faq_autoreply_settings', JSON.stringify(newSettings));
+    try {
+      setManualRefreshTriggered(true);
+      setIsLoading(true);
+      toast.info('Refreshing emails from Gmail...');
 
-    // Show success toast
-    toast.success('Settings saved successfully!', {
-      duration: 3000,
-      position: 'top-center'
-    });
+      // Get all the thread IDs we have
+      const allThreadIds = emails.map(e => e.threadId).filter(Boolean);
+
+      if (allThreadIds.length === 0) {
+        // If we don't have any thread IDs, fall back to loading from Firebase
+        await loadEmails(true);
+        toast.success('No existing emails to refresh. Loaded emails from database.');
+        return;
+      }
+
+      console.log(`Refreshing ${allThreadIds.length} threads from Gmail API...`);
+
+      // Call the refresh-batch endpoint with all thread IDs
+      const response = await fetch('/api/emails/refresh-batch', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${user.accessToken}`
+        },
+        body: JSON.stringify({
+          threadIds: allThreadIds
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to refresh emails from Gmail');
+      }
+
+      const data = await response.json();
+      console.log("Refreshed emails from Gmail API:", data);
+
+      if (data.refreshedEmails && data.refreshedEmails.length > 0) {
+        // Before updating emails, get a list of emails marked as not relevant
+        // to ensure we preserve that status after refresh
+        const firebaseDB = getFirebaseDB();
+        const notRelevantEmails = new Set<string>();
+
+        if (firebaseDB) {
+          try {
+            // Get all not relevant emails from the collection
+            const notRelevantSnapshot = await getDocs(collection(firebaseDB, FIREBASE_COLLECTIONS.NOT_RELEVANT));
+            notRelevantSnapshot.docs.forEach(doc => {
+              notRelevantEmails.add(doc.id);
+            });
+
+            // Also check emails collection for status='not_relevant'
+            const emailsSnapshot = await getDocs(query(
+              collection(firebaseDB, FIREBASE_COLLECTIONS.EMAILS),
+              where('status', '==', 'not_relevant')
+            ));
+            emailsSnapshot.docs.forEach(doc => {
+              notRelevantEmails.add(doc.id);
+            });
+
+            console.log(`Found ${notRelevantEmails.size} emails marked as not relevant`);
+          } catch (error) {
+            console.error('Error fetching not relevant emails:', error);
+          }
+        }
+
+        // Format the refreshed emails with proper timestamp formatting
+        const refreshedEmails = data.refreshedEmails.map((email: any) => ({
+          ...email,
+          // Ensure receivedAt is handled properly
+          receivedAt: email.receivedAt ?
+            (typeof email.receivedAt === 'number' ? email.receivedAt : parseInt(email.receivedAt)) :
+            Date.now(),
+          // Set sortTimestamp based on receivedAt
+          sortTimestamp: email.receivedAt ?
+            (typeof email.receivedAt === 'number' ? email.receivedAt : parseInt(email.receivedAt)) :
+            Date.now()
+        }));
+
+        // Create a map of current emails for easy lookup and updating
+        const currentEmailsMap = new Map(emails.map(e => [e.id, e]));
+
+        // Merge refreshed emails with current emails
+        const mergedEmails = [...emails];
+
+        // Keep track of emails that have actually changed
+        const changedEmails: ExtendedEmail[] = [];
+
+        // Update existing emails and add new ones
+        refreshedEmails.forEach((refreshedEmail: any) => {
+          const index = mergedEmails.findIndex(e => e.id === refreshedEmail.id);
+          if (index >= 0) {
+            const existingEmail = mergedEmails[index];
+            // Check if there are actual content changes
+            const contentChanged =
+              refreshedEmail.content !== existingEmail.content ||
+              refreshedEmail.subject !== existingEmail.subject ||
+              (refreshedEmail.threadMessages?.length !== existingEmail.threadMessages?.length);
+
+            // Check if this email is marked as not relevant
+            const isNotRelevant = notRelevantEmails.has(refreshedEmail.id) ||
+              existingEmail.isNotRelevant ||
+              existingEmail.status === 'not_relevant';
+
+            // Update existing email with fresh data while preserving state
+            mergedEmails[index] = {
+              ...mergedEmails[index],
+              ...refreshedEmail,
+              // Preserve these important state properties
+              matchedFAQ: mergedEmails[index].matchedFAQ,
+              isReplied: mergedEmails[index].isReplied,
+              // Ensure not-relevant status is preserved
+              isNotRelevant: isNotRelevant,
+              status: isNotRelevant ? 'not_relevant' : mergedEmails[index].status,
+              suggestedReply: mergedEmails[index].suggestedReply,
+              // Ensure threadMessages is preserved if it exists in original but not in refreshed
+              threadMessages: refreshedEmail.threadMessages || mergedEmails[index].threadMessages
+            };
+
+            // If content changed, add to changedEmails
+            if (contentChanged) {
+              changedEmails.push(mergedEmails[index]);
+            }
+          } else {
+            // Check if this new email is marked as not relevant
+            const isNotRelevant = notRelevantEmails.has(refreshedEmail.id);
+
+            // Add new email
+            const newEmail = {
+              ...refreshedEmail,
+              isNotRelevant: isNotRelevant,
+              status: isNotRelevant ? 'not_relevant' : 'pending'
+            };
+
+            mergedEmails.push(newEmail);
+            // New emails are definitely changed
+            changedEmails.push(newEmail);
+          }
+        });
+
+        // Sort by timestamp
+        const sortedEmails = mergedEmails.sort((a, b) =>
+          (b.sortTimestamp || 0) - (a.sortTimestamp || 0)
+        );
+
+        // Update state
+        setEmails(sortedEmails);
+
+        // Only save emails that have actually changed to Firebase
+        if (changedEmails.length > 0) {
+          // Filter out any potential undefined values before saving
+          const validChangedEmails = changedEmails.filter(email => email && email.id);
+
+          if (validChangedEmails.length > 0) {
+            console.log('Saving valid changed emails to Firebase:', validChangedEmails.length);
+
+            // For each changed email, ensure not-relevant status is saved correctly in all collections
+            await Promise.all(validChangedEmails.map(async (email) => {
+              // Mark not-relevant emails in all necessary collections
+              if (email.isNotRelevant || email.status === 'not_relevant') {
+                if (firebaseDB && email.id) {
+                  // Ensure the email is in the not_relevant_emails collection
+                  const notRelevantRef = doc(firebaseDB, FIREBASE_COLLECTIONS.NOT_RELEVANT, email.id);
+                  await setDoc(notRelevantRef, {
+                    emailId: email.id,
+                    threadId: email.threadId,
+                    markedAt: new Date().toISOString(),
+                    markedBy: user?.email || 'unknown'
+                  }, { merge: true });
+
+                  // Also ensure the status is set in the email_cache collection
+                  const emailCacheRef = doc(firebaseDB, FIREBASE_COLLECTIONS.EMAIL_CACHE, email.id);
+                  await setDoc(emailCacheRef, {
+                    status: 'not_relevant',
+                    isNotRelevant: true,
+                    updatedAt: new Date().toISOString()
+                  }, { merge: true });
+                }
+              }
+            }));
+
+            await saveEmailsToFirebase(validChangedEmails);
+            toast.success(`Updated ${validChangedEmails.length} email${validChangedEmails.length === 1 ? '' : 's'} with changes`);
+          } else {
+            toast.info('No valid email changes to save');
+          }
+        } else {
+          toast.info('No changes detected in your emails');
+        }
+
+        // Update cache with all emails
+        saveToCache(CACHE_KEYS.EMAILS, sortedEmails);
+
+        toast.success(`Refreshed ${data.successCount} emails from Gmail`);
+
+        if (data.errorCount > 0) {
+          toast.warning(`Failed to refresh ${data.errorCount} emails`);
+        }
+      } else {
+        toast.info('No changes found in your emails');
+      }
+    } catch (error) {
+      console.error('Error refreshing emails from Gmail:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to refresh emails');
+
+      // Fall back to Firebase if Gmail refresh fails
+      toast.info('Falling back to database...');
+      await loadEmails(true);
+    } finally {
+      setIsLoading(false);
+      setManualRefreshTriggered(false);
+    }
   };
 
-  if (authLoading || loading) {
-    return (
-      <div className="space-y-8">
-        <Layout>
-          <div className="w-full max-w-[95%] sm:max-w-[85%] md:max-w-[75%] lg:max-w-[58%] mx-auto px-2 sm:px-4 py-4 sm:py-8">
-            <LoadingSkeleton />
-          </div>
-        </Layout>
-      </div>
-    );
-  }
+  // Add the reset email categorizations function after saveEmailsToFirebase
+  const resetEmailCategorizations = async () => {
+    try {
+      const db = getFirebaseDB();
+      if (!db) {
+        toast.error('Failed to connect to the database');
+        return;
+      }
 
-  if (!user?.accessToken) {
-    return (
-      <div className="space-y-8">
-        <Layout>
-          <div className="w-full max-w-[95%] sm:max-w-[85%] md:max-w-[75%] lg:max-w-[58%] mx-auto px-2 sm:px-4 py-4 sm:py-8">
-            <div className="text-center py-12">
-              <h3 className="text-lg font-medium text-gray-900 mb-2">Please sign in</h3>
-              <p className="text-sm text-gray-500">
-                Sign in with your account to view and manage emails
-              </p>
-            </div>
-          </div>
-        </Layout>
-      </div>
-    );
-  }
+      // Show loading toast
+      toast.loading('Resetting email categorizations...', { id: 'reset-emails' });
+
+      // Get all emails from the EMAIL_CACHE collection
+      const emailCacheRef = collection(db, FIREBASE_COLLECTIONS.EMAIL_CACHE);
+      const emailsSnapshot = await getDocs(emailCacheRef);
+
+      const resetEmails: ExtendedEmail[] = [];
+      const emailIds: string[] = [];
+
+      // Track stats for user feedback
+      let processedCount = 0;
+      let repliedCount = 0;
+      let readyToReplyCount = 0;
+      let notRelevantCount = 0;
+
+      // Process each email
+      emailsSnapshot.forEach((doc) => {
+        const email = doc.data() as ExtendedEmail;
+
+        // Skip emails with no ID
+        if (!email || !email.id) {
+          console.warn('Skipping invalid email without ID');
+          return;
+        }
+
+        emailIds.push(email.id);
+
+        // Track stats
+        if (email.status === 'processed') processedCount++;
+        if (email.isReplied) repliedCount++;
+        if (email.status === 'processed' && !email.isReplied) readyToReplyCount++;
+        if (email.isNotRelevant || email.status === 'not_relevant') notRelevantCount++;
+
+        // Reset the properties that affect categorization
+        const resetEmail = {
+          ...email,
+          status: 'pending' as const,   // Reset to pending status
+          matchedFAQ: undefined,        // Clear the matched FAQ
+          suggestedReply: undefined,    // Clear the suggested reply
+          isReplied: false,             // Reset replied status
+          isNotRelevant: false          // Reset not relevant status
+        };
+
+        resetEmails.push(resetEmail as ExtendedEmail);
+      });
+
+      // Save the reset emails back to Firebase
+      await saveEmailsToFirebase(resetEmails);
+
+      // Remove entries from NOT_RELEVANT collection
+      const notRelevantBatch = writeBatch(db);
+      const notRelevantSnapshot = await getDocs(collection(db, FIREBASE_COLLECTIONS.NOT_RELEVANT));
+
+      notRelevantSnapshot.forEach((doc) => {
+        if (emailIds.includes(doc.id)) {
+          notRelevantBatch.delete(doc.ref);
+        }
+      });
+
+      // Commit the batch delete operation
+      if (notRelevantSnapshot.size > 0) {
+        await notRelevantBatch.commit();
+        console.log(`Removed ${notRelevantSnapshot.size} entries from not_relevant_emails collection`);
+      }
+
+      // Also clear the READY_TO_REPLY collection
+      try {
+        const readyRef = doc(db, FIREBASE_COLLECTIONS.READY_TO_REPLY, 'latest');
+        await setDoc(readyRef, { emails: [], timestamp: Date.now() });
+        console.log('Cleared ready_to_reply collection');
+      } catch (error) {
+        console.error('Error clearing ready_to_reply collection:', error);
+      }
+
+      // Update emails state to reflect changes
+      setEmails(current =>
+        current.map(email => {
+          const matchingResetEmail = resetEmails.find(e => e.id === email.id);
+          return matchingResetEmail || email;
+        })
+      );
+
+      // Reset any cached questions
+      setEmailQuestions(new Map());
+
+      // Create detailed success message
+      const resetDetails = [
+        `Total emails reset: ${resetEmails.length}`,
+        `Previously processed: ${processedCount}`,
+        `Previously replied: ${repliedCount}`,
+        `Previously ready to reply: ${readyToReplyCount}`,
+        `Previously not relevant: ${notRelevantCount}`
+      ].join('\n');
+
+      // Success toast with detailed message
+      toast.success(`All emails have been reset to the "Unanswered" state`, { id: 'reset-emails' });
+
+      // Log detailed stats
+      console.log('Email reset complete:', resetDetails);
+    } catch (error) {
+      console.error('Error resetting email categorizations:', error);
+      toast.error('Failed to reset emails', { id: 'reset-emails' });
+    }
+  };
 
   return (
     <div className="space-y-8">
@@ -3572,9 +4299,9 @@ ${signature}`;
           onClose={() => setShowSettingsModal(false)}
           settings={settings}
           onSave={handleSaveSettings}
+          onResetEmails={resetEmailCategorizations}
         />
       </Layout>
     </div>
   );
 }
-

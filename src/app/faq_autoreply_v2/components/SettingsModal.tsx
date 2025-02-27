@@ -4,6 +4,7 @@ import { Fragment } from 'react';
 import { XMarkIcon } from '@heroicons/react/24/outline';
 
 interface AutoReplySettings {
+  similarityThreshold: number;
   confidenceThreshold: number;
   emailFormatting: {
     greeting: string;
@@ -11,6 +12,9 @@ interface AutoReplySettings {
     spacing: 'compact' | 'normal' | 'spacious';
     signatureStyle: string;
     customPrompt: string;
+    useHtml: boolean;
+    includeSignature: boolean;
+    signatureText: string;
   };
 }
 
@@ -19,10 +23,12 @@ interface SettingsModalProps {
   onClose: () => void;
   settings: AutoReplySettings;
   onSave: (settings: AutoReplySettings) => void;
+  onResetEmails?: () => Promise<void>;
 }
 
-export default function SettingsModal({ isOpen, onClose, settings, onSave }: SettingsModalProps) {
+export default function SettingsModal({ isOpen, onClose, settings, onSave, onResetEmails }: SettingsModalProps) {
   const [localSettings, setLocalSettings] = React.useState<AutoReplySettings>(settings);
+  const [isResetting, setIsResetting] = React.useState(false);
 
   React.useEffect(() => {
     setLocalSettings(settings);
@@ -31,6 +37,19 @@ export default function SettingsModal({ isOpen, onClose, settings, onSave }: Set
   const handleSave = () => {
     onSave(localSettings);
     onClose();
+  };
+
+  const handleResetEmails = async () => {
+    if (!onResetEmails) return;
+
+    if (window.confirm('Are you sure you want to reset all email categorizations? This will move all emails back to the Unanswered tab.')) {
+      setIsResetting(true);
+      try {
+        await onResetEmails();
+      } finally {
+        setIsResetting(false);
+      }
+    }
   };
 
   return (
@@ -162,6 +181,30 @@ export default function SettingsModal({ isOpen, onClose, settings, onSave }: Set
                         />
                       </div>
                     </div>
+
+                    {onResetEmails && (
+                      <div className="pt-6 border-t border-gray-200">
+                        <h4 className="text-base font-medium text-gray-900 mb-4 flex items-center gap-2">
+                          <span role="img" aria-label="reset" className="text-3xl">🔄</span>
+                          Data Management
+                        </h4>
+                        <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
+                          <h5 className="text-sm font-medium text-gray-900 mb-2">Reset Email Categories</h5>
+                          <p className="text-sm text-gray-600 mb-4">
+                            This will reset all email categorizations back to the "Unanswered" state,
+                            clearing their status, matched FAQs, and suggested replies. This action cannot be undone.
+                          </p>
+                          <button
+                            type="button"
+                            className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                            onClick={handleResetEmails}
+                            disabled={isResetting}
+                          >
+                            {isResetting ? 'Resetting...' : 'Reset All Email Categories'}
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
 

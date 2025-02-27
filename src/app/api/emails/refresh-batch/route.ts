@@ -93,7 +93,8 @@ export async function POST(request: NextRequest) {
             contentType,
             threadMessages: messages.map(message => ({
               id: message.id!,
-              content: extractEmailBody(message).content
+              content: extractEmailBody(message).content,
+              sender: message.payload?.headers?.find(h => h.name === 'From')?.value || 'Unknown Sender'
             }))
           };
         } catch (error) {

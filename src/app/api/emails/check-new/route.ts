@@ -63,8 +63,25 @@ export async function POST(request: NextRequest) {
         (apiError.response && apiError.response.status === 401) ||
         apiError.message === 'Invalid Credentials') {
         console.error('Authentication error in Gmail API:', apiError);
+
+        // Log more detailed information about the error
+        console.error('Error details:', {
+          message: apiError.message,
+          code: apiError.code,
+          response: apiError.response ? {
+            status: apiError.response.status,
+            statusText: apiError.response.statusText,
+            data: apiError.response.data
+          } : 'No response object'
+        });
+
         return NextResponse.json(
-          { error: 'TOKEN_EXPIRED', details: 'Your authentication token has expired' },
+          {
+            error: 'TOKEN_EXPIRED',
+            details: 'Your authentication token has expired',
+            message: apiError.message,
+            code: apiError.code || 401
+          },
           { status: 401 }
         );
       }

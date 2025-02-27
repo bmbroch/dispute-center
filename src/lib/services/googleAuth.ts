@@ -18,7 +18,7 @@ class GoogleAuthService {
   private tokens: GoogleTokens | null = null;
   private userInfo: GoogleUserInfo | null = null;
 
-  private constructor() {}
+  private constructor() { }
 
   static getInstance(): GoogleAuthService {
     if (!GoogleAuthService.instance) {
@@ -72,7 +72,7 @@ class GoogleAuthService {
           'http://localhost:3002',
           window.location.origin
         ];
-        
+
         if (!allowedOrigins.includes(event.origin)) return;
 
         if (event.data.type === 'auth-success') {
@@ -124,7 +124,7 @@ class GoogleAuthService {
   async handleAuthCode(code: string): Promise<GoogleTokens> {
     try {
       console.log('Exchanging auth code for tokens...');
-      
+
       const response = await fetch('/api/auth/token', {
         method: 'POST',
         headers: {
@@ -134,7 +134,7 @@ class GoogleAuthService {
       });
 
       const data = await response.json();
-      
+
       if (!response.ok) {
         console.error('Token exchange failed:', {
           status: response.status,
@@ -217,13 +217,13 @@ class GoogleAuthService {
       if (!response.ok) {
         const errorData = await response.json();
         console.error('Token refresh failed:', errorData);
-        
+
         // Check if the refresh token is invalid
         if (response.status === 400 || response.status === 401) {
           this.clearTokens(); // Clear invalid tokens
           throw new Error('Invalid refresh token');
         }
-        
+
         throw new Error(errorData.error || 'Failed to refresh tokens');
       }
 
@@ -245,7 +245,7 @@ class GoogleAuthService {
 
       // Store the new tokens
       this.tokens = newTokens;
-      
+
       // Validate the new access token by making a test request
       try {
         await this.validateAccessToken(newTokens.access_token);
@@ -263,14 +263,28 @@ class GoogleAuthService {
   }
 
   private async validateAccessToken(accessToken: string): Promise<void> {
-    const response = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-      },
-    });
+    try {
+      const response = await fetch('https://www.googleapis.com/gmail/v1/users/me/profile', {
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+        },
+      });
 
-    if (!response.ok) {
-      throw new Error('Access token validation failed');
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Token validation failed:', {
+          status: response.status,
+          statusText: response.statusText,
+          error: errorText
+        });
+        throw new Error(`Token validation failed: ${response.status} ${response.statusText}`);
+      }
+
+      // Token is valid
+      console.log('Access token successfully validated');
+    } catch (error) {
+      console.error('Error validating access token:', error);
+      throw error;
     }
   }
 
@@ -288,4 +302,4 @@ class GoogleAuthService {
   }
 }
 
-export const googleAuthService = GoogleAuthService.getInstance(); 
+export const googleAuthService = GoogleAuthService.getInstance();
