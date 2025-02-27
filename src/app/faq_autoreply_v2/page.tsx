@@ -3068,18 +3068,35 @@ ${signature}`;
         .map(email => email.threadId as string)
       ));
 
-      const response = await fetch('/api/emails/refresh-batch', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${user.accessToken}`
-        },
-        body: JSON.stringify({
-          lastFetchTimestamp,
-          nextPageToken,
-          threadIds // Add the thread IDs to the request
-        }),
-      });
+      const makeRequest = async (token: string) => {
+        return fetch('/api/emails/refresh-batch', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify({
+            lastFetchTimestamp,
+            nextPageToken,
+            threadIds // Add the thread IDs to the request
+          }),
+        });
+      };
+
+      let response = await makeRequest(user.accessToken);
+
+      // Handle token expiration
+      if (response.status === 401) {
+        console.log('Access token expired, attempting to refresh...');
+        const newToken = await refreshAccessToken();
+
+        if (newToken) {
+          console.log('Token refreshed, retrying request');
+          response = await makeRequest(newToken);
+        } else {
+          throw new Error('Failed to refresh authentication token');
+        }
+      }
 
       if (!response.ok) {
         throw new Error(`Failed to refresh emails: ${response.status} ${response.statusText}`);
@@ -3111,16 +3128,9 @@ ${signature}`;
       setTotalEmails(data.totalEmails || 0);
       setLastFetchTimestamp(Date.now());
       setHasRefreshedOnce(true);
-
     } catch (error) {
       console.error('Error refreshing emails:', error);
-      setLoadError(error instanceof Error ? error.message : 'Failed to refresh emails');
-
-      if (error instanceof Error && error.message === 'No access token available') {
-        toast.error('Please sign in again to refresh emails');
-        return;
-      }
-
+      setLoadError(error instanceof Error ? error.message : 'Unknown error refreshing emails');
       toast.error('Failed to refresh emails. Please try again.');
     } finally {
       setIsLoading(false);
@@ -3249,7 +3259,45 @@ ${signature}`;
         }),
       });
 
-      if (!response.ok) return;
+      if (!response.ok) {
+        // Check if this is an auth error (401)
+        if (response.status === 401) {
+          console.log('Access token expired, attempting to refresh...');
+          const newToken = await refreshAccessToken();
+
+          // If we got a new token, retry the request
+          if (newToken) {
+            console.log('Token refreshed, retrying request');
+            const retryResponse = await fetch('/api/emails/check-new', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${newToken}`
+              },
+              body: JSON.stringify({
+                lastEmailTimestamp,
+                existingThreadIds: emails.map(e => e.threadId).filter(Boolean)
+              }),
+            });
+
+            if (retryResponse.ok) {
+              const data = await retryResponse.json();
+              setNewEmailsCount(data.newEmailsCount || 0);
+              if (data.newThreadIds) {
+                setNewThreadIds(data.newThreadIds);
+              }
+              return;
+            }
+          } else {
+            console.error('Failed to refresh token');
+            toast.error('Your session has expired. Please refresh the page and sign in again.');
+            return;
+          }
+        }
+
+        console.error('Error checking for new emails:', await response.text());
+        return;
+      }
 
       const data = await response.json();
       setNewEmailsCount(data.newEmailsCount || 0);
@@ -3353,16 +3401,33 @@ ${signature}`;
         return;
       }
 
-      const response = await fetch('/api/emails/refresh-batch', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${user.accessToken}`
-        },
-        body: JSON.stringify({
-          threadIds: newThreadIds // Only send the new thread IDs
-        }),
-      });
+      const makeRequest = async (token: string) => {
+        return fetch('/api/emails/refresh-batch', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify({
+            threadIds: newThreadIds // Only send the new thread IDs
+          }),
+        });
+      };
+
+      let response = await makeRequest(user.accessToken);
+
+      // Handle token expiration
+      if (response.status === 401) {
+        console.log('Access token expired, attempting to refresh...');
+        const newToken = await refreshAccessToken();
+
+        if (newToken) {
+          console.log('Token refreshed, retrying request');
+          response = await makeRequest(newToken);
+        } else {
+          throw new Error('Failed to refresh authentication token');
+        }
+      }
 
       if (!response.ok) {
         throw new Error(`Failed to refresh new emails: ${response.status} ${response.statusText}`);
