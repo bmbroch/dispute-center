@@ -1715,17 +1715,40 @@ export default function FAQAutoReplyV2() {
         if (readyDoc.exists()) {
           const readyEmails = readyDoc.data().emails || [];
           const updatedReadyEmails = readyEmails.filter((e: any) => e.id !== email.id);
-          updatedReadyEmails.push({
-            id: email.id,
-            threadId: email.threadId,
-            subject: email.subject,
-            sender: email.sender,
-            content: email.content,
-            receivedAt: email.receivedAt,
-            suggestedReply: data.reply,
-            matchedFAQ: email.matchedFAQ,
+
+          // Create a sanitized email object with no undefined values
+          const sanitizedEmail: any = {
+            id: email.id || '',
+            threadId: email.threadId || '',
+            subject: email.subject || '',
+            sender: email.sender || '',
+            receivedAt: email.receivedAt || Date.now(),
+            suggestedReply: data.reply || '',
             status: 'processed'
-          });
+          };
+
+          // Handle content which could be a string or an object
+          if (typeof email.content === 'string') {
+            sanitizedEmail.content = email.content || '';
+          } else if (email.content) {
+            sanitizedEmail.content = {
+              html: email.content.html || null,
+              text: email.content.text || null
+            };
+          } else {
+            sanitizedEmail.content = '';
+          }
+
+          // Only include matchedFAQ if it exists and has required properties
+          if (email.matchedFAQ && email.matchedFAQ.question && email.matchedFAQ.answer) {
+            sanitizedEmail.matchedFAQ = {
+              question: email.matchedFAQ.question,
+              answer: email.matchedFAQ.answer,
+              confidence: email.matchedFAQ.confidence || 0
+            };
+          }
+
+          updatedReadyEmails.push(sanitizedEmail);
           await setDoc(readyRef, {
             emails: updatedReadyEmails,
             timestamp: Date.now()
@@ -2862,9 +2885,47 @@ ${signature}`;
       const db = getFirebaseDB();
       if (!db) return;
 
+      // Sanitize emails to remove any undefined values
+      const sanitizedEmails = emails.map(email => {
+        // Create a clean object with only the properties we need
+        const sanitized: any = {
+          id: email.id || '',
+          threadId: email.threadId || '',
+          subject: email.subject || '',
+          sender: email.sender || '',
+          receivedAt: email.receivedAt || Date.now(),
+          status: email.status || 'processed',
+          suggestedReply: email.suggestedReply || '',
+          timestamp: Date.now()
+        };
+
+        // Handle content which could be a string or an object
+        if (typeof email.content === 'string') {
+          sanitized.content = email.content || '';
+        } else if (email.content) {
+          sanitized.content = {
+            html: email.content.html || null,
+            text: email.content.text || null
+          };
+        } else {
+          sanitized.content = '';
+        }
+
+        // Only include matchedFAQ if it exists and has required properties
+        if (email.matchedFAQ && email.matchedFAQ.question && email.matchedFAQ.answer) {
+          sanitized.matchedFAQ = {
+            question: email.matchedFAQ.question,
+            answer: email.matchedFAQ.answer,
+            confidence: email.matchedFAQ.confidence || 0
+          };
+        }
+
+        return sanitized;
+      });
+
       const readyRef = doc(db, FIREBASE_COLLECTIONS.READY_TO_REPLY, 'latest');
       await setDoc(readyRef, {
-        emails,
+        emails: sanitizedEmails,
         timestamp: Date.now()
       });
     } catch (error) {
