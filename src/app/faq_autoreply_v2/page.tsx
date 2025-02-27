@@ -396,9 +396,22 @@ const saveQuestionsToFirebase = async (emailId: string, questions: GenericFAQ[])
     const db = getFirebaseDB();
     if (!db) return;
 
+    // Sanitize questions to ensure no undefined values
+    const sanitizedQuestions = questions.map(q => ({
+      question: q.question || '',
+      answer: q.answer || '',
+      category: q.category || 'support',
+      confidence: q.confidence || 0,
+      emailIds: q.emailIds || [emailId],
+      requiresCustomerSpecificInfo: !!q.requiresCustomerSpecificInfo,
+      similarPatterns: q.similarPatterns || [],
+      updatedAt: q.updatedAt || new Date().toISOString(),
+      id: q.id || `temp-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
+    }));
+
     const questionRef = doc(db, FIREBASE_QUESTIONS_COLLECTION, emailId);
     await setDoc(questionRef, {
-      questions,
+      questions: sanitizedQuestions,
       timestamp: Date.now()
     });
   } catch (error) {
@@ -425,8 +438,21 @@ const saveExtractedQuestionsToFirebase = async (emailId: string, questions: Gene
     const docRef = getDocRef(db, FIREBASE_COLLECTIONS.CACHED_QUESTIONS, emailId);
     if (!docRef) return false;
 
+    // Sanitize questions to ensure no undefined values
+    const sanitizedQuestions = questions.map(q => ({
+      question: q.question || '',
+      answer: q.answer || '',
+      category: q.category || 'support',
+      confidence: q.confidence || 0,
+      emailIds: q.emailIds || [emailId],
+      requiresCustomerSpecificInfo: !!q.requiresCustomerSpecificInfo,
+      similarPatterns: q.similarPatterns || [],
+      updatedAt: q.updatedAt || new Date().toISOString(),
+      id: q.id || `temp-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
+    }));
+
     await setDoc(docRef, {
-      questions,
+      questions: sanitizedQuestions,
       timestamp: Date.now(),
       emailId
     });
@@ -1552,24 +1578,25 @@ export default function FAQAutoReplyV2() {
         return;
       }
 
-      // Combine matched FAQs and new questions into a single array
-      const allQuestions = [
+      // Combine matched FAQs and new questions into a single array of GenericFAQ objects
+      const allQuestions: GenericFAQ[] = [
         ...matchedFAQs.map((faq: MatchedFAQ) => ({
-          question: faq.question,
-          answer: faq.answer,
-          category: faq.category,
-          confidence: faq.confidence,
+          question: faq.question || '',
+          answer: faq.answer || '',
+          category: faq.category || 'support',
+          confidence: faq.confidence || 0,
           emailIds: [email.id],
-          isExistingFAQ: true,
-          faqId: faq.questionId
+          id: faq.questionId || undefined,
+          requiresCustomerSpecificInfo: false,
+          updatedAt: new Date().toISOString()
         })),
         ...newQuestions.map((q: NewQuestion) => ({
-          question: q.question,
+          question: q.question || '',
           category: q.category || 'support',
           emailIds: [email.id],
-          confidence: q.confidence || 1,
-          requiresCustomerSpecificInfo: q.requiresCustomerSpecificInfo || false,
-          isExistingFAQ: false
+          confidence: q.confidence || 0,
+          requiresCustomerSpecificInfo: !!q.requiresCustomerSpecificInfo,
+          updatedAt: new Date().toISOString()
         }))
       ];
 
@@ -1715,40 +1742,17 @@ export default function FAQAutoReplyV2() {
         if (readyDoc.exists()) {
           const readyEmails = readyDoc.data().emails || [];
           const updatedReadyEmails = readyEmails.filter((e: any) => e.id !== email.id);
-
-          // Create a sanitized email object with no undefined values
-          const sanitizedEmail: any = {
-            id: email.id || '',
-            threadId: email.threadId || '',
-            subject: email.subject || '',
-            sender: email.sender || '',
-            receivedAt: email.receivedAt || Date.now(),
-            suggestedReply: data.reply || '',
+          updatedReadyEmails.push({
+            id: email.id,
+            threadId: email.threadId,
+            subject: email.subject,
+            sender: email.sender,
+            content: email.content,
+            receivedAt: email.receivedAt,
+            suggestedReply: data.reply,
+            matchedFAQ: email.matchedFAQ,
             status: 'processed'
-          };
-
-          // Handle content which could be a string or an object
-          if (typeof email.content === 'string') {
-            sanitizedEmail.content = email.content || '';
-          } else if (email.content) {
-            sanitizedEmail.content = {
-              html: email.content.html || null,
-              text: email.content.text || null
-            };
-          } else {
-            sanitizedEmail.content = '';
-          }
-
-          // Only include matchedFAQ if it exists and has required properties
-          if (email.matchedFAQ && email.matchedFAQ.question && email.matchedFAQ.answer) {
-            sanitizedEmail.matchedFAQ = {
-              question: email.matchedFAQ.question,
-              answer: email.matchedFAQ.answer,
-              confidence: email.matchedFAQ.confidence || 0
-            };
-          }
-
-          updatedReadyEmails.push(sanitizedEmail);
+          });
           await setDoc(readyRef, {
             emails: updatedReadyEmails,
             timestamp: Date.now()
@@ -2885,43 +2889,29 @@ ${signature}`;
       const db = getFirebaseDB();
       if (!db) return;
 
-      // Sanitize emails to remove any undefined values
-      const sanitizedEmails = emails.map(email => {
-        // Create a clean object with only the properties we need
-        const sanitized: any = {
-          id: email.id || '',
-          threadId: email.threadId || '',
-          subject: email.subject || '',
-          sender: email.sender || '',
-          receivedAt: email.receivedAt || Date.now(),
-          status: email.status || 'processed',
-          suggestedReply: email.suggestedReply || '',
-          timestamp: Date.now()
-        };
-
-        // Handle content which could be a string or an object
-        if (typeof email.content === 'string') {
-          sanitized.content = email.content || '';
-        } else if (email.content) {
-          sanitized.content = {
-            html: email.content.html || null,
-            text: email.content.text || null
-          };
-        } else {
-          sanitized.content = '';
-        }
-
+      // Create a sanitized version of the emails with only the necessary properties
+      const sanitizedEmails = emails.map(email => ({
+        id: email.id,
+        threadId: email.threadId,
+        subject: email.subject,
+        sender: email.sender,
+        receivedAt: email.receivedAt,
+        status: email.status,
         // Only include matchedFAQ if it exists and has required properties
-        if (email.matchedFAQ && email.matchedFAQ.question && email.matchedFAQ.answer) {
-          sanitized.matchedFAQ = {
-            question: email.matchedFAQ.question,
-            answer: email.matchedFAQ.answer,
-            confidence: email.matchedFAQ.confidence || 0
-          };
-        }
-
-        return sanitized;
-      });
+        matchedFAQ: email.matchedFAQ ? {
+          question: email.matchedFAQ.question || '',
+          answer: email.matchedFAQ.answer || '',
+          confidence: email.matchedFAQ.confidence || 0
+        } : null,
+        // Convert content to a string if it's an object to avoid circular references
+        content: typeof email.content === 'string'
+          ? email.content
+          : (email.content?.text || email.content?.html || ''),
+        suggestedReply: email.suggestedReply || '',
+        isReplied: !!email.isReplied,
+        isNotRelevant: !!email.isNotRelevant,
+        sortTimestamp: email.sortTimestamp || Date.now()
+      }));
 
       const readyRef = doc(db, FIREBASE_COLLECTIONS.READY_TO_REPLY, 'latest');
       await setDoc(readyRef, {
