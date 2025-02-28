@@ -24,11 +24,13 @@ interface SettingsModalProps {
   settings: AutoReplySettings;
   onSave: (settings: AutoReplySettings) => void;
   onResetEmails?: () => Promise<void>;
+  onResetAllEmails?: () => Promise<void>;
 }
 
-export default function SettingsModal({ isOpen, onClose, settings, onSave, onResetEmails }: SettingsModalProps) {
+export default function SettingsModal({ isOpen, onClose, settings, onSave, onResetEmails, onResetAllEmails }: SettingsModalProps) {
   const [localSettings, setLocalSettings] = React.useState<AutoReplySettings>(settings);
   const [isResetting, setIsResetting] = React.useState(false);
+  const [isCompletelyResetting, setIsCompletelyResetting] = React.useState(false);
 
   React.useEffect(() => {
     setLocalSettings(settings);
@@ -48,6 +50,19 @@ export default function SettingsModal({ isOpen, onClose, settings, onSave, onRes
         await onResetEmails();
       } finally {
         setIsResetting(false);
+      }
+    }
+  };
+
+  const handleCompleteReset = async () => {
+    if (!onResetAllEmails) return;
+
+    if (window.confirm('Are you sure you want to perform a COMPLETE EMAIL RESET? This will DELETE ALL EMAILS from the system and fetch only the 20 most recent email threads from Gmail. This action cannot be undone.')) {
+      setIsCompletelyResetting(true);
+      try {
+        await onResetAllEmails();
+      } finally {
+        setIsCompletelyResetting(false);
       }
     }
   };
@@ -104,18 +119,18 @@ export default function SettingsModal({ isOpen, onClose, settings, onSave, onRes
                               type="range"
                               min="0"
                               max="100"
-                              value={localSettings.confidenceThreshold}
+                              value={localSettings.similarityThreshold}
                               onChange={(e) => setLocalSettings({
                                 ...localSettings,
-                                confidenceThreshold: parseInt(e.target.value)
+                                similarityThreshold: parseInt(e.target.value)
                               })}
                               className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-red-500 [&::-webkit-slider-thumb]:cursor-pointer [&::-moz-range-thumb]:bg-red-500 [&::-moz-range-thumb]:border-0"
                               style={{
-                                background: `linear-gradient(to right, rgb(239 68 68) ${localSettings.confidenceThreshold}%, rgb(229 231 235) ${localSettings.confidenceThreshold}%)`
+                                background: `linear-gradient(to right, rgb(239 68 68) ${localSettings.similarityThreshold}%, rgb(229 231 235) ${localSettings.similarityThreshold}%)`
                               }}
                             />
                           </div>
-                          <span className="text-sm text-gray-500 min-w-[3rem]">{localSettings.confidenceThreshold}%</span>
+                          <span className="text-sm text-gray-500 min-w-[3rem]">{localSettings.similarityThreshold}%</span>
                         </div>
                         <p className="mt-2 text-sm text-gray-500">
                           Threshold for determining when to create a new question vs. matching with an existing one
@@ -182,27 +197,49 @@ export default function SettingsModal({ isOpen, onClose, settings, onSave, onRes
                       </div>
                     </div>
 
-                    {onResetEmails && (
+                    {(onResetEmails || onResetAllEmails) && (
                       <div className="pt-6 border-t border-gray-200">
                         <h4 className="text-base font-medium text-gray-900 mb-4 flex items-center gap-2">
                           <span role="img" aria-label="reset" className="text-3xl">🔄</span>
                           Data Management
                         </h4>
-                        <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
-                          <h5 className="text-sm font-medium text-gray-900 mb-2">Reset Email Categories</h5>
-                          <p className="text-sm text-gray-600 mb-4">
-                            This will reset all email categorizations back to the "Unanswered" state,
-                            clearing their status, matched FAQs, and suggested replies. This action cannot be undone.
-                          </p>
-                          <button
-                            type="button"
-                            className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 disabled:opacity-50 disabled:cursor-not-allowed"
-                            onClick={handleResetEmails}
-                            disabled={isResetting}
-                          >
-                            {isResetting ? 'Resetting...' : 'Reset All Email Categories'}
-                          </button>
-                        </div>
+
+                        {onResetEmails && (
+                          <div className="bg-gray-50 p-4 rounded-lg border border-gray-200 mb-4">
+                            <h5 className="text-sm font-medium text-gray-900 mb-2">Reset Email Categories</h5>
+                            <p className="text-sm text-gray-600 mb-4">
+                              This will reset all email categorizations back to the "Unanswered" state,
+                              clearing their status, matched FAQs, and suggested replies. This action cannot be undone.
+                            </p>
+                            <button
+                              type="button"
+                              className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                              onClick={handleResetEmails}
+                              disabled={isResetting || isCompletelyResetting}
+                            >
+                              {isResetting ? 'Resetting...' : 'Reset All Email Categories'}
+                            </button>
+                          </div>
+                        )}
+
+                        {onResetAllEmails && (
+                          <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
+                            <h5 className="text-sm font-medium text-gray-900 mb-2">Complete Email Reset</h5>
+                            <p className="text-sm text-gray-600 mb-4">
+                              <strong>Warning:</strong> This will delete all emails from the system and fetch only the 20 most recent
+                              email threads from Gmail. All categorizations, matched FAQs, and suggested replies will be lost.
+                              This action cannot be undone.
+                            </p>
+                            <button
+                              type="button"
+                              className="px-4 py-2 text-sm font-medium text-white bg-red-700 rounded-lg hover:bg-red-800 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                              onClick={handleCompleteReset}
+                              disabled={isResetting || isCompletelyResetting}
+                            >
+                              {isCompletelyResetting ? 'Performing Complete Reset...' : 'Delete All Emails & Fetch Latest'}
+                            </button>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
