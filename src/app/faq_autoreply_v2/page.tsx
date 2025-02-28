@@ -458,58 +458,109 @@ const saveEmailsToFirebase = async (emails: (Email | ExtendedEmail)[]) => {
       return sanitized;
     };
 
-    console.log(`Saving ${emails.length} emails to Firebase`);
-    const batch = writeBatch(db);
-    const emailsCollection = collection(db, 'emails');
+    let savedCount = 0;
 
-    // Loop through each email and save it to Firebase
-    emails.forEach(email => {
-      if (!email.id) return;
-
-      // Ensure receivedAt is a string in ISO format
-      let normalizedEmail: any = { ...email };
-
-      // Convert receivedAt to ISO string if it's a number
-      if (typeof normalizedEmail.receivedAt === 'number') {
-        normalizedEmail.receivedAt = new Date(normalizedEmail.receivedAt).toISOString();
-      } else if (normalizedEmail.receivedAt && typeof normalizedEmail.receivedAt === 'string') {
-        // Ensure it's a valid ISO string
-        try {
-          normalizedEmail.receivedAt = new Date(normalizedEmail.receivedAt).toISOString();
-        } catch (e) {
-          console.warn(`Invalid receivedAt format for email ${email.id}:`, e);
-        }
+    // Save each email individually to the email_cache collection
+    for (const email of emails) {
+      if (!email || !email.id) {
+        console.warn('Skipping invalid email without ID');
+        continue;
       }
 
-      // Set sortTimestamp based on receivedAt for consistent sorting
-      normalizedEmail.sortTimestamp = normalizedEmail.receivedAt
-        ? new Date(normalizedEmail.receivedAt).getTime()
-        : Date.now();
+      // First convert receivedAt if it's a number
+      const normalizedEmail = {
+        ...email,
+        // Ensure receivedAt is a string for consistent storage
+        receivedAt: typeof email.receivedAt === 'number'
+          ? email.receivedAt.toString()
+          : email.receivedAt,
+        // Set sortTimestamp if it doesn't exist
+        sortTimestamp: ('sortTimestamp' in email && email.sortTimestamp) || (
+          // Try to derive from receivedAt
+          typeof email.receivedAt === 'number' ?
+            email.receivedAt :
+            (typeof email.receivedAt === 'string' ?
+              new Date(email.receivedAt).getTime() :
+              Date.now())
+        ),
+        // Add lastUpdated timestamp
+        lastUpdated: Date.now()
+      };
 
-      // Log original and normalized timestamps for debugging
-      console.log('Email timestamp debug:', {
-        id: email.id,
-        original: {
-          receivedAt: email.receivedAt,
-          sortTimestamp: 'sortTimestamp' in email ? email.sortTimestamp : undefined
-        },
-        normalized: {
-          receivedAt: normalizedEmail.receivedAt,
-          sortTimestamp: normalizedEmail.sortTimestamp
-        }
-      });
-
-      // Sanitize the email object before saving
+      // Then sanitize the entire object
       const sanitizedEmail = sanitizeObject(normalizedEmail);
 
-      // Create a document reference and set the sanitized email
-      const docRef = doc(emailsCollection, email.id);
-      batch.set(docRef, sanitizedEmail, { merge: true });
-    });
+      try {
+        // First check if the email already exists to preserve status
+        const emailRef = doc(db, FIREBASE_COLLECTIONS.EMAIL_CACHE, email.id);
+        const existingEmailDoc = await getDoc(emailRef);
+        let mergedEmail = { ...sanitizedEmail };
 
-    // Commit the batch
-    await batch.commit();
-    console.log('Successfully saved emails to Firebase');
+        if (existingEmailDoc.exists()) {
+          const existingEmail = existingEmailDoc.data();
+          // Preserve status from existing email
+          if (existingEmail.status) {
+            console.log(`Preserving status '${existingEmail.status}' for email ${email.id}`);
+            mergedEmail.status = existingEmail.status;
+          }
+
+          // Preserve other important fields
+          if (existingEmail.isReplied !== undefined) {
+            mergedEmail.isReplied = existingEmail.isReplied;
+          }
+
+          if (existingEmail.isNotRelevant !== undefined) {
+            mergedEmail.isNotRelevant = existingEmail.isNotRelevant;
+          }
+
+          if (existingEmail.matchedFAQ !== undefined) {
+            mergedEmail.matchedFAQ = existingEmail.matchedFAQ;
+          }
+        }
+
+        // Save to individual email document
+        await setDoc(emailRef, mergedEmail, { merge: true });
+
+        // If thread ID exists, update thread cache too
+        if (email.threadId) {
+          // Calculate the timestamp that should be used for the thread
+          const threadTimestamp = ('sortTimestamp' in normalizedEmail) ? normalizedEmail.sortTimestamp : (
+            typeof email.receivedAt === 'number' ?
+              email.receivedAt :
+              (typeof email.receivedAt === 'string' ?
+                new Date(email.receivedAt).getTime() :
+                Date.now())
+          );
+
+          const threadRef = doc(db, FIREBASE_COLLECTIONS.THREAD_CACHE, email.threadId);
+          await setDoc(threadRef, {
+            emailId: email.id,
+            threadId: email.threadId,
+            subject: email.subject,
+            sender: email.sender,
+            receivedAt: email.receivedAt,
+            // CRITICAL FIX: Add lastMessageTimestamp for thread sorting
+            lastMessageTimestamp: threadTimestamp,
+            lastUpdated: Date.now()
+          }, { merge: true });
+        }
+
+        // If email has content and it's not already in the content collection, save it
+        if (email.content) {
+          const emailContentRef = doc(db, 'email_content', email.id);
+          await setDoc(emailContentRef, {
+            content: email.content,
+            timestamp: Date.now()
+          });
+        }
+
+        savedCount++;
+      } catch (error) {
+        console.error(`Error saving email ${email.id} to Firebase:`, error);
+      }
+    }
+
+    console.log(`Saved ${savedCount} emails to Firebase`);
   } catch (error) {
     console.error('Error saving emails to Firebase:', error);
   }
@@ -2111,9 +2162,12 @@ export default function FAQAutoReplyV2() {
       });
     }
 
-    if (!loading && hasMore) {
+    if (!loading && !loadingMore && hasMore) {
       const nextPage = page + 1;
       console.log(`Loading more emails (page ${nextPage})...`);
+
+      // Make sure we're setting the page state before calling loadEmails
+      setPage(nextPage);
 
       // Set loading state for 'Load More'
       setLoadingMore(true);
@@ -2125,10 +2179,11 @@ export default function FAQAutoReplyV2() {
     } else {
       console.log('⚠️ Not loading more because:', {
         loading: loading ? 'Already loading' : 'Not loading',
+        loadingMore: loadingMore ? 'Already loading more' : 'Not loading more',
         hasMore: hasMore ? 'Has more' : 'No more emails'
       });
     }
-  }, [loading, hasMore, page, loadEmails, user, emails]);
+  }, [loading, loadingMore, hasMore, page, loadEmails, user, emails]);
 
   const handleAutoReply = async (email: ExtendedEmail) => {
     // Skip generating replies for emails where the user was last to reply
