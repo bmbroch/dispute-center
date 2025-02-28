@@ -90,11 +90,11 @@ export async function POST(request: NextRequest) {
             console.log(`DEBUG: First new thread details:`);
             console.log(`DEBUG: Thread ID: ${newThreads[0].id}`);
             console.log(`DEBUG: Internal date: ${internalDate} (${new Date(internalDate).toISOString()})`);
-            console.log(`DEBUG: Subject: ${message.payload?.headers?.find(h => h.name.toLowerCase() === 'subject')?.value || 'Unknown'}`);
+            console.log(`DEBUG: Subject: ${message.payload?.headers?.find(h => h.name?.toLowerCase() === 'subject')?.value || 'Unknown'}`);
             console.log(`DEBUG: Time difference from last email: ${internalDate - lastEmailTimestamp}ms`);
 
             // Add more details about timestamps
-            const dateHeader = message.payload?.headers?.find(h => h.name.toLowerCase() === 'date')?.value;
+            const dateHeader = message.payload?.headers?.find(h => h.name?.toLowerCase() === 'date')?.value;
             if (dateHeader) {
               const headerDate = new Date(dateHeader).getTime();
               console.log(`DEBUG: Date header: ${dateHeader} (${new Date(headerDate).toISOString()})`);

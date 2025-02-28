@@ -488,6 +488,7 @@ export async function GET(request: NextRequest) {
     const page = parseInt(searchParams.get('page') || '1');
     const limit = parseInt(searchParams.get('limit') || '20'); // Default limit reduced to 20
     const pageToken = searchParams.get('pageToken') || undefined;
+    const oldestTimestamp = searchParams.get('oldestTimestamp') || undefined;
 
     // Get access token from Authorization header
     const authHeader = request.headers.get('authorization');
@@ -509,12 +510,23 @@ export async function GET(request: NextRequest) {
     }
     const db = firebaseApp.firestore();
 
-    // Fetch threads with pagination, removing the time window restriction
+    // Build the query string
+    let queryString = 'in:inbox -label:automated-reply';
+
+    // If we have an oldest timestamp, add it to the query to get older emails
+    if (oldestTimestamp) {
+      const oldestDate = new Date(parseInt(oldestTimestamp));
+      // Format date as YYYY/MM/DD for Gmail query
+      const formattedDate = oldestDate.toISOString().split('T')[0].replace(/-/g, '/');
+      queryString += ` before:${formattedDate}`;
+    }
+
+    // Fetch threads with pagination
     const response = await gmail.users.threads.list({
       userId: 'me',
       maxResults: limit,
       pageToken: pageToken,
-      q: 'in:inbox -label:automated-reply', // Removed time window restriction
+      q: queryString,
     });
 
     const threads = response.data.threads || [];

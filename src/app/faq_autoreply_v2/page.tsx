@@ -396,11 +396,25 @@ const loadEmailsFromFirebase = async () => {
         sender: data.sender,
         receivedAt: data.receivedAt,
         content: content || data.content,
-        // Use the thread's last message timestamp for sorting if available
-        sortTimestamp: threadInfo?.lastMessageTimestamp || new Date(data.receivedAt).getTime(),
+        // Use explicit timestamp hierarchy: sortTimestamp in data > thread's lastMessageTimestamp > receivedAt
+        sortTimestamp: data.sortTimestamp || threadInfo?.lastMessageTimestamp || (
+          data.receivedAt ?
+            (typeof data.receivedAt === 'number' ?
+              data.receivedAt :
+              new Date(data.receivedAt).getTime()) :
+            Date.now()
+        ),
         isNotRelevant: data.status === 'not_relevant',
         status: data.status || 'pending'
       };
+
+      // Log timestamps for debugging
+      console.log(`Loaded email ${doc.id} from Firebase:`, {
+        receivedAt: data.receivedAt,
+        sortTimestamp: email.sortTimestamp,
+        threadTimestamp: threadInfo?.lastMessageTimestamp,
+        date: email.sortTimestamp ? new Date(email.sortTimestamp).toISOString() : 'unknown'
+      });
 
       emailMap.set(doc.id, email);
     });
@@ -444,83 +458,58 @@ const saveEmailsToFirebase = async (emails: (Email | ExtendedEmail)[]) => {
       return sanitized;
     };
 
-    let savedCount = 0;
+    console.log(`Saving ${emails.length} emails to Firebase`);
+    const batch = writeBatch(db);
+    const emailsCollection = collection(db, 'emails');
 
-    // Save each email individually to the email_cache collection
-    for (const email of emails) {
-      if (!email || !email.id) {
-        console.warn('Skipping invalid email without ID');
-        continue;
+    // Loop through each email and save it to Firebase
+    emails.forEach(email => {
+      if (!email.id) return;
+
+      // Ensure receivedAt is a string in ISO format
+      let normalizedEmail: any = { ...email };
+
+      // Convert receivedAt to ISO string if it's a number
+      if (typeof normalizedEmail.receivedAt === 'number') {
+        normalizedEmail.receivedAt = new Date(normalizedEmail.receivedAt).toISOString();
+      } else if (normalizedEmail.receivedAt && typeof normalizedEmail.receivedAt === 'string') {
+        // Ensure it's a valid ISO string
+        try {
+          normalizedEmail.receivedAt = new Date(normalizedEmail.receivedAt).toISOString();
+        } catch (e) {
+          console.warn(`Invalid receivedAt format for email ${email.id}:`, e);
+        }
       }
 
-      // First convert receivedAt if it's a number
-      const normalizedEmail = {
-        ...email,
-        // Ensure receivedAt is a string for consistent storage
-        receivedAt: typeof email.receivedAt === 'number'
-          ? email.receivedAt.toString()
-          : email.receivedAt,
-        // Set sortTimestamp if it doesn't exist
-        sortTimestamp: ('sortTimestamp' in email && email.sortTimestamp) || (
-          // Try to derive from receivedAt
-          typeof email.receivedAt === 'number' ?
-            email.receivedAt :
-            (typeof email.receivedAt === 'string' ?
-              new Date(email.receivedAt).getTime() :
-              Date.now())
-        ),
-        // Add lastUpdated timestamp
-        lastUpdated: Date.now()
-      };
+      // Set sortTimestamp based on receivedAt for consistent sorting
+      normalizedEmail.sortTimestamp = normalizedEmail.receivedAt
+        ? new Date(normalizedEmail.receivedAt).getTime()
+        : Date.now();
 
-      // Then sanitize the entire object
+      // Log original and normalized timestamps for debugging
+      console.log('Email timestamp debug:', {
+        id: email.id,
+        original: {
+          receivedAt: email.receivedAt,
+          sortTimestamp: 'sortTimestamp' in email ? email.sortTimestamp : undefined
+        },
+        normalized: {
+          receivedAt: normalizedEmail.receivedAt,
+          sortTimestamp: normalizedEmail.sortTimestamp
+        }
+      });
+
+      // Sanitize the email object before saving
       const sanitizedEmail = sanitizeObject(normalizedEmail);
 
-      try {
-        // Save to individual email document
-        const emailRef = doc(db, FIREBASE_COLLECTIONS.EMAIL_CACHE, email.id);
-        await setDoc(emailRef, sanitizedEmail);
+      // Create a document reference and set the sanitized email
+      const docRef = doc(emailsCollection, email.id);
+      batch.set(docRef, sanitizedEmail, { merge: true });
+    });
 
-        // If thread ID exists, update thread cache too
-        if (email.threadId) {
-          // Calculate the timestamp that should be used for the thread
-          const threadTimestamp = ('sortTimestamp' in normalizedEmail) ? normalizedEmail.sortTimestamp : (
-            typeof email.receivedAt === 'number' ?
-              email.receivedAt :
-              (typeof email.receivedAt === 'string' ?
-                new Date(email.receivedAt).getTime() :
-                Date.now())
-          );
-
-          const threadRef = doc(db, FIREBASE_COLLECTIONS.THREAD_CACHE, email.threadId);
-          await setDoc(threadRef, {
-            emailId: email.id,
-            threadId: email.threadId,
-            subject: email.subject,
-            sender: email.sender,
-            receivedAt: email.receivedAt,
-            // CRITICAL FIX: Add lastMessageTimestamp for thread sorting
-            lastMessageTimestamp: threadTimestamp,
-            lastUpdated: Date.now()
-          }, { merge: true });
-        }
-
-        // If email has content and it's not already in the content collection, save it
-        if (email.content) {
-          const emailContentRef = doc(db, 'email_content', email.id);
-          await setDoc(emailContentRef, {
-            content: email.content,
-            timestamp: Date.now()
-          });
-        }
-
-        savedCount++;
-      } catch (error) {
-        console.error(`Error saving email ${email.id} to Firebase:`, error);
-      }
-    }
-
-    console.log(`Saved ${savedCount} emails to Firebase`);
+    // Commit the batch
+    await batch.commit();
+    console.log('Successfully saved emails to Firebase');
   } catch (error) {
     console.error('Error saving emails to Firebase:', error);
   }
@@ -1492,10 +1481,20 @@ export default function FAQAutoReplyV2() {
   const loadEmails = useCallback(async (skipCache: boolean = false, pageNumber?: number) => {
     // Add debounce check
     const now = Date.now();
-    console.log('DEBUG: loadEmails called with skipCache=', skipCache, 'pageNumber=', pageNumber);
+    console.log('=== LOAD EMAILS FUNCTION CALLED ===');
+    console.log('Parameters:', { skipCache, pageNumber });
+    console.log('State:', {
+      loading,
+      loadingMore,
+      hasMore,
+      page,
+      'lastLoadTime.current': lastLoadTime.current,
+      'MIN_FETCH_INTERVAL': MIN_FETCH_INTERVAL,
+      'timeSinceLastLoad': now - lastLoadTime.current
+    });
 
     if (now - lastLoadTime.current < MIN_FETCH_INTERVAL && !skipCache) {
-      console.log('Skipping loadEmails due to rate limit');
+      console.error('⚠️ Skipping loadEmails due to rate limit');
       return;
     }
 
@@ -1504,26 +1503,222 @@ export default function FAQAutoReplyV2() {
       clearTimeout(loadTimeout.current);
     }
 
+    // If pageNumber is provided and greater than 1, we're loading more emails
+    const isLoadingMore = pageNumber && pageNumber > 1;
+    console.log("📊 loadEmails PAGINATION:", {
+      pageNumber,
+      isLoadingMore,
+      'current loadingMore state': loadingMore
+    });
+
+    if (isLoadingMore) {
+      console.log("🔄 Setting loadingMore = true for pagination");
+      setLoadingMore(true);
+    } else {
+      console.log("🔄 Setting loading = true for initial load");
+      setLoading(true);
+    }
+
     try {
-      setIsLoading(true);
+      // Only use cache for initial load, not for pagination
+      if (!isLoadingMore) {
+        console.log("💾 Checking cache for initial load");
+        const cached = !skipCache ? loadFromCache(CACHE_KEYS.EMAILS) : null;
+        if (cached && !skipCache) {
+          // Handle both formats: direct array or nested in emails property
+          const emailsData = Array.isArray(cached) ? cached : cached.emails;
+          if (emailsData && emailsData.length > 0) {
+            // Cast the cached data to the correct type before setting
+            console.log('DEBUG: Using cached emails:', emailsData.length);
 
-      // Add cache check
-      const cached = !skipCache ? loadFromCache(CACHE_KEYS.EMAILS) : null;
-      if (cached && !skipCache) {
-        // Handle both formats: direct array or nested in emails property
-        const emailsData = Array.isArray(cached) ? cached : cached.emails;
-        if (emailsData && emailsData.length > 0) {
-          // Cast the cached data to the correct type before setting
-          console.log('DEBUG: Using cached emails:', emailsData.length);
-
-          // Ensure cached emails are sorted
-          const sortedCachedEmails = sortEmails(emailsData as ExtendedEmail[]) as ExtendedEmail[];
-          setEmails(sortedCachedEmails);
-          setLastFetchTimestamp(Date.now());
-          return;
+            // Ensure cached emails are sorted
+            const sortedCachedEmails = sortEmails(emailsData as ExtendedEmail[]) as ExtendedEmail[];
+            setEmails(sortedCachedEmails);
+            setLastFetchTimestamp(Date.now());
+            setLoading(false);
+            return;
+          }
         }
       }
 
+      // For pagination (Load 5 More), fetch directly from Gmail API
+      if (isLoadingMore) {
+        console.log("📥 PAGINATION: Fetching directly from Gmail API");
+        console.log(`Current emails state: page=${page}, emails.length=${emails.length}`);
+        console.log(`Loading page ${pageNumber} of emails from Gmail API... isLoadingMore=${isLoadingMore}`);
+
+        if (!user?.accessToken) {
+          console.error("No access token available");
+          toast.error("Authentication error. Please sign in again.");
+          setLoadingMore(false);
+          return;
+        }
+
+        // Find the oldest email timestamp to ensure we get older emails
+        let oldestTimestamp: number | undefined = undefined;
+        if (emails.length > 0) {
+          console.log('Finding oldest email timestamp from', emails.length, 'emails');
+
+          // Get all timestamps from emails
+          const timestamps = emails.map(email => {
+            return email.sortTimestamp ||
+              (email.receivedAt ?
+                (typeof email.receivedAt === 'number' ?
+                  email.receivedAt :
+                  new Date(email.receivedAt).getTime())
+                : 0);
+          }).filter(timestamp => timestamp > 0);
+
+          // Sort timestamps in ascending order (oldest first)
+          timestamps.sort((a, b) => a - b);
+
+          // Get the oldest timestamp
+          if (timestamps.length > 0) {
+            oldestTimestamp = timestamps[0];
+
+            // Subtract 1 second to ensure we get emails older than this one
+            // This helps prevent edge cases where emails have the exact same timestamp
+            oldestTimestamp = oldestTimestamp - 1000;
+
+            console.log('Oldest email timestamp:', {
+              timestamp: oldestTimestamp,
+              date: new Date(oldestTimestamp).toISOString()
+            });
+          }
+        }
+
+        // Build the API URL with pagination and oldest timestamp
+        let apiUrl = `/api/emails/inbox?page=${pageNumber}&limit=5`;
+        if (oldestTimestamp) {
+          apiUrl += `&oldestTimestamp=${oldestTimestamp}`;
+          console.log(`🔍 Requesting emails older than ${new Date(oldestTimestamp).toISOString()}`);
+        } else {
+          console.warn('⚠️ No oldest timestamp found, may fetch duplicate emails');
+        }
+
+        console.log('🔄 About to make API request to:', apiUrl);
+        console.log('Request headers:', {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${user.accessToken ? 'VALID_TOKEN_EXISTS' : 'NO_TOKEN'}`
+        });
+
+        // Declare data variable outside the try/catch block
+        let data;
+
+        try {
+          // Fetch older emails from Gmail API with pagination
+          console.log('⚡ Executing fetch request...');
+          const response = await fetch(apiUrl, {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${user.accessToken}`
+            }
+          });
+
+          console.log('✅ Got response:', {
+            status: response.status,
+            statusText: response.statusText,
+            ok: response.ok
+          });
+
+          if (!response.ok) {
+            throw new Error(`Failed to fetch older emails: ${response.statusText}`);
+          }
+
+          data = await response.json();
+          console.log(`Fetched ${data.emails?.length || 0} older emails from Gmail API (page ${pageNumber})`);
+        } catch (error) {
+          console.error('🚨 Error making API request:', error);
+          throw error; // Re-throw to be handled by the outer catch block
+        }
+
+        // Check if data exists and has emails before proceeding
+        if (data && data.emails && data.emails.length > 0) {
+          // Transform the emails to match ExtendedEmail type
+          const transformedEmails = data.emails.map((email: any) => {
+            // Log the original timestamp data
+            console.log(`Email ${email.id} timestamps: internalDate=${email.internalDate}, receivedAt=${email.receivedAt}`);
+
+            // Ensure proper timestamp handling
+            let receivedAt = email.receivedAt || null;
+            let sortTimestamp = null;
+
+            // If email has internalDate from Gmail, use it
+            if (email.internalDate) {
+              const internalDateTimestamp = parseInt(email.internalDate);
+              if (!isNaN(internalDateTimestamp)) {
+                sortTimestamp = internalDateTimestamp;
+                if (!receivedAt) {
+                  receivedAt = new Date(internalDateTimestamp).toISOString();
+                }
+              }
+            }
+
+            // Ensure all required properties exist for ExtendedEmail type
+            return {
+              id: email.id || '',
+              threadId: email.threadId || '',
+              subject: email.subject || '',
+              sender: email.sender || '',
+              content: email.content || '',
+              receivedAt: receivedAt || new Date().toISOString(),
+              sortTimestamp: sortTimestamp || (receivedAt ? new Date(receivedAt).getTime() : Date.now()),
+              // Copy other properties from the original email
+              ...email,
+            } as ExtendedEmail;
+          });
+
+          // Add the new emails to the existing list
+          setEmails(prevEmails => {
+            // Filter out any duplicates
+            const existingIds = new Set(prevEmails.map((e: ExtendedEmail) => e.id));
+            const uniqueNewEmails = transformedEmails.filter((e: ExtendedEmail) => !existingIds.has(e.id));
+
+            console.log(`Found ${uniqueNewEmails.length} new unique emails out of ${transformedEmails.length} fetched`);
+
+            if (uniqueNewEmails.length === 0) {
+              console.warn('⚠️ No new unique emails found, may need to adjust oldestTimestamp logic');
+            }
+
+            // Combine and sort
+            const combinedEmails = [...prevEmails, ...uniqueNewEmails];
+            return sortEmails(combinedEmails) as ExtendedEmail[];
+          });
+
+          // Update pagination state
+          setPage(pageNumber);
+          setHasMore(data.hasMore);
+
+          // Save the combined emails to Firebase for persistence
+          saveEmailsToFirebase(transformedEmails);
+
+          // Load any existing questions for the new emails
+          for (const email of transformedEmails) {
+            getQuestionsForEmail(email.id).then(questions => {
+              if (questions && questions.length > 0) {
+                setEmailQuestions(prev => {
+                  const newMap = new Map(prev);
+                  newMap.set(email.id, questions);
+                  return newMap;
+                });
+                console.log(`Loaded ${questions.length} existing questions for email ${email.id}`);
+              }
+            }).catch(error => {
+              console.error(`Error loading questions for email ${email.id}:`, error);
+            });
+          }
+        } else {
+          // If no more emails were found, update hasMore
+          setHasMore(false);
+        }
+
+        setLastFetchTimestamp(Date.now());
+        setLoadingMore(false);
+        return;
+      }
+
+      // For initial load, try Firebase first
       console.log("Loading fresh emails...");
 
       // Actual fetch logic here - loading from Firebase
@@ -1558,7 +1753,8 @@ export default function FAQAutoReplyV2() {
       console.error("Error loading emails:", error);
       toast.error("Failed to load emails");
     } finally {
-      setIsLoading(false);
+      setLoading(false);
+      setLoadingMore(false);
       setManualRefreshTriggered(false);
     }
   }, [user?.accessToken, page, MIN_FETCH_INTERVAL, setManualRefreshTriggered]);
@@ -1878,11 +2074,61 @@ export default function FAQAutoReplyV2() {
 
   }, [answeredFAQs, checkEmailAnsweredStatus, emailQuestions, calculatePatternSimilarity, similarityThreshold, user]);
 
-  const handleLoadMore = () => {
-    if (!isLoading && hasMore) {
-      loadEmails(false);
+  const handleLoadMore = useCallback(() => {
+    console.log('Load more clicked!');
+    console.log('Current state before load more:', {
+      loading,
+      isLoading,
+      loadingMore,
+      hasMore,
+      page,
+      user: user ? 'User exists' : 'No user',
+      userAccessToken: user?.accessToken ? 'Token exists' : 'No token',
+      emailsCount: emails.length
+    });
+
+    // Log the timestamps of current emails to help diagnose issues
+    if (emails.length > 0) {
+      console.log('CURRENT EMAILS TIMESTAMPS:');
+      const sortedEmails = [...emails].sort((a, b) => {
+        const aTime = a.sortTimestamp || (a.receivedAt ? new Date(a.receivedAt).getTime() : 0);
+        const bTime = b.sortTimestamp || (b.receivedAt ? new Date(b.receivedAt).getTime() : 0);
+        return aTime - bTime; // Ascending order (oldest first)
+      });
+
+      // Log oldest 3 and newest 3 emails
+      const oldestEmails = sortedEmails.slice(0, 3);
+      const newestEmails = sortedEmails.slice(-3);
+
+      oldestEmails.forEach((email, i) => {
+        const timestamp = email.sortTimestamp || (email.receivedAt ? new Date(email.receivedAt).getTime() : 0);
+        console.log(`Oldest #${i + 1}: ID=${email.id}, Subject="${email.subject}", Timestamp=${timestamp}, Date=${new Date(timestamp).toISOString()}`);
+      });
+
+      newestEmails.forEach((email, i) => {
+        const timestamp = email.sortTimestamp || (email.receivedAt ? new Date(email.receivedAt).getTime() : 0);
+        console.log(`Newest #${i + 1}: ID=${email.id}, Subject="${email.subject}", Timestamp=${timestamp}, Date=${new Date(timestamp).toISOString()}`);
+      });
     }
-  };
+
+    if (!loading && hasMore) {
+      const nextPage = page + 1;
+      console.log(`Loading more emails (page ${nextPage})...`);
+
+      // Set loading state for 'Load More'
+      setLoadingMore(true);
+      console.log('SETTING loadingMore = true');
+
+      // Now call loadEmails with the next page number - pass skipCache=true to bypass rate limit check
+      console.log(`Calling loadEmails with skipCache=true, pageNumber=${nextPage}`);
+      loadEmails(true, nextPage);
+    } else {
+      console.log('⚠️ Not loading more because:', {
+        loading: loading ? 'Already loading' : 'Not loading',
+        hasMore: hasMore ? 'Has more' : 'No more emails'
+      });
+    }
+  }, [loading, hasMore, page, loadEmails, user, emails]);
 
   const handleAutoReply = async (email: ExtendedEmail) => {
     // Skip generating replies for emails where the user was last to reply
@@ -3321,7 +3567,7 @@ ${signature}`;
         {hasMore && !loadingMore && (
           <div className="flex justify-center mt-8">
             <button
-              onClick={() => loadEmails(false, page + 1)}
+              onClick={handleLoadMore}
               className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
             >
               {loadingMore ? (
@@ -4573,11 +4819,14 @@ ${signature}`;
 
         // Transform the emails to match ExtendedEmail type
         const transformedEmails = data.emails.map((email: any) => {
-          // Ensure proper timestamp handling - explicit conversion
+          // Log the original timestamp data
+          console.log(`Email ${email.id} timestamps: internalDate=${email.internalDate}, receivedAt=${email.receivedAt}`);
+
+          // Ensure proper timestamp handling
           let receivedAt = email.receivedAt || null;
           let sortTimestamp = null;
 
-          // If email has internalDate from Gmail, use it (most reliable source)
+          // If email has internalDate from Gmail, use it
           if (email.internalDate) {
             const internalDateTimestamp = parseInt(email.internalDate);
             if (!isNaN(internalDateTimestamp)) {
@@ -4587,33 +4836,20 @@ ${signature}`;
               }
             }
           }
-          // Otherwise use receivedAt if available
-          else if (receivedAt) {
-            const timestamp = typeof receivedAt === 'number' ?
-              receivedAt :
-              new Date(receivedAt).getTime();
 
-            if (!isNaN(timestamp)) {
-              sortTimestamp = timestamp;
-            }
-          }
-
-          // Last resort: use current time
-          if (!sortTimestamp) {
-            sortTimestamp = Date.now();
-            if (!receivedAt) {
-              receivedAt = new Date().toISOString();
-            }
-          }
-
+          // Ensure all required properties exist for ExtendedEmail type
           return {
+            id: email.id || '',
+            threadId: email.threadId || '',
+            subject: email.subject || '',
+            sender: email.sender || '',
+            content: email.content || '',
+            receivedAt: receivedAt || new Date().toISOString(),
+            sortTimestamp: sortTimestamp || (receivedAt ? new Date(receivedAt).getTime() : Date.now()),
+            // Copy other properties from the original email
             ...email,
-            receivedAt: receivedAt,
-            sortTimestamp: sortTimestamp,
-            status: (email.status as ExtendedEmail['status']) || 'pending',
-            isNotRelevant: email.isNotRelevant || false,
-          };
-        }) as ExtendedEmail[];
+          } as ExtendedEmail;
+        });
 
         // Log debug info about timestamps
         console.log(`DEBUG: Created ${transformedEmails.length} emails with timestamps`);
@@ -4629,7 +4865,7 @@ ${signature}`;
         console.log(`DEBUG: Created ${transformedEmails.length} emails with timestamps`);
 
         // Set the new emails in state
-        const sortedEmails = sortEmails(transformedEmails);
+        const sortedEmails = sortEmails(transformedEmails) as ExtendedEmail[];
         setEmails(sortedEmails);
 
         // Save the emails to Firebase
@@ -4767,6 +5003,27 @@ ${signature}`;
     }
   };
 
+  // Add this helper function after the saveQuestionsToFirebase function
+  const getQuestionsForEmail = async (emailId: string): Promise<GenericFAQ[] | null> => {
+    try {
+      const db = getFirebaseDB();
+      if (!db) return null;
+
+      const questionRef = doc(db, FIREBASE_QUESTIONS_COLLECTION, emailId);
+      const questionDoc = await getDoc(questionRef);
+
+      if (questionDoc.exists()) {
+        const data = questionDoc.data();
+        return data.questions || [];
+      }
+
+      return null;
+    } catch (error) {
+      console.error('Error getting questions from Firebase:', error);
+      return null;
+    }
+  };
+
   return (
     <div className="space-y-8">
       <Layout>
@@ -4791,3 +5048,4 @@ ${signature}`;
     </div>
   );
 }
+
