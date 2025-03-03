@@ -75,13 +75,13 @@ function validateBuild() {
 
 function main() {
   console.log('🔍 Starting pre-deployment validation...\n');
-  
+
   validateEnvironmentVariables();
   validateTypeScript();
   validateESLint();
   validateBuild();
-  
+
   console.log('\n✨ All validations passed! Ready for deployment.');
 }
 
-main(); 
+main();

@@ -46,6 +46,10 @@ export async function POST(request: NextRequest) {
     const messages = threadDetails.data.messages;
     const mostRecentMessage = messages[messages.length - 1];
 
+    // Extract the internalDate (received timestamp) - critical for timestamp preservation
+    const internalDate = mostRecentMessage.internalDate || '0';
+    const receivedAt = parseInt(internalDate);
+
     // Extract email content
     const { content, contentType } = extractEmailBody(mostRecentMessage);
 
@@ -70,7 +74,8 @@ export async function POST(request: NextRequest) {
       sender: mostRecentMessage.payload?.headers?.find(h => h.name === 'From')?.value || 'Unknown Sender',
       content: content || '',
       contentType: contentType || 'text/plain',
-      receivedAt: parseInt(mostRecentMessage.internalDate || '0'),
+      receivedAt: receivedAt,
+      sortTimestamp: receivedAt, // Add explicit sortTimestamp
       threadMessages
     };
 

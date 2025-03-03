@@ -6,8 +6,9 @@ export interface Email {
   subject: string;
   sender: string;
   content: string | EmailContent;
-  receivedAt: string;
-  timestamp?: string;
+  receivedAt: number;
+  sortTimestamp: number;
+  timestamp?: number;
   hasReply?: boolean;
   isReplied?: boolean;
   isNotRelevant?: boolean;
@@ -15,7 +16,7 @@ export interface Email {
     id: string;
     sender: string;
     content: string | EmailContent;
-    receivedAt: string;
+    receivedAt: number;
     subject?: string;
   }>;
   analysis?: {
@@ -39,13 +40,13 @@ export interface Email {
     id?: string;
     question: string;
     answer: string;
-    confidence?: number;
+    confidence: number;
   };
   suggestedReply?: string;
   isGeneratingReply?: boolean;
   showFullContent?: boolean;
   category?: 'support' | 'general' | 'spam';
-  status?: 'pending' | 'processed' | 'replied';
+  status?: 'pending' | 'processed' | 'not_relevant';
   irrelevanceReason?: string;
   emailIds?: string[];
 }
@@ -69,29 +70,33 @@ export interface BaseEmail {
   threadId: string;
   subject: string;
   sender: string;
-  content: string | EmailContent;
   receivedAt: string | number;
+  content: string | {
+    html: string | null;
+    text: string | null;
+  };
 }
 
 export interface ExtendedEmail extends BaseEmail {
-  status?: 'pending' | 'processed' | 'replied' | 'removed_from_ready' | 'not_relevant';
+  sortTimestamp: number;
+  isRefreshing?: boolean;
+  isGeneratingReply?: boolean;
+  status?: 'pending' | 'processed' | 'not_relevant';
   matchedFAQ?: {
     question: string;
     answer: string;
-    confidence?: number;
+    confidence: number;
   };
-  questions?: GenericFAQ[];
   suggestedReply?: string;
-  showFullContent?: boolean;
-  isGeneratingReply?: boolean;
-  isNotRelevant?: boolean;
   isReplied?: boolean;
-  isMovingToReady?: boolean;
+  isNotRelevant?: boolean;
+  questions?: GenericFAQ[];
+  threadMessages?: ThreadMessage[];
+  showFullContent?: boolean;
   irrelevanceReason?: string;
   irrelevanceCategory?: string;
   irrelevanceConfidence?: number;
   irrelevanceDetails?: string;
-  threadMessages?: ThreadMessage[];
   gmailError?: {
     message: string;
     details?: any;
@@ -100,5 +105,4 @@ export interface ExtendedEmail extends BaseEmail {
     html: string | null;
     text: string | null;
   };
-  sortTimestamp?: number;
 }

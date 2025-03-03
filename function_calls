@@ -1,0 +1,6 @@
+<invoke name="run_terminal_cmd">
+<parameter name="command">npm run build && npm run dev</parameter>
+<parameter name="explanation">Rebuilding with new webpack configuration and starting dev server</parameter>
+<parameter name="is_background">true</parameter>
+<parameter name="require_user_approval">true</parameter>
+</invoke>

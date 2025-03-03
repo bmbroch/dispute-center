@@ -52,9 +52,33 @@ export async function POST(req: Request) {
     }
     const db = getFirestore(app);
 
-    // Get existing FAQs to avoid duplicates
-    const faqRef = db.collection('faqs');
-    const faqSnapshot = await faqRef.get();
+    // Extract user email from the request headers or use a default
+    const authHeader = req.headers.get('Authorization');
+    let userEmail = 'default@example.com'; // Default fallback
+
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      try {
+        const accessToken = authHeader.split(' ')[1];
+        const userInfoResponse = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+          headers: {
+            Authorization: `Bearer ${accessToken}`
+          }
+        });
+
+        if (userInfoResponse.ok) {
+          const userInfo = await userInfoResponse.json();
+          userEmail = userInfo.email || userEmail;
+        }
+      } catch (error) {
+        console.error('Error fetching user info:', error);
+      }
+    }
+
+    const user = { email: userEmail };
+
+    // Get existing FAQs from user's subcollection
+    const userFaqsRef = db.collection('users').doc(user.email).collection('faqs');
+    const faqSnapshot = await userFaqsRef.get();
     const existingFaqs = faqSnapshot.docs.map(doc => ({
       id: doc.id,
       ...doc.data()

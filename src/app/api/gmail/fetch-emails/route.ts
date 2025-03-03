@@ -84,9 +84,9 @@ const fetchMessageBatch = async (gmail: gmail_v1.Gmail, messageIds: string[], us
           });
 
           // If no content in FULL format or content is incomplete, try RAW format
-          if (!response.data.payload?.body?.data && 
-              (!response.data.payload?.parts || 
-               !response.data.payload.parts.some(p => p.body?.data || p.parts))) {
+          if (!response.data.payload?.body?.data &&
+            (!response.data.payload?.parts ||
+              !response.data.payload.parts.some(p => p.body?.data || p.parts))) {
             console.log(`No content found in FULL format for message ${id}, trying RAW format`);
             const rawResponse = await gmail.users.messages.get({
               userId,
@@ -174,7 +174,7 @@ interface GmailErrorResponse extends Error {
 export async function POST(request: NextRequest) {
   try {
     console.log('=== Starting Gmail API Request ===');
-    
+
     // Get authorization header
     const authHeader = request.headers.get('Authorization');
     if (!authHeader) {
@@ -210,8 +210,8 @@ export async function POST(request: NextRequest) {
     });
 
     if (!threadsResponse.data.threads || threadsResponse.data.threads.length === 0) {
-      return NextResponse.json({ 
-        emails: [], 
+      return NextResponse.json({
+        emails: [],
         nextPageToken: null,
         debug: {
           message: 'No threads found',
@@ -236,7 +236,7 @@ export async function POST(request: NextRequest) {
             id: thread.id,
             format: 'full',
             metadataHeaders: [
-              'From', 'To', 'Subject', 'Date', 
+              'From', 'To', 'Subject', 'Date',
               'Message-ID', 'References', 'In-Reply-To',
               'Content-Type', 'Content-Transfer-Encoding',
               'Delivered-To', 'Received', 'Reply-To',
@@ -351,13 +351,16 @@ export async function POST(request: NextRequest) {
 
           const content = html || text || message.snippet || '';
 
+          // Get timestamp from internalDate
+          const timestamp = parseInt(message.internalDate || '0');
+
           return {
             id: message.id || '',
             subject: headers.get('subject') || 'No Subject',
             sender: headers.get('from') || '',
             content: content,
-            receivedAt: headers.get('date') || 
-              (message.internalDate ? new Date(parseInt(message.internalDate)).toISOString() : new Date().toISOString())
+            receivedAt: timestamp,
+            sortTimestamp: timestamp
           };
         }).filter((msg): msg is NonNullable<typeof msg> => msg !== null);
 
@@ -370,6 +373,7 @@ export async function POST(request: NextRequest) {
           sender: firstMessage.sender,
           content: firstMessage.content,
           receivedAt: firstMessage.receivedAt,
+          sortTimestamp: firstMessage.sortTimestamp,
           threadMessages: threadMessages, // Include all messages in the thread
           debug: {
             historyId: thread.historyId,
@@ -449,4 +453,4 @@ export async function POST(request: NextRequest) {
       }
     }, { status: gmailError.code || 500 });
   }
-} 
+}

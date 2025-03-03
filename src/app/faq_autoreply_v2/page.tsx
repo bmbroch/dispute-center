@@ -432,7 +432,11 @@ const loadEmailsFromFirebase = async (user: { email: string | null } | null) => 
 
     // Convert map to array and sort by sortTimestamp
     const sortedEmails = Array.from(emailMap.values())
-      .sort((a, b) => b.sortTimestamp - a.sortTimestamp);
+      .sort((a, b) => {
+        const aTimestamp = a.sortTimestamp || 0;
+        const bTimestamp = b.sortTimestamp || 0;
+        return bTimestamp - aTimestamp;
+      });
 
     return sortedEmails;
   } catch (error) {
@@ -2095,7 +2099,11 @@ export default function FAQAutoReplyV2() {
         if (matchedFAQ) {
           const updatedEmail = {
             ...email,
-            matchedFAQ,
+            matchedFAQ: {
+              question: matchedFAQ.question,
+              answer: matchedFAQ.answer || '',
+              confidence: matchedFAQ.confidence || 1  // Provide default value
+            },
             status: 'processed' as const
           };
 
@@ -2817,7 +2825,11 @@ export default function FAQAutoReplyV2() {
         ...email,
         questions: allQuestions,
         status: allQuestionsHaveAnswers && matchedFAQ ? 'processed' : 'pending',
-        matchedFAQ: matchedFAQ || undefined
+        matchedFAQ: matchedFAQ ? {
+          question: matchedFAQ.question,
+          answer: matchedFAQ.answer,
+          confidence: matchedFAQ.confidence || 1  // Provide default value if undefined
+        } : undefined
       };
 
       // Update emails state

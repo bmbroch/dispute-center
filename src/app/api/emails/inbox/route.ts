@@ -214,10 +214,16 @@ async function getEmailAnalysis(email: { threadId: string; subject: string; cont
       return null;
     }
 
-    // Get existing FAQs to check for matches
-    const faqRef = db.collection('faqs');
-    const faqSnapshot = await faqRef.get();
-    const existingFaqs = faqSnapshot.docs.map((doc: FirebaseFirestore.QueryDocumentSnapshot) => ({
+    // Extract user email from the request or use a default
+    let userEmail = 'default@example.com'; // Default fallback
+
+    // We don't have user email in the email object, so we'll use the default
+    const user = { email: userEmail };
+
+    // Get existing FAQs from user's subcollection
+    const userFaqsRef = db.collection('users').doc(user.email).collection('faqs');
+    const faqSnapshot = await userFaqsRef.get();
+    const existingFaqs = faqSnapshot.docs.map(doc => ({
       id: doc.id,
       ...doc.data()
     }));
@@ -279,7 +285,7 @@ async function getEmailAnalysis(email: { threadId: string; subject: string; cont
       }
 
       // Create the analysis object with default values for missing fields
-      const emailAnalysis = {
+      const emailAnalysis: EmailAnalysis = {
         threadId: email.threadId,
         timestamp: new Date().toISOString(),
         analysis: {
@@ -313,7 +319,7 @@ async function getEmailAnalysis(email: { threadId: string; subject: string; cont
         // Store the questions in Firebase
         await analysisRef.set({
           questions: analysis.questions,
-          timestamp: Date.now()
+          timestamp: Date.now()  // Ensure consistent numeric timestamp
         }, { merge: true });
       }
 
@@ -471,7 +477,7 @@ async function getGmailClient(accessToken: string): Promise<gmail_v1.Gmail | nul
     if (!firebaseApp) {
       throw new Error('Failed to initialize Firebase Admin');
     }
-    const db = firebaseApp.firestore();
+    const db = getFirestore(firebaseApp);
 
     return gmail;
   } catch (error) {
@@ -508,7 +514,7 @@ export async function GET(request: NextRequest) {
     if (!firebaseApp) {
       return NextResponse.json({ error: 'Failed to initialize Firebase Admin' }, { status: 500 });
     }
-    const db = firebaseApp.firestore();
+    const db = getFirestore(firebaseApp);
 
     // Build the query string
     let queryString = 'in:inbox -label:automated-reply';
@@ -562,20 +568,24 @@ export async function GET(request: NextRequest) {
               subject: message.payload?.headers?.find(h => h.name === 'Subject')?.value || 'No Subject',
               sender: message.payload?.headers?.find(h => h.name === 'From')?.value || 'Unknown Sender',
               content: messageContent || '',
-              receivedAt: parseInt(message.internalDate || '0'),
+              receivedAt: parseInt(message.internalDate || '0')  // Already using number
             };
           }).reverse(); // Reverse to get oldest first
 
-          return {
+          // Create response object
+          const refreshedEmail = {
             id: mostRecentMessage.id!,
             threadId: thread.id!,
-            subject: mostRecentMessage.payload.headers?.find(h => h.name === 'Subject')?.value || 'No Subject',
-            sender: mostRecentMessage.payload.headers?.find(h => h.name === 'From')?.value || 'Unknown Sender',
+            subject: mostRecentMessage.payload?.headers?.find(h => h.name === 'Subject')?.value || 'No Subject',
+            sender: mostRecentMessage.payload?.headers?.find(h => h.name === 'From')?.value || 'Unknown Sender',
             content: content || '',
-            receivedAt: parseInt(mostRecentMessage.internalDate || '0'),
-            threadMessages,
-            extractionError
+            contentType: mostRecentMessage.payload?.mimeType || 'text/plain',
+            receivedAt: parseInt(mostRecentMessage.internalDate || '0'),  // Use number
+            sortTimestamp: parseInt(mostRecentMessage.internalDate || '0'),  // Use same number for consistency
+            threadMessages
           };
+
+          return refreshedEmail;
         } catch (error) {
           console.error(`Error processing thread ${thread.id}:`, error);
           return null;
@@ -584,24 +594,23 @@ export async function GET(request: NextRequest) {
     );
 
     // Filter out failed threads first
-    const validThreads = processedThreads.filter((thread): thread is EmailResponse => {
-      if (!thread) return false;
-      return (
-        typeof thread.id === 'string' &&
-        typeof thread.threadId === 'string' &&
-        typeof thread.subject === 'string' &&
-        typeof thread.sender === 'string' &&
-        typeof thread.content === 'string' &&
-        typeof thread.receivedAt === 'number' &&
-        Array.isArray(thread.threadMessages)
-      );
+    const validThreads = processedThreads.filter((thread): thread is NonNullable<typeof thread> => {
+      return thread !== null &&
+        typeof thread === 'object' &&
+        'id' in thread &&
+        'threadId' in thread &&
+        'subject' in thread &&
+        'sender' in thread &&
+        'content' in thread &&
+        'receivedAt' in thread &&
+        'threadMessages' in thread;
     });
 
     // Check not relevant status for all threads in parallel
     const notRelevantChecks = await Promise.all(
       validThreads.map(async thread => ({
         thread,
-        isNotRelevant: await isEmailNotRelevant(thread.id, db)
+        isNotRelevant: thread ? await isEmailNotRelevant(thread.id, db) : false
       }))
     );
 

@@ -48,26 +48,50 @@ export async function POST(req: NextRequest) {
     }
     const db = getFirestore(app);
 
+    // Extract user email from the request headers or use a default
+    const authHeader = req.headers.get('Authorization');
+    let userEmail = 'default@example.com'; // Default fallback
+
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      try {
+        const accessToken = authHeader.split(' ')[1];
+        const userInfoResponse = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+          headers: {
+            Authorization: `Bearer ${accessToken}`
+          }
+        });
+
+        if (userInfoResponse.ok) {
+          const userInfo = await userInfoResponse.json();
+          userEmail = userInfo.email || userEmail;
+        }
+      } catch (error) {
+        console.error('Error fetching user info:', error);
+      }
+    }
+
+    const user = { email: userEmail };
+
     // Check cache first if not forcing refresh
     if (!forceRefresh) {
       const analysisRef = db.collection('email_analyses').doc(email.threadId);
       const analysisDoc = await analysisRef.get();
-      
+
       if (analysisDoc.exists) {
         const cachedAnalysis = analysisDoc.data() as EmailAnalysis;
         const cacheAge = Date.now() - new Date(cachedAnalysis.timestamp).getTime();
-        
+
         // Return cached analysis if it's not expired
         if (cacheAge < CACHE_EXPIRY) {
           console.log('Returning cached analysis for thread:', email.threadId);
-          
+
           // Add cache info to response
           const cacheInfo: CacheInfo = {
             source: 'cache',
             age: Math.round(cacheAge / (1000 * 60 * 60 * 24)), // Age in days
             expiresIn: Math.round((CACHE_EXPIRY - cacheAge) / (1000 * 60 * 60 * 24)) // Days until expiry
           };
-          
+
           return NextResponse.json({
             ...cachedAnalysis,
             _cache: cacheInfo
@@ -76,9 +100,9 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Get existing FAQs to check for matches
-    const faqRef = db.collection('faqs');
-    const faqSnapshot = await faqRef.get();
+    // Get existing FAQs from user's subcollection
+    const userFaqsRef = db.collection('users').doc(user.email).collection('faqs');
+    const faqSnapshot = await userFaqsRef.get();
     const existingFaqs = faqSnapshot.docs.map(doc => ({
       id: doc.id,
       ...doc.data()
@@ -95,7 +119,7 @@ export async function POST(req: NextRequest) {
           2. Match with existing FAQs if possible
           3. Generate suggested questions for new FAQs if needed
           4. Analyze sentiment and key points
-          
+
           Return a JSON object with:
           {
             "suggestedQuestions": Array of potential FAQ patterns,
@@ -215,4 +239,4 @@ export async function GET(req: NextRequest) {
       { status: 500 }
     );
   }
-} 
+}
