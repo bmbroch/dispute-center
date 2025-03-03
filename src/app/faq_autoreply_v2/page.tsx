@@ -299,8 +299,19 @@ const FIREBASE_CACHE_DURATION = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
 const isUserLastSender = (email: ExtendedEmail, user: any): boolean => {
   if (!email?.threadMessages || !email.threadMessages.length || !user?.email) return false;
 
-  // Get the most recent message in the thread
-  const lastMessage = email.threadMessages[email.threadMessages.length - 1];
+  // Sort messages by receivedAt timestamp to ensure we get the most recent one
+  // Make a copy of the array first to avoid modifying the original
+  const sortedMessages = [...email.threadMessages].sort((a, b) => {
+    // Sort by receivedAt (descending) - most recent first
+    if (a.receivedAt && b.receivedAt) {
+      return b.receivedAt - a.receivedAt;
+    }
+    // If receivedAt is not available, keep original order
+    return 0;
+  });
+
+  // Get the most recent message in the thread (first after sorting descending)
+  const lastMessage = sortedMessages[0];
 
   // Add more defensive checks for undefined values
   if (!lastMessage?.sender) return false;
@@ -347,20 +358,20 @@ const FIREBASE_COLLECTIONS = {
   EMAIL_CONTENT: 'email_content'  // Adding EMAIL_CONTENT collection
 };
 
-const loadEmailsFromFirebase = async () => {
+const loadEmailsFromFirebase = async (user: { email: string | null } | null) => {
   try {
     const db = getFirebaseDB();
-    if (!db) return null;
+    if (!db || !user?.email) return null;
 
-    // Get emails from email_cache, thread_cache, and email_content
-    const emailCacheRef = collection(db, FIREBASE_COLLECTIONS.EMAIL_CACHE);
-    const threadCacheRef = collection(db, FIREBASE_COLLECTIONS.THREAD_CACHE);
-    const emailContentRef = collection(db, 'email_content');
+    // Get emails from user's subcollections
+    const userEmailsRef = collection(db, `users/${user.email}/emails`);
+    const userThreadCacheRef = collection(db, `users/${user.email}/thread_cache`);
+    const userEmailContentRef = collection(db, `users/${user.email}/email_content`);
 
-    const [emailCacheSnapshot, threadCacheSnapshot, emailContentSnapshot] = await Promise.all([
-      getDocs(emailCacheRef),
-      getDocs(threadCacheRef),
-      getDocs(emailContentRef)
+    const [emailsSnapshot, threadCacheSnapshot, emailContentSnapshot] = await Promise.all([
+      getDocs(userEmailsRef),
+      getDocs(userThreadCacheRef),
+      getDocs(userEmailContentRef)
     ]);
 
     // Create maps to merge data
@@ -371,8 +382,12 @@ const loadEmailsFromFirebase = async () => {
     // Process thread cache documents first to get latest timestamps
     threadCacheSnapshot.docs.forEach((doc) => {
       const data = doc.data();
+      const lastMessageTimestamp = typeof data.lastMessageTimestamp === 'number' ?
+        data.lastMessageTimestamp :
+        (typeof data.lastMessageTimestamp === 'string' ? parseInt(data.lastMessageTimestamp) : Date.now());
+
       threadMap.set(doc.id, {
-        lastMessageTimestamp: data.lastMessageTimestamp || 0
+        lastMessageTimestamp
       });
     });
 
@@ -382,11 +397,23 @@ const loadEmailsFromFirebase = async () => {
       contentMap.set(doc.id, data.content);
     });
 
-    // Process email cache documents and merge with thread data
-    emailCacheSnapshot.docs.forEach((doc) => {
+    // Process emails and ensure consistent timestamps
+    emailsSnapshot.docs.forEach((doc) => {
       const data = doc.data();
-      const content = contentMap.get(doc.id);
-      const threadInfo = data.threadId ? threadMap.get(data.threadId) : null;
+
+      // Ensure receivedAt is a number
+      const receivedAt = typeof data.receivedAt === 'number' ?
+        data.receivedAt :
+        (typeof data.receivedAt === 'string' ? parseInt(data.receivedAt) : Date.now());
+
+      // Get thread timestamp
+      const threadInfo = threadMap.get(data.threadId);
+
+      // Determine sortTimestamp with proper fallbacks
+      const sortTimestamp = data.sortTimestamp && typeof data.sortTimestamp === 'number' ?
+        data.sortTimestamp :
+        threadInfo?.lastMessageTimestamp ||
+        receivedAt;
 
       const email: ExtendedEmail = {
         ...data,
@@ -394,36 +421,18 @@ const loadEmailsFromFirebase = async () => {
         threadId: data.threadId,
         subject: data.subject,
         sender: data.sender,
-        receivedAt: data.receivedAt,
-        content: content || data.content,
-        // Use explicit timestamp hierarchy: sortTimestamp in data > thread's lastMessageTimestamp > receivedAt
-        sortTimestamp: data.sortTimestamp || threadInfo?.lastMessageTimestamp || (
-          data.receivedAt ?
-            (typeof data.receivedAt === 'number' ?
-              data.receivedAt :
-              new Date(data.receivedAt).getTime()) :
-            Date.now()
-        ),
-        isNotRelevant: data.status === 'not_relevant',
+        content: contentMap.get(doc.id) || data.content,
+        receivedAt,
+        sortTimestamp,
         status: data.status || 'pending'
       };
-
-      // Log timestamps for debugging
-      console.log(`Loaded email ${doc.id} from Firebase:`, {
-        receivedAt: data.receivedAt,
-        sortTimestamp: email.sortTimestamp,
-        threadTimestamp: threadInfo?.lastMessageTimestamp,
-        date: email.sortTimestamp ? new Date(email.sortTimestamp).toISOString() : 'unknown'
-      });
 
       emailMap.set(doc.id, email);
     });
 
-    // Convert map to array and use the sortEmails helper function for consistent sorting
-    const allEmails = [...emailMap.values()];
-
-    console.log(`DEBUG: loadEmailsFromFirebase - Sorting ${allEmails.length} emails using sortEmails helper`);
-    const sortedEmails = sortEmails(allEmails) as ExtendedEmail[];
+    // Convert map to array and sort by sortTimestamp
+    const sortedEmails = Array.from(emailMap.values())
+      .sort((a, b) => b.sortTimestamp - a.sortTimestamp);
 
     return sortedEmails;
   } catch (error) {
@@ -432,10 +441,14 @@ const loadEmailsFromFirebase = async () => {
   }
 };
 
-const saveEmailsToFirebase = async (emails: (Email | ExtendedEmail)[]) => {
+const saveEmailsToFirebase = async (emails: (Email | ExtendedEmail)[], user: { email: string | null } | null) => {
   try {
     const db = getFirebaseDB();
     if (!db) return;
+    if (!user?.email) {
+      console.error('Cannot save emails: No user email provided');
+      return;
+    }
 
     // Helper function to sanitize an object by removing undefined values
     const sanitizeObject = (obj: any): any => {
@@ -467,22 +480,27 @@ const saveEmailsToFirebase = async (emails: (Email | ExtendedEmail)[]) => {
         continue;
       }
 
-      // First convert receivedAt if it's a number
+      // Convert receivedAt to a Unix timestamp number
+      let receivedAtTimestamp: number;
+      if (typeof email.receivedAt === 'number') {
+        receivedAtTimestamp = email.receivedAt;
+      } else if (typeof email.receivedAt === 'string') {
+        const parsed = new Date(email.receivedAt).getTime();
+        receivedAtTimestamp = isNaN(parsed) ? Date.now() : parsed;
+      } else {
+        receivedAtTimestamp = Date.now();
+      }
+
+      // Set sortTimestamp based on receivedAt
+      const sortTimestamp = ('sortTimestamp' in email && email.sortTimestamp) || receivedAtTimestamp;
+
+      // Create normalized email object
       const normalizedEmail = {
         ...email,
-        // Ensure receivedAt is a string for consistent storage
-        receivedAt: typeof email.receivedAt === 'number'
-          ? email.receivedAt.toString()
-          : email.receivedAt,
-        // Set sortTimestamp if it doesn't exist
-        sortTimestamp: ('sortTimestamp' in email && email.sortTimestamp) || (
-          // Try to derive from receivedAt
-          typeof email.receivedAt === 'number' ?
-            email.receivedAt :
-            (typeof email.receivedAt === 'string' ?
-              new Date(email.receivedAt).getTime() :
-              Date.now())
-        ),
+        // Always store receivedAt as a Unix timestamp number
+        receivedAt: receivedAtTimestamp,
+        // Always store sortTimestamp as a Unix timestamp number
+        sortTimestamp: sortTimestamp,
         // Add lastUpdated timestamp
         lastUpdated: Date.now()
       };
@@ -492,7 +510,7 @@ const saveEmailsToFirebase = async (emails: (Email | ExtendedEmail)[]) => {
 
       try {
         // First check if the email already exists to preserve status
-        const emailRef = doc(db, FIREBASE_COLLECTIONS.EMAIL_CACHE, email.id);
+        const emailRef = doc(db, `users/${user.email}/emails`, email.id);
         const existingEmailDoc = await getDoc(emailRef);
         let mergedEmail = { ...sanitizedEmail };
 
@@ -523,31 +541,21 @@ const saveEmailsToFirebase = async (emails: (Email | ExtendedEmail)[]) => {
 
         // If thread ID exists, update thread cache too
         if (email.threadId) {
-          // Calculate the timestamp that should be used for the thread
-          const threadTimestamp = ('sortTimestamp' in normalizedEmail) ? normalizedEmail.sortTimestamp : (
-            typeof email.receivedAt === 'number' ?
-              email.receivedAt :
-              (typeof email.receivedAt === 'string' ?
-                new Date(email.receivedAt).getTime() :
-                Date.now())
-          );
-
-          const threadRef = doc(db, FIREBASE_COLLECTIONS.THREAD_CACHE, email.threadId);
+          const threadRef = doc(db, `users/${user.email}/thread_cache`, email.threadId);
           await setDoc(threadRef, {
             emailId: email.id,
             threadId: email.threadId,
             subject: email.subject,
             sender: email.sender,
-            receivedAt: email.receivedAt,
-            // CRITICAL FIX: Add lastMessageTimestamp for thread sorting
-            lastMessageTimestamp: threadTimestamp,
+            receivedAt: receivedAtTimestamp,
+            lastMessageTimestamp: sortTimestamp,
             lastUpdated: Date.now()
           }, { merge: true });
         }
 
         // If email has content and it's not already in the content collection, save it
         if (email.content) {
-          const emailContentRef = doc(db, 'email_content', email.id);
+          const emailContentRef = doc(db, `users/${user.email}/email_content`, email.id);
           await setDoc(emailContentRef, {
             content: email.content,
             timestamp: Date.now()
@@ -560,7 +568,7 @@ const saveEmailsToFirebase = async (emails: (Email | ExtendedEmail)[]) => {
       }
     }
 
-    console.log(`Saved ${savedCount} emails to Firebase`);
+    console.log(`Saved ${savedCount} emails to Firebase under user ${user.email}`);
   } catch (error) {
     console.error('Error saving emails to Firebase:', error);
   }
@@ -602,12 +610,16 @@ const formatTimeRemaining = (milliseconds: number): string => {
 const FIREBASE_QUESTIONS_COLLECTION = 'email_questions';
 
 // Add function to load questions from Firebase
-const loadQuestionsFromFirebase = async () => {
+const loadQuestionsFromFirebase = async (user: { email: string | null } | null) => {
   try {
     const db = getFirebaseDB();
     if (!db) return null;
+    if (!user?.email) {
+      console.error('Cannot load questions: No user email provided');
+      return null;
+    }
 
-    const questionsRef = collection(db, FIREBASE_QUESTIONS_COLLECTION);
+    const questionsRef = collection(db, `users/${user.email}/email_questions`);
     const querySnapshot = await getDocs(questionsRef);
     const questionsMap = new Map<string, GenericFAQ[]>();
 
@@ -626,10 +638,14 @@ const loadQuestionsFromFirebase = async () => {
 };
 
 // Add function to save questions to Firebase
-const saveQuestionsToFirebase = async (emailId: string, questions: GenericFAQ[]) => {
+const saveQuestionsToFirebase = async (emailId: string, questions: GenericFAQ[], user: { email: string | null } | null) => {
   try {
     const db = getFirebaseDB();
     if (!db) return;
+    if (!user?.email) {
+      console.error('Cannot save questions: No user email provided');
+      return;
+    }
 
     // Sanitize questions to ensure no undefined values
     const sanitizedQuestions = questions.map(q => ({
@@ -644,7 +660,7 @@ const saveQuestionsToFirebase = async (emailId: string, questions: GenericFAQ[])
       id: q.id || `temp-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
     }));
 
-    const questionRef = doc(db, FIREBASE_QUESTIONS_COLLECTION, emailId);
+    const questionRef = doc(db, `users/${user.email}/email_questions`, emailId);
     await setDoc(questionRef, {
       questions: sanitizedQuestions,
       timestamp: Date.now()
@@ -667,11 +683,14 @@ const getDocRef = (db: Firestore | null, collection: string, docId: string) => {
 };
 
 // Update the saveExtractedQuestionsToFirebase function
-const saveExtractedQuestionsToFirebase = async (emailId: string, questions: GenericFAQ[]) => {
+const saveExtractedQuestionsToFirebase = async (emailId: string, questions: GenericFAQ[], user: { email: string | null } | null) => {
   try {
     const db = getFirebaseDB();
-    const docRef = getDocRef(db, FIREBASE_COLLECTIONS.CACHED_QUESTIONS, emailId);
-    if (!docRef) return false;
+    if (!db) return false;
+    if (!user?.email) {
+      console.error('Cannot save extracted questions: No user email provided');
+      return false;
+    }
 
     // Sanitize questions to ensure no undefined values
     const sanitizedQuestions = questions.map(q => ({
@@ -686,6 +705,7 @@ const saveExtractedQuestionsToFirebase = async (emailId: string, questions: Gene
       id: q.id || `temp-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
     }));
 
+    const docRef = doc(db, `users/${user.email}/cached_questions`, emailId);
     await setDoc(docRef, {
       questions: sanitizedQuestions,
       timestamp: Date.now(),
@@ -699,12 +719,16 @@ const saveExtractedQuestionsToFirebase = async (emailId: string, questions: Gene
 };
 
 // Update the getCachedQuestionsFromFirebase function
-const getCachedQuestionsFromFirebase = async (emailId: string) => {
+const getCachedQuestionsFromFirebase = async (emailId: string, user: { email: string | null } | null) => {
   try {
     const db = getFirebaseDB();
-    const docRef = getDocRef(db, FIREBASE_COLLECTIONS.CACHED_QUESTIONS, emailId);
-    if (!docRef) return null;
+    if (!db) return null;
+    if (!user?.email) {
+      console.error('Cannot get cached questions: No user email provided');
+      return null;
+    }
 
+    const docRef = doc(db, `users/${user.email}/cached_questions`, emailId);
     const docSnap = await getDoc(docRef);
 
     if (docSnap.exists()) {
@@ -1115,22 +1139,23 @@ export default function FAQAutoReplyV2() {
 
             console.log(`DEBUG:   [${i + 1}] ID: ${e.id}, ThreadID: ${e.threadId}, Subject: ${e.subject}, Timestamp: ${e.timestamp} (${safeFormatDate(e.timestamp)}), Source: ${e.source}`);
 
-            if (e.source === 'sortTimestamp' && e.receivedAt) {
+            if (e.source === 'sortTimestamp' && (e as any).receivedAt) {
               let receivedDateStr = 'Invalid Date';
               try {
-                const receivedDate = typeof e.receivedAt === 'number' ?
-                  e.receivedAt :
-                  (typeof e.receivedAt === 'string' ? new Date(e.receivedAt).getTime() : 0);
+                const receivedAt = (e as any).receivedAt;
+                const receivedDate = typeof receivedAt === 'number' ?
+                  receivedAt :
+                  (typeof receivedAt === 'string' ? new Date(receivedAt).getTime() : 0);
 
                 if (receivedDate > 0 && !isNaN(receivedDate)) {
                   receivedDateStr = safeFormatDate(receivedDate);
                 }
               } catch (err) {
-                console.error(`Error processing receivedAt: ${e.receivedAt}`, err);
+                console.error(`Error processing receivedAt: ${(e as any).receivedAt}`, err);
               }
-              console.log(`DEBUG:     Also has receivedAt: ${e.receivedAt} (${receivedDateStr})`);
-            } else if (e.source === 'receivedAt' && e.sortTimestamp) {
-              console.log(`DEBUG:     Also has sortTimestamp: ${e.sortTimestamp} (${safeFormatDate(e.sortTimestamp)})`);
+              console.log(`DEBUG:     Also has receivedAt: ${(e as any).receivedAt} (${receivedDateStr})`);
+            } else if (e.source === 'receivedAt' && (e as any).sortTimestamp) {
+              console.log(`DEBUG:     Also has sortTimestamp: ${(e as any).sortTimestamp} (${safeFormatDate((e as any).sortTimestamp)})`);
             }
           });
 
@@ -1244,7 +1269,7 @@ export default function FAQAutoReplyV2() {
 
         if (data.refreshedEmails && data.refreshedEmails.length > 0) {
           // Format the emails in the same structure as our existing emails
-          const newEmails = data.refreshedEmails.map((email: any) => {
+          const newEmails = data.refreshedEmails.map((email: Email) => {
             // Ensure we always use the actual received timestamp from Gmail
             const receivedTimestamp = typeof email.receivedAt === 'number'
               ? email.receivedAt
@@ -1253,7 +1278,7 @@ export default function FAQAutoReplyV2() {
             return {
               ...email,
               sortTimestamp: receivedTimestamp,
-              receivedAt: email.receivedAt || Date.now()
+              receivedAt: receivedTimestamp
             };
           });
 
@@ -1299,7 +1324,7 @@ export default function FAQAutoReplyV2() {
 
             if (validUniqueEmails.length > 0) {
               // Save the new emails to Firebase
-              await saveEmailsToFirebase(validUniqueEmails);
+              await saveEmailsToFirebase(validUniqueEmails, user);
               console.log(`Saved ${validUniqueEmails.length} valid new emails to Firebase`);
             } else {
               console.warn('No valid emails to save to Firebase');
@@ -1742,7 +1767,7 @@ export default function FAQAutoReplyV2() {
           setHasMore(data.hasMore);
 
           // Save the combined emails to Firebase for persistence
-          saveEmailsToFirebase(transformedEmails);
+          saveEmailsToFirebase(transformedEmails, user);
 
           // Load any existing questions for the new emails
           for (const email of transformedEmails) {
@@ -1773,11 +1798,11 @@ export default function FAQAutoReplyV2() {
       console.log("Loading fresh emails...");
 
       // Actual fetch logic here - loading from Firebase
-      const firebaseEmails = await loadEmailsFromFirebase();
+      const firebaseEmails = await loadEmailsFromFirebase(user);
       console.log('DEBUG: Loaded from Firebase:', firebaseEmails?.length || 0);
 
-      const readyToReplyEmails = await loadReadyToReplyFromFirebase();
-      console.log('DEBUG: Loaded ready-to-reply from Firebase:', readyToReplyEmails?.length || 0);
+      const readyToReplyEmails = await loadReadyToReplyFromFirebase(user);
+      console.log('DEBUG: Ready to reply emails from Firebase:', readyToReplyEmails?.length || 0);
 
       if (firebaseEmails && firebaseEmails.length > 0) {
         console.log(`Loaded ${firebaseEmails.length} emails from Firebase`);
@@ -1860,10 +1885,10 @@ export default function FAQAutoReplyV2() {
           }
 
           // Load emails and ready to reply data
-          const firebaseEmails = await loadEmailsFromFirebase();
+          const firebaseEmails = await loadEmailsFromFirebase(user);
           console.log('DEBUG: Emails loaded from Firebase:', firebaseEmails?.length || 0);
 
-          const readyToReplyEmails = await loadReadyToReplyFromFirebase();
+          const readyToReplyEmails = await loadReadyToReplyFromFirebase(user);
           console.log('DEBUG: Ready to reply emails from Firebase:', readyToReplyEmails?.length || 0);
 
           if (firebaseEmails && firebaseEmails.length > 0) {
@@ -1894,7 +1919,7 @@ export default function FAQAutoReplyV2() {
 
           // Load cached questions from Firebase
           console.log('Loading cached questions from Firebase...');
-          const cachedQuestions = await loadQuestionsFromFirebase();
+          const cachedQuestions = await loadQuestionsFromFirebase(user);
           if (cachedQuestions) {
             console.log('Found cached questions:', cachedQuestions);
             setEmailQuestions(cachedQuestions);
@@ -1908,7 +1933,7 @@ export default function FAQAutoReplyV2() {
 
           console.log('Loading cached questions for each email...');
           const emailQuestionsPromises = uniqueEmails.map(async email => {
-            const questions = await getCachedQuestionsFromFirebase(email.id);
+            const questions = await getCachedQuestionsFromFirebase(email.id, user);
             if (questions) {
               return [email.id, questions] as [string, GenericFAQ[]];
             }
@@ -1955,16 +1980,37 @@ export default function FAQAutoReplyV2() {
   // Update the FAQ loading effect
   useEffect(() => {
     console.log('=== FAQ Loading Debug - Start ===');
+    console.log('Current user state:', {
+      email: user?.email,
+      hasAccessToken: !!user?.accessToken,
+      accessToken: user?.accessToken ? `${user.accessToken.substring(0, 10)}...` : null
+    });
 
     const loadFAQs = async () => {
+      if (!user?.accessToken) {
+        console.log('No access token available, skipping FAQ load');
+        return;
+      }
+
       try {
         setLoadingFAQs(true);
 
         // Only fetch from API - remove cache logic to ensure fresh data
-        console.log('Fetching FAQs from API');
-        const response = await fetch('/api/faq/list');
+        console.log('Fetching FAQs from API with token:', user.accessToken.substring(0, 10) + '...');
+        const response = await fetch('/api/faq/list', {
+          headers: {
+            Authorization: `Bearer ${user.accessToken}`
+          }
+        });
+
         if (!response.ok) {
-          throw new Error('Failed to fetch FAQs');
+          const errorData = await response.json();
+          console.error('FAQ API error:', {
+            status: response.status,
+            statusText: response.statusText,
+            error: errorData
+          });
+          throw new Error(errorData.error || 'Failed to fetch FAQs');
         }
 
         const data = await response.json();
@@ -1986,7 +2032,7 @@ export default function FAQAutoReplyV2() {
         }
       } catch (error) {
         console.error('Error loading FAQs:', error);
-        toast.error('Failed to load FAQ library');
+        toast.error(error instanceof Error ? error.message : 'Failed to load FAQ library');
         setAnsweredFAQs([]);
       } finally {
         setLoadingFAQs(false);
@@ -2001,7 +2047,7 @@ export default function FAQAutoReplyV2() {
     return () => {
       console.log('Cleaning up FAQ loading effect');
     };
-  }, []); // Remove answeredFAQs from dependencies to prevent loops
+  }, [user?.accessToken]); // Add user.accessToken as a dependency
 
   // Add this helper function to debug the FAQ library
   const debugFAQLibrary = () => {
@@ -2102,7 +2148,7 @@ export default function FAQAutoReplyV2() {
                   emails: updatedReadyToReply,
                   timestamp: Date.now()
                 });
-                saveReadyToReplyToFirebase(updatedReadyToReply);
+                saveReadyToReplyToFirebase(updatedReadyToReply, user);
 
                 return emailWithReply;
               }
@@ -2246,7 +2292,7 @@ export default function FAQAutoReplyV2() {
           emails: updatedReadyToReply,
           timestamp: Date.now()
         });
-        saveReadyToReplyToFirebase(updatedReadyToReply);
+        saveReadyToReplyToFirebase(updatedReadyToReply, user);
 
         toast.success('Auto-reply sent successfully');
         loadEmails();
@@ -2321,6 +2367,7 @@ export default function FAQAutoReplyV2() {
         method: 'DELETE',
         headers: {
           'Content-Type': 'application/json',
+          Authorization: `Bearer ${user?.accessToken}`
         },
         body: JSON.stringify({
           id: faq.id
@@ -2328,16 +2375,7 @@ export default function FAQAutoReplyV2() {
       });
 
       if (!response.ok) {
-        let errorMessage = 'Failed to delete FAQ';
-        try {
-          const errorData = await response.json();
-          if (errorData && (errorData.error || errorData.details)) {
-            errorMessage = errorData.error || errorData.details;
-          }
-        } catch (error) {
-          errorMessage = 'Failed to delete FAQ: Network error';
-        }
-        throw new Error(errorMessage);
+        throw new Error('Failed to delete FAQ');
       }
 
       toast.success('FAQ deleted successfully');
@@ -2362,58 +2400,33 @@ export default function FAQAutoReplyV2() {
   };
 
   const handleSaveFAQ = async () => {
-    if (!selectedFAQ || !answer.trim()) {
-      toast.error('Please provide both question and answer');
+    // Validation checks
+    if (!user?.accessToken) {
+      console.error('No access token available');
+      toast.error('Authentication required. Please try logging in again.');
+      return;
+    }
+
+    if (!selectedFAQ) {
+      console.error('No FAQ selected');
+      toast.error('No FAQ selected to save');
+      return;
+    }
+
+    if (!answer || !answer.trim()) {
+      console.error('No answer provided');
+      toast.error('Please provide an answer');
       return;
     }
 
     try {
-      // Create the FAQ object that will be used for both optimistic update and saving
-      const newFAQ = {
-        id: selectedFAQ.id,
-        question: selectedFAQ.question,
-        answer: answer.trim(),
-        category: selectedFAQ.category || 'general',
-        confidence: selectedFAQ.confidence || 1,
-        updatedAt: new Date().toISOString()
-      };
-
-      // Update the UI immediately with sorted FAQs
-      setAnsweredFAQs(prev => {
-        const updated = prev.filter(faq => faq.id !== newFAQ.id);
-        const newList = [...updated, newFAQ];
-        // Sort by updatedAt (most recent first)
-        return newList.sort((a, b) => {
-          const dateA = a.updatedAt ? new Date(a.updatedAt).getTime() : 0;
-          const dateB = b.updatedAt ? new Date(b.updatedAt).getTime() : 0;
-          return dateB - dateA;
-        });
-      });
-
-      // Update the cache immediately
-      const cachedData = loadFromCache(CACHE_KEYS.ANSWERED_FAQS);
-      if (cachedData?.answeredFAQs) {
-        const updatedCache = {
-          answeredFAQs: cachedData.answeredFAQs
-            .filter(faq => faq.id !== newFAQ.id)
-            .concat([newFAQ])
-            .sort((a, b) => {
-              const dateA = a.updatedAt ? new Date(a.updatedAt).getTime() : 0;
-              const dateB = b.updatedAt ? new Date(b.updatedAt).getTime() : 0;
-              return dateB - dateA;
-            })
-        };
-        saveToCache(CACHE_KEYS.ANSWERED_FAQS, updatedCache);
-      }
-
-      // Close the modal immediately for better UX
-      setShowAnswerModal(false);
-
+      console.log('Saving FAQ with token:', user.accessToken.substring(0, 10) + '...');
       // Then save to FAQ library
       const response = await fetch('/api/faq/add', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          Authorization: `Bearer ${user.accessToken}`
         },
         body: JSON.stringify({
           id: selectedFAQ.id,
@@ -2428,16 +2441,13 @@ export default function FAQAutoReplyV2() {
       });
 
       if (!response.ok) {
-        let errorMessage = 'Failed to save FAQ';
-        try {
-          const errorData = await response.json();
-          if (errorData && (errorData.error || errorData.details)) {
-            errorMessage = errorData.error || errorData.details;
-          }
-        } catch (error) {
-          errorMessage = 'Failed to save FAQ: Network error';
-        }
-        throw new Error(errorMessage);
+        const errorData = await response.json();
+        console.error('FAQ save error:', {
+          status: response.status,
+          statusText: response.statusText,
+          error: errorData
+        });
+        throw new Error(errorData.error || errorData.details || 'Failed to save FAQ');
       }
 
       const savedFAQ = await response.json();
@@ -2474,25 +2484,10 @@ export default function FAQAutoReplyV2() {
       }
 
       toast.success('FAQ saved successfully');
+      setShowAnswerModal(false);
     } catch (error) {
       console.error('Error saving FAQ:', error);
-
-      // Revert the optimistic update on error
-      setAnsweredFAQs(prev => {
-        const existing = prev.find(faq => faq.id === selectedFAQ.id);
-        if (existing) {
-          const updated = prev.filter(faq => faq.id !== selectedFAQ.id);
-          return [...updated, existing].sort((a, b) => {
-            const dateA = a.updatedAt ? new Date(a.updatedAt).getTime() : 0;
-            const dateB = b.updatedAt ? new Date(b.updatedAt).getTime() : 0;
-            return dateB - dateA;
-          });
-        }
-        return prev;
-      });
-
       toast.error(error instanceof Error ? error.message : 'Failed to save FAQ');
-      setShowAnswerModal(true); // Reopen the modal on error
     }
   };
 
@@ -2788,8 +2783,8 @@ export default function FAQAutoReplyV2() {
 
       // Save questions to Firebase in the background
       Promise.all([
-        saveQuestionsToFirebase(email.id, allQuestions),
-        saveExtractedQuestionsToFirebase(email.id, allQuestions)
+        saveQuestionsToFirebase(email.id, allQuestions, user),
+        saveExtractedQuestionsToFirebase(email.id, allQuestions, user)
       ]).catch(error => {
         console.error('Error saving questions to Firebase:', error);
       });
@@ -2839,7 +2834,7 @@ export default function FAQAutoReplyV2() {
       if (allQuestionsHaveAnswers && matchedFAQ) {
         console.log('All questions have answers, generating reply...');
         // Save updated email status to Firebase
-        saveEmailsToFirebase([updatedEmail]);
+        saveEmailsToFirebase([updatedEmail], user);
         // Generate a reply so the email appears in Ready to Reply
         generateContextualReply(updatedEmail);
       }
@@ -3181,11 +3176,13 @@ ${signature}`;
             {new Date(receivedAt).toLocaleString()}
             <button
               onClick={() => refreshSingleEmail(email)}
-              className="text-gray-400 hover:text-gray-600 transition-colors p-1 hover:bg-gray-50 rounded-full"
+              className="text-gray-400 hover:text-gray-600 transition-colors p-1.5 hover:bg-gray-50 rounded-full disabled:opacity-50 disabled:cursor-not-allowed"
               title="Refresh email content"
-              disabled={loadingContent.has(email.id)}
+              disabled={email.isRefreshing}
             >
-              <RefreshCw className={`h-3.5 w-3.5 ${loadingContent.has(email.id) ? 'animate-spin' : ''}`} />
+              <RefreshCw
+                className={`h-4 w-4 ${email.isRefreshing ? 'animate-spin text-blue-600' : ''}`}
+              />
             </button>
           </div>
         </div>
@@ -4282,12 +4279,16 @@ ${signature}`;
   };
 
   // Add function to load ready to reply emails from Firebase
-  const loadReadyToReplyFromFirebase = async () => {
+  const loadReadyToReplyFromFirebase = async (user: { email: string | null } | null) => {
     try {
       const db = getFirebaseDB();
       if (!db) return null;
+      if (!user?.email) {
+        console.error('Cannot load ready to reply emails: No user email provided');
+        return null;
+      }
 
-      const readyRef = doc(db, FIREBASE_COLLECTIONS.READY_TO_REPLY, 'latest');
+      const readyRef = doc(db, `users/${user.email}/ready_to_reply`, 'latest');
       const readyDoc = await getDoc(readyRef);
 
       if (readyDoc.exists()) {
@@ -4302,12 +4303,15 @@ ${signature}`;
   };
 
   // Add function to save ready to reply emails to Firebase
-  const saveReadyToReplyToFirebase = async (emails: ExtendedEmail[]) => {
+  const saveReadyToReplyToFirebase = async (emails: ExtendedEmail[], user: { email: string | null } | null) => {
     try {
       const db = getFirebaseDB();
       if (!db) return;
+      if (!user?.email) {
+        console.error('Cannot save ready to reply emails: No user email provided');
+        return;
+      }
 
-      // Create a sanitized version of the emails with only the necessary properties
       const sanitizedEmails = emails.map(email => ({
         id: email.id,
         threadId: email.threadId,
@@ -4315,13 +4319,11 @@ ${signature}`;
         sender: email.sender,
         receivedAt: email.receivedAt,
         status: email.status,
-        // Only include matchedFAQ if it exists and has required properties
         matchedFAQ: email.matchedFAQ ? {
           question: email.matchedFAQ.question || '',
           answer: email.matchedFAQ.answer || '',
           confidence: email.matchedFAQ.confidence || 0
         } : null,
-        // Convert content to a string if it's an object to avoid circular references
         content: typeof email.content === 'string'
           ? email.content
           : (email.content?.text || email.content?.html || ''),
@@ -4331,7 +4333,7 @@ ${signature}`;
         sortTimestamp: email.sortTimestamp || Date.now()
       }));
 
-      const readyRef = doc(db, FIREBASE_COLLECTIONS.READY_TO_REPLY, 'latest');
+      const readyRef = doc(db, `users/${user.email}/ready_to_reply`, 'latest');
       await setDoc(readyRef, {
         emails: sanitizedEmails,
         timestamp: Date.now()
@@ -4348,6 +4350,8 @@ ${signature}`;
         throw new Error('User access token not available');
       }
 
+      let currentAccessToken = user.accessToken;
+
       // Set loading state for this specific email
       setEmails((prevEmails) => {
         return prevEmails.map((e) => {
@@ -4358,34 +4362,56 @@ ${signature}`;
         });
       });
 
-      const response = await fetch('/api/emails/refresh-single', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${user.accessToken}`
-        },
-        body: JSON.stringify({
-          threadId: email.threadId,
-        }),
-      });
+      const makeRequest = async (token: string) => {
+        const response = await fetch('/api/emails/refresh-single', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify({
+            threadId: email.threadId,
+          }),
+        });
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        console.error('Failed to refresh email:', errorData);
-        throw new Error(errorData.error || 'Failed to refresh email');
-      }
+        if (!response.ok) {
+          const errorData = await response.json();
+          if (errorData.error === 'Invalid Credentials' && refreshAccessToken) {
+            // Try to refresh the token
+            const newToken = await refreshAccessToken();
+            if (newToken) {
+              return makeRequest(newToken);
+            }
+          }
+          throw new Error(errorData.error || 'Failed to refresh email');
+        }
 
+        return response;
+      };
+
+      const response = await makeRequest(currentAccessToken);
       const data = await response.json();
 
-      // Update the email content and timestamp
+      // Update the email content and preserve the original timestamp for sorting
       setEmails((prevEmails) => {
         const updatedEmails = prevEmails.map((e) => {
           if (e.threadId === email.threadId) {
+            // Use the receivedAt timestamp from the API response for sorting
+            // This preserves the original email received time
+            const receivedAt = data.receivedAt || e.receivedAt;
+            const sortTimestamp = typeof receivedAt === 'number'
+              ? receivedAt
+              : typeof receivedAt === 'string'
+                ? new Date(receivedAt).getTime()
+                : e.sortTimestamp;
+
             return {
               ...e,
               ...data,
               isRefreshing: false,
-              sortTimestamp: Date.now(), // Update the timestamp for sorting
+              receivedAt: receivedAt,
+              sortTimestamp: sortTimestamp,
+              lastRefreshed: Date.now() // Track when it was refreshed separately
             };
           }
           return e;
@@ -4400,12 +4426,36 @@ ${signature}`;
         // Use email for the path instead of uid
         const emailsRef = collection(firebaseDB, `users/${user.email}/emails`);
         const emailDoc = doc(emailsRef, email.threadId);
-        await setDoc(emailDoc, { ...email, ...data, lastRefreshed: Date.now() }, { merge: true });
+
+        // Preserve the original receivedAt timestamp
+        const receivedAt = data.receivedAt || email.receivedAt;
+        const sortTimestamp = typeof receivedAt === 'number'
+          ? receivedAt
+          : typeof receivedAt === 'string'
+            ? new Date(receivedAt).getTime()
+            : email.sortTimestamp;
+
+        await setDoc(emailDoc, {
+          ...email,
+          ...data,
+          receivedAt: receivedAt,
+          sortTimestamp: sortTimestamp,
+          lastRefreshed: Date.now()
+        }, { merge: true });
       }
     } catch (error) {
       console.error('Error refreshing email:', error);
       toast.error(error instanceof Error ? error.message : 'Failed to refresh email');
     } finally {
+      // Reset loading states
+      setEmails((prevEmails) => {
+        return prevEmails.map((e) => {
+          if (e.threadId === email.threadId) {
+            return { ...e, isRefreshing: false };
+          }
+          return e;
+        });
+      });
       setIsLoading(false);
       setManualRefreshTriggered(false);
     }
@@ -4468,7 +4518,7 @@ ${signature}`;
       });
 
       // Save the reset emails back to Firebase
-      await saveEmailsToFirebase(resetEmails);
+      await saveEmailsToFirebase(resetEmails, user);
 
       // Remove entries from NOT_RELEVANT collection
       const notRelevantBatch = writeBatch(db);
@@ -4488,7 +4538,11 @@ ${signature}`;
 
       // Also clear the READY_TO_REPLY collection
       try {
-        const readyRef = doc(db, FIREBASE_COLLECTIONS.READY_TO_REPLY, 'latest');
+        if (!db || !user?.email) {
+          console.error('Cannot clear ready to reply collection: Database or user email not available');
+          return;
+        }
+        const readyRef = doc(db, `users/${user.email}/ready_to_reply`, 'latest');
         await setDoc(readyRef, { emails: [], timestamp: Date.now() });
         console.log('Cleared ready_to_reply collection');
       } catch (error) {
@@ -4779,9 +4833,9 @@ ${signature}`;
       setEmails([]);
 
       // Step 1: Delete all emails from Firebase collections
-      // EMAIL_CACHE collection
-      const emailCacheRef = collection(db, FIREBASE_COLLECTIONS.EMAIL_CACHE);
-      const emailsSnapshot = await getDocs(emailCacheRef);
+      // User's email collection
+      const userEmailsRef = collection(db, `users/${user.email}/emails`);
+      const emailsSnapshot = await getDocs(userEmailsRef);
 
       if (emailsSnapshot.size > 0) {
         const emailBatch = writeBatch(db);
@@ -4789,44 +4843,45 @@ ${signature}`;
           emailBatch.delete(doc.ref);
         });
         await emailBatch.commit();
-        console.log(`Deleted ${emailsSnapshot.size} emails from EMAIL_CACHE collection`);
+        console.log(`Deleted ${emailsSnapshot.size} emails from user's emails collection`);
       }
 
-      // NOT_RELEVANT collection
-      const notRelevantSnapshot = await getDocs(collection(db, FIREBASE_COLLECTIONS.NOT_RELEVANT));
+      // User's not relevant collection
+      const userNotRelevantRef = collection(db, `users/${user.email}/not_relevant`);
+      const notRelevantSnapshot = await getDocs(userNotRelevantRef);
       if (notRelevantSnapshot.size > 0) {
         const notRelevantBatch = writeBatch(db);
         notRelevantSnapshot.forEach((doc) => {
           notRelevantBatch.delete(doc.ref);
         });
         await notRelevantBatch.commit();
-        console.log(`Deleted ${notRelevantSnapshot.size} entries from NOT_RELEVANT collection`);
+        console.log(`Deleted ${notRelevantSnapshot.size} entries from user's not_relevant collection`);
       }
 
-      // READY_TO_REPLY collection
+      // User's ready to reply collection
       try {
-        const readyRef = doc(db, FIREBASE_COLLECTIONS.READY_TO_REPLY, 'latest');
+        const readyRef = doc(db, `users/${user.email}/ready_to_reply`, 'latest');
         await setDoc(readyRef, { emails: [], timestamp: Date.now() });
-        console.log('Cleared READY_TO_REPLY collection');
+        console.log('Cleared user ready_to_reply collection');
       } catch (error) {
-        console.error('Error clearing READY_TO_REPLY collection:', error);
+        console.error('Error clearing ready_to_reply collection:', error);
       }
 
-      // THREAD_CACHE collection
-      const threadCacheRef = collection(db, FIREBASE_COLLECTIONS.THREAD_CACHE);
-      const threadsSnapshot = await getDocs(threadCacheRef);
+      // User's thread cache collection
+      const userThreadCacheRef = collection(db, `users/${user.email}/thread_cache`);
+      const threadsSnapshot = await getDocs(userThreadCacheRef);
       if (threadsSnapshot.size > 0) {
         const threadBatch = writeBatch(db);
         threadsSnapshot.forEach((doc) => {
           threadBatch.delete(doc.ref);
         });
         await threadBatch.commit();
-        console.log(`Deleted ${threadsSnapshot.size} threads from THREAD_CACHE collection`);
+        console.log(`Deleted ${threadsSnapshot.size} threads from user's thread_cache collection`);
       }
 
-      // EMAIL_CONTENT collection
-      const emailContentRef = collection(db, FIREBASE_COLLECTIONS.EMAIL_CONTENT);
-      const contentSnapshot = await getDocs(emailContentRef);
+      // User's email content collection
+      const userEmailContentRef = collection(db, `users/${user.email}/email_content`);
+      const contentSnapshot = await getDocs(userEmailContentRef);
       if (contentSnapshot.size > 0) {
         // Due to potentially large number of documents, delete in batches
         let count = 0;
@@ -4845,7 +4900,7 @@ ${signature}`;
           console.log(`Deleted batch of ${batchDocs.length} email contents`);
         }
 
-        console.log(`Deleted ${count} email contents from EMAIL_CONTENT collection`);
+        console.log(`Deleted ${count} email contents from user's email_content collection`);
       }
 
       // Also clear local cache
@@ -4925,7 +4980,7 @@ ${signature}`;
 
         // Save the emails to Firebase
         console.log('Saving fresh emails to Firebase...');
-        await saveEmailsToFirebase(sortedEmails);
+        await saveEmailsToFirebase(sortedEmails, user);
 
         // Debug: Verify timestamps after saving
         debugCheckTimestamp();
@@ -5096,11 +5151,9 @@ ${signature}`;
           onClose={() => setShowSettingsModal(false)}
           settings={settings}
           onSave={handleSaveSettings}
-          onResetEmails={resetEmailCategorizations}
-          onResetAllEmails={resetAllEmailsAndRefresh} // Add the new reset function
+          onResetAllEmails={resetAllEmailsAndRefresh}
         />
       </Layout>
     </div>
   );
 }
-
