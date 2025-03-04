@@ -360,6 +360,7 @@ const FIREBASE_COLLECTIONS = {
 
 const loadEmailsFromFirebase = async (user: { email: string | null } | null) => {
   try {
+    console.log('Loading emails from Firebase...');
     const db = getFirebaseDB();
     if (!db || !user?.email) return null;
 
@@ -374,8 +375,11 @@ const loadEmailsFromFirebase = async (user: { email: string | null } | null) => 
       getDocs(userEmailContentRef)
     ]);
 
+    console.log(`Found ${emailsSnapshot.size} email documents, ${threadCacheSnapshot.size} thread cache documents, and ${emailContentSnapshot.size} email content documents`);
+
     // Create maps to merge data
     const emailMap = new Map<string, ExtendedEmail>();
+    const threadToEmailMap = new Map<string, string>(); // Maps threadId to emailId
     const contentMap = new Map<string, any>();
     const threadMap = new Map<string, { lastMessageTimestamp: number }>();
 
@@ -389,6 +393,11 @@ const loadEmailsFromFirebase = async (user: { email: string | null } | null) => 
       threadMap.set(doc.id, {
         lastMessageTimestamp
       });
+
+      // If thread cache has emailId, track the relationship
+      if (data.emailId) {
+        threadToEmailMap.set(doc.id, data.emailId);
+      }
     });
 
     // Process email content documents
@@ -397,9 +406,20 @@ const loadEmailsFromFirebase = async (user: { email: string | null } | null) => 
       contentMap.set(doc.id, data.content);
     });
 
-    // Process emails and ensure consistent timestamps
+    // First pass: Process regular emails
     emailsSnapshot.docs.forEach((doc) => {
       const data = doc.data();
+      const docId = doc.id;
+
+      // Skip documents that don't have basic email properties
+      if (!data.subject || !data.sender) {
+        return;
+      }
+
+      // Check if this document ID is a threadId or an emailId
+      const isThreadId = data.id && data.id !== docId;
+      const threadId = isThreadId ? docId : data.threadId;
+      const emailId = isThreadId ? data.id : docId;
 
       // Ensure receivedAt is a number
       const receivedAt = typeof data.receivedAt === 'number' ?
@@ -407,7 +427,7 @@ const loadEmailsFromFirebase = async (user: { email: string | null } | null) => 
         (typeof data.receivedAt === 'string' ? parseInt(data.receivedAt) : Date.now());
 
       // Get thread timestamp
-      const threadInfo = threadMap.get(data.threadId);
+      const threadInfo = threadMap.get(threadId || '');
 
       // Determine sortTimestamp with proper fallbacks
       const sortTimestamp = data.sortTimestamp && typeof data.sortTimestamp === 'number' ?
@@ -417,17 +437,36 @@ const loadEmailsFromFirebase = async (user: { email: string | null } | null) => 
 
       const email: ExtendedEmail = {
         ...data,
-        id: doc.id,
-        threadId: data.threadId,
+        id: emailId,
+        threadId: threadId || emailId, // Fallback to emailId if no threadId
         subject: data.subject,
         sender: data.sender,
-        content: contentMap.get(doc.id) || data.content,
+        content: contentMap.get(emailId) || data.content,
         receivedAt,
         sortTimestamp,
         status: data.status || 'pending'
       };
 
-      emailMap.set(doc.id, email);
+      // Use threadId as the key for deduplication - emails with same threadId are the same conversation
+      const existingEmail = emailMap.get(email.threadId);
+
+      if (existingEmail) {
+        // If we already have an email with this threadId, keep the most recently updated one
+        const existingLastUpdated = (existingEmail as any).lastUpdated || 0;
+        const newLastUpdated = (email as any).lastUpdated || 0;
+
+        if (newLastUpdated > existingLastUpdated) {
+          emailMap.set(email.threadId, email);
+          console.log(`Updated email for threadId ${email.threadId} with newer version`);
+        }
+      } else {
+        emailMap.set(email.threadId, email);
+      }
+
+      // Also track the relationship between threadId and emailId
+      if (email.threadId && email.id) {
+        threadToEmailMap.set(email.threadId, email.id);
+      }
     });
 
     // Convert map to array and sort by sortTimestamp
@@ -438,6 +477,7 @@ const loadEmailsFromFirebase = async (user: { email: string | null } | null) => 
         return bTimestamp - aTimestamp;
       });
 
+    console.log(`Loaded ${sortedEmails.length} unique emails from Firebase`);
     return sortedEmails;
   } catch (error) {
     console.error('Error loading emails from Firebase:', error);
@@ -447,12 +487,18 @@ const loadEmailsFromFirebase = async (user: { email: string | null } | null) => 
 
 const saveEmailsToFirebase = async (emails: (Email | ExtendedEmail)[], user: { email: string | null } | null) => {
   try {
+    console.log(`===== Starting saveEmailsToFirebase for ${emails.length} emails =====`);
     const db = getFirebaseDB();
-    if (!db) return;
+    if (!db) {
+      console.error('Error: Firebase database not initialized');
+      return;
+    }
     if (!user?.email) {
       console.error('Cannot save emails: No user email provided');
       return;
     }
+
+    console.log(`Saving to Firebase collections under user: ${user.email}`);
 
     // Helper function to sanitize an object by removing undefined values
     const sanitizeObject = (obj: any): any => {
@@ -476,6 +522,7 @@ const saveEmailsToFirebase = async (emails: (Email | ExtendedEmail)[], user: { e
     };
 
     let savedCount = 0;
+    let errorCount = 0;
 
     // Save each email individually to the email_cache collection
     for (const email of emails) {
@@ -483,6 +530,8 @@ const saveEmailsToFirebase = async (emails: (Email | ExtendedEmail)[], user: { e
         console.warn('Skipping invalid email without ID');
         continue;
       }
+
+      console.log(`Processing email ${savedCount + 1}/${emails.length}: ID=${email.id}, ThreadID=${email.threadId}`);
 
       // Convert receivedAt to a Unix timestamp number
       let receivedAtTimestamp: number;
@@ -515,10 +564,13 @@ const saveEmailsToFirebase = async (emails: (Email | ExtendedEmail)[], user: { e
       try {
         // First check if the email already exists to preserve status
         const emailRef = doc(db, `users/${user.email}/emails`, email.id);
+        console.log(`Checking if email exists at: users/${user.email}/emails/${email.id}`);
+
         const existingEmailDoc = await getDoc(emailRef);
         let mergedEmail = { ...sanitizedEmail };
 
         if (existingEmailDoc.exists()) {
+          console.log(`Email ${email.id} already exists, merging with existing data`);
           const existingEmail = existingEmailDoc.data();
           // Preserve status from existing email
           if (existingEmail.status) {
@@ -528,7 +580,10 @@ const saveEmailsToFirebase = async (emails: (Email | ExtendedEmail)[], user: { e
 
           // Preserve other important fields
           if (existingEmail.isReplied !== undefined) {
-            mergedEmail.isReplied = existingEmail.isReplied;
+            // Only preserve isReplied if our new email doesn't explicitly set it to true
+            // This ensures emails marked as replied because the user was the last sender remain marked as replied
+            mergedEmail.isReplied = sanitizedEmail.isReplied === true ? true : existingEmail.isReplied;
+            console.log(`Email ${email.id} - Merging isReplied: new=${sanitizedEmail.isReplied}, existing=${existingEmail.isReplied}, result=${mergedEmail.isReplied}`);
           }
 
           if (existingEmail.isNotRelevant !== undefined) {
@@ -538,14 +593,23 @@ const saveEmailsToFirebase = async (emails: (Email | ExtendedEmail)[], user: { e
           if (existingEmail.matchedFAQ !== undefined) {
             mergedEmail.matchedFAQ = existingEmail.matchedFAQ;
           }
+        } else if (sanitizedEmail.isReplied === true) {
+          // For new emails, if we've determined user is last sender, ensure isReplied is set to true
+          console.log(`Email ${email.id} - New email marked as replied: ${sanitizedEmail.isReplied}`);
+          mergedEmail.isReplied = true;
+        } else {
+          console.log(`Email ${email.id} - Creating new document in Firebase`);
         }
 
         // Save to individual email document
+        console.log(`Saving email to: users/${user.email}/emails/${email.id}`);
         await setDoc(emailRef, mergedEmail, { merge: true });
 
         // If thread ID exists, update thread cache too
         if (email.threadId) {
           const threadRef = doc(db, `users/${user.email}/thread_cache`, email.threadId);
+          console.log(`Saving thread data to: users/${user.email}/thread_cache/${email.threadId}`);
+
           await setDoc(threadRef, {
             emailId: email.id,
             threadId: email.threadId,
@@ -560,6 +624,8 @@ const saveEmailsToFirebase = async (emails: (Email | ExtendedEmail)[], user: { e
         // If email has content and it's not already in the content collection, save it
         if (email.content) {
           const emailContentRef = doc(db, `users/${user.email}/email_content`, email.id);
+          console.log(`Saving email content to: users/${user.email}/email_content/${email.id}`);
+
           await setDoc(emailContentRef, {
             content: email.content,
             timestamp: Date.now()
@@ -567,14 +633,20 @@ const saveEmailsToFirebase = async (emails: (Email | ExtendedEmail)[], user: { e
         }
 
         savedCount++;
+        console.log(`Successfully saved email ${email.id} (${savedCount}/${emails.length})`);
       } catch (error) {
+        errorCount++;
         console.error(`Error saving email ${email.id} to Firebase:`, error);
       }
     }
 
-    console.log(`Saved ${savedCount} emails to Firebase under user ${user.email}`);
+    console.log(`===== Completed saveEmailsToFirebase =====`);
+    console.log(`Successfully saved ${savedCount}/${emails.length} emails to Firebase under user ${user.email}`);
+    if (errorCount > 0) {
+      console.error(`Failed to save ${errorCount}/${emails.length} emails due to errors`);
+    }
   } catch (error) {
-    console.error('Error saving emails to Firebase:', error);
+    console.error('Error in saveEmailsToFirebase function:', error);
   }
 };
 
@@ -967,6 +1039,8 @@ export default function FAQAutoReplyV2() {
   const [loadingNewEmails, setLoadingNewEmails] = useState(false);
   // Add state for tracking manual refresh
   const [manualRefreshTriggered, setManualRefreshTriggered] = useState(false);
+  const [loadingRefresh, setLoadingRefresh] = useState(false);
+  const [refreshComplete, setRefreshComplete] = useState(false);
 
   // Add storage for previous email status before marking not relevant
   const prevEmailStatus = useRef<Record<string, string>>({});
@@ -1273,16 +1347,42 @@ export default function FAQAutoReplyV2() {
 
         if (data.refreshedEmails && data.refreshedEmails.length > 0) {
           // Format the emails in the same structure as our existing emails
-          const newEmails = data.refreshedEmails.map((email: Email) => {
+          const newEmails = data.refreshedEmails.map((email: any) => {
             // Ensure we always use the actual received timestamp from Gmail
             const receivedTimestamp = typeof email.receivedAt === 'number'
               ? email.receivedAt
               : new Date(email.receivedAt).getTime();
 
+            // Check if the authenticated user is the last sender
+            const userLastSender = (() => {
+              if (!email?.threadMessages || !email.threadMessages.length || !user?.email) return false;
+
+              // Sort messages by receivedAt timestamp to ensure we get the most recent one
+              const sortedMessages = [...email.threadMessages].sort((a, b) => {
+                // Sort by receivedAt (descending) - most recent first
+                if (a.receivedAt && b.receivedAt) {
+                  return b.receivedAt - a.receivedAt;
+                }
+                // If receivedAt is not available, use message index as proxy (later messages come later)
+                return 0;
+              });
+
+              // Get the most recent message in the thread
+              const lastMessage = sortedMessages[0];
+              if (!lastMessage?.sender) return false;
+
+              // Check if the sender of the last message includes the authenticated user's email
+              return lastMessage.sender.toLowerCase().includes(user.email.toLowerCase());
+            })();
+
+            console.log(`Email ${email.id} - User is last sender: ${userLastSender}`);
+
+            // Mark emails where the user is the last sender as replied
             return {
               ...email,
               sortTimestamp: receivedTimestamp,
-              receivedAt: receivedTimestamp
+              receivedAt: receivedTimestamp,
+              isReplied: userLastSender ? true : (email.isReplied || false)
             };
           });
 
@@ -3427,6 +3527,31 @@ ${signature}`;
     console.log('- User last sender emails:', userLastSenderEmails.length);
     console.log('- Ready to reply emails:', readyToReplyEmails.length);
 
+    // If emails are still loading, show skeleton UI
+    if (loading) {
+      return (
+        <div className="space-y-6">
+          {/* Email skeletons */}
+          {[...Array(5)].map((_, i) => (
+            <div key={i} className="bg-white rounded-lg shadow-sm p-6 space-y-4">
+              <div className="flex justify-between items-start">
+                <div className="space-y-2">
+                  <div className="h-5 w-64 bg-gray-200 rounded animate-pulse"></div>
+                  <div className="h-4 w-48 bg-gray-100 rounded animate-pulse"></div>
+                </div>
+                <div className="h-8 w-24 bg-gray-200 rounded animate-pulse"></div>
+              </div>
+              <div className="space-y-2">
+                <div className="h-4 bg-gray-100 rounded w-3/4 animate-pulse"></div>
+                <div className="h-4 bg-gray-100 rounded w-5/6 animate-pulse"></div>
+                <div className="h-4 bg-gray-100 rounded w-2/3 animate-pulse"></div>
+              </div>
+            </div>
+          ))}
+        </div>
+      );
+    }
+
     // Simplified filtering logic: show in Unanswered if not ready for reply, not replied, not not-relevant, and user not last sender
     const filteredEmails = emails.filter(email =>
       !email.isReplied &&
@@ -4719,16 +4844,6 @@ ${signature}`;
             Refresh
           </button>
 
-          {/* Debug button only in development */}
-          {process.env.NODE_ENV === 'development' && (
-            <button
-              onClick={debugCheckTimestamp}
-              className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-            >
-              Debug Timestamp
-            </button>
-          )}
-
           <button
             onClick={() => setShowSettingsModal(true)}
             className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
@@ -4744,69 +4859,80 @@ ${signature}`;
   // Add the refreshAllEmailsFromGmail function
   const refreshAllEmailsFromGmail = async () => {
     if (!user?.accessToken) {
-      toast.error('Please sign in to refresh emails');
+      toast.error("You must be logged in to refresh emails");
       return;
     }
 
+    setLoadingRefresh(true);
+    setRefreshComplete(false);
+
     try {
-      setManualRefreshTriggered(true);
-      setIsLoading(true);
-      toast.info('Refreshing emails from Gmail...');
+      toast.loading("Refreshing emails from Gmail...");
 
-      const response = await fetch('/api/emails/refresh-all', {
-        method: 'GET',
+      const response = await fetch(`/api/emails/refresh-all?limit=40`, {
+        method: "GET",
         headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${user.accessToken}`
-        }
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${user.accessToken}`,
+        },
       });
 
-      if (!response.ok) {
-        throw new Error('Failed to refresh emails');
+      if (response.ok) {
+        const data = await response.json();
+        console.log(`Refreshed ${data.emails.length} emails from Gmail`);
+        console.log("Refreshed email structure:", data.emails[0]);
+
+        // Transform the emails to match the expected format in saveEmailsToFirebase
+        const transformedEmails = data.emails.map((email: any) => ({
+          ...email,
+          receivedAt: email.receivedAt ? new Date(email.receivedAt).getTime() : Date.now(),
+          timestamp: email.timestamp ? new Date(email.timestamp).getTime() : Date.now()
+        }));
+
+        // Instead of merging with existing emails, we'll directly save them to Firebase
+        // This follows the approach used in Complete Email Reset
+        await saveEmailsToFirebase(transformedEmails, user);
+
+        // Update the UI with the new emails
+        setEmails(prevEmails => {
+          // Create a map of existing emails to preserve status flags
+          const emailMap = new Map();
+          prevEmails.forEach(email => {
+            emailMap.set(email.threadId, {
+              ...email,
+            });
+          });
+
+          // Update with new emails while preserving flags
+          transformedEmails.forEach((email: any) => {
+            const existingEmail = emailMap.get(email.threadId);
+            if (existingEmail) {
+              emailMap.set(email.threadId, {
+                ...email,
+                isNotRelevant: existingEmail.isNotRelevant,
+                status: existingEmail.status
+              });
+            } else {
+              emailMap.set(email.threadId, email);
+            }
+          });
+
+          return Array.from(emailMap.values());
+        });
+
+        toast.success(`Refreshed ${data.emails.length} emails from Gmail`);
+      } else {
+        const errorData = await response.json();
+        console.error("Failed to refresh emails:", errorData);
+        toast.error("Failed to refresh emails from Gmail");
       }
-
-      const data = await response.json();
-      console.log('Refreshed emails:', data.emails.length);
-
-      // Merge with existing emails, preserving not_relevant status
-      setEmails(prevEmails => {
-        const emailMap = new Map();
-
-        // First add all existing emails to the map
-        prevEmails.forEach(email => {
-          emailMap.set(email.threadId, email);
-        });
-
-        // Then update with new emails, but preserve not_relevant status
-        data.emails.forEach((newEmail: any) => {
-          const existingEmail = emailMap.get(newEmail.threadId);
-
-          if (existingEmail) {
-            // Preserve not_relevant status if it was set
-            const mergedEmail = {
-              ...newEmail,
-              isNotRelevant: existingEmail.isNotRelevant || false,
-              status: existingEmail.isNotRelevant ? 'not_relevant' : (newEmail.status || 'pending')
-            };
-            emailMap.set(newEmail.threadId, mergedEmail);
-          } else {
-            emailMap.set(newEmail.threadId, newEmail);
-          }
-        });
-
-        const mergedEmails = Array.from(emailMap.values());
-
-        // Use the sortEmails helper function
-        return sortEmails(mergedEmails);
-      });
-
-      toast.success(`Refreshed ${data.emails.length} emails`);
     } catch (error) {
-      console.error('Error refreshing emails:', error);
-      toast.error('Failed to refresh emails');
+      console.error("Error refreshing emails:", error);
+      toast.error("An error occurred while refreshing emails");
     } finally {
-      setIsLoading(false);
-      setManualRefreshTriggered(false);
+      toast.dismiss();
+      setLoadingRefresh(false);
+      setRefreshComplete(true);
     }
   };
 
@@ -4995,7 +5121,7 @@ ${signature}`;
         await saveEmailsToFirebase(sortedEmails, user);
 
         // Debug: Verify timestamps after saving
-        debugCheckTimestamp();
+        // Debug timestamp check removed
 
         console.log(`Saved ${sortedEmails.length} emails to Firebase`);
 
@@ -5009,119 +5135,6 @@ ${signature}`;
     } catch (error) {
       console.error('Error during complete email reset:', error);
       toast.error('Failed to complete email reset', { id: 'reset-emails' });
-    }
-  };
-
-  // Add a debug function to check what's happening with timestamps
-  const debugCheckTimestamp = () => {
-    if (!user) {
-      console.log('No user logged in');
-      return;
-    }
-
-    console.log('DEBUG: Manually checking timestamps');
-
-    try {
-      // 1. Find all Feb 28 emails if any
-      const feb28 = new Date('2025-02-28').getTime();
-      console.log(`DEBUG: Looking for Feb 28 emails (${safeISOString(feb28)})`);
-
-      const feb28Emails = emails.filter(e => {
-        // Check receivedAt
-        let receivedTime = 0;
-        if (typeof e.receivedAt === 'number') receivedTime = e.receivedAt;
-        else if (typeof e.receivedAt === 'string') receivedTime = new Date(e.receivedAt).getTime();
-
-        // Check sortTimestamp
-        const sortTime = typeof e.sortTimestamp === 'number' ? e.sortTimestamp : 0;
-
-        // Check if either timestamp is Feb 28 (within the day)
-        const isReceivedFeb28 = receivedTime > 0 &&
-          new Date(receivedTime).toDateString() === new Date(feb28).toDateString();
-        const isSortFeb28 = sortTime > 0 &&
-          new Date(sortTime).toDateString() === new Date(feb28).toDateString();
-
-        return isReceivedFeb28 || isSortFeb28;
-      });
-
-      if (feb28Emails.length > 0) {
-        console.log(`DEBUG: Found ${feb28Emails.length} emails from Feb 28:`);
-        feb28Emails.forEach((e, i) => {
-          console.log(`DEBUG: Feb 28 Email #${i + 1}:`);
-          console.log(`  - ID: ${e.id}`);
-          console.log(`  - ThreadID: ${e.threadId}`);
-          console.log(`  - Subject: ${e.subject || 'Unknown'}`);
-          console.log(`  - receivedAt: ${e.receivedAt} (${typeof e.receivedAt === 'number' || !e.receivedAt ? '' : safeISOString(e.receivedAt)})`);
-          console.log(`  - sortTimestamp: ${e.sortTimestamp} (${e.sortTimestamp ? safeISOString(e.sortTimestamp) : 'N/A'})`);
-        });
-      } else {
-        console.log('DEBUG: No Feb 28 emails found');
-      }
-
-      // 2. Find the latest timestamp across all emails
-      let latestTimestamp = 0;
-      let latestEmail: ExtendedEmail | null = null;
-
-      // First check sortTimestamp
-      emails.forEach(email => {
-        if (typeof email.sortTimestamp === 'number' && email.sortTimestamp > 0 && email.sortTimestamp > latestTimestamp) {
-          latestTimestamp = email.sortTimestamp;
-          latestEmail = email;
-        }
-      });
-
-      // Then check receivedAt
-      emails.forEach(email => {
-        let receivedTime = 0;
-        if (typeof email.receivedAt === 'number') receivedTime = email.receivedAt;
-        else if (typeof email.receivedAt === 'string') receivedTime = new Date(email.receivedAt).getTime();
-
-        if (!isNaN(receivedTime) && receivedTime > 0 && receivedTime > latestTimestamp) {
-          latestTimestamp = receivedTime;
-          latestEmail = email;
-        }
-      });
-
-      if (latestEmail) {
-        console.log('DEBUG: Latest email found:');
-        // Type assertion for latestEmail
-        const typedLatestEmail = latestEmail as ExtendedEmail;
-
-        console.log(`  - ID: ${typedLatestEmail.id}`);
-        console.log(`  - ThreadID: ${typedLatestEmail.threadId}`);
-        console.log(`  - Subject: ${typedLatestEmail.subject || 'Unknown'}`);
-
-        // Fixed date conversion logic
-        let receivedAtDate = '';
-        if (typeof typedLatestEmail.receivedAt === 'number') {
-          receivedAtDate = safeISOString(typedLatestEmail.receivedAt);
-        } else if (typedLatestEmail.receivedAt && typeof typedLatestEmail.receivedAt === 'string') {
-          receivedAtDate = safeISOString(typedLatestEmail.receivedAt);
-        } else {
-          receivedAtDate = 'Invalid Date';
-        }
-
-        console.log(`  - receivedAt: ${typedLatestEmail.receivedAt} (${receivedAtDate})`);
-
-        // Fixed sortTimestamp display
-        let sortTimestampDate = 'N/A';
-        if (typedLatestEmail.sortTimestamp) {
-          sortTimestampDate = safeISOString(typedLatestEmail.sortTimestamp);
-        }
-
-        console.log(`  - sortTimestamp: ${typedLatestEmail.sortTimestamp} (${sortTimestampDate})`);
-        console.log(`  - Latest timestamp used: ${latestTimestamp} (${safeISOString(latestTimestamp)})`);
-
-        // The timestamp that would be sent to the API
-        console.log(`DEBUG: Timestamp that would be sent to check-new API: ${latestTimestamp} (${new Date(latestTimestamp).toISOString()})`);
-      } else {
-        console.log('DEBUG: No emails with valid timestamps found');
-      }
-
-      toast.success('Timestamp debug info logged to console');
-    } catch (error) {
-      console.error('Error in debugCheckTimestamp:', error);
-      toast.error('Error checking timestamps');
     }
   };
 
@@ -5143,6 +5156,53 @@ ${signature}`;
     } catch (error) {
       console.error('Error getting questions from Firebase:', error);
       return null;
+    }
+  };
+
+  // Add this debug function after other utility functions
+  const debugFirebaseCollections = async (user: { email: string | null } | null) => {
+    if (!user?.email) {
+      console.error('Cannot debug Firebase: No user email provided');
+      return;
+    }
+
+    try {
+      const db = getFirebaseDB();
+      if (!db) {
+        console.error('Error: Firebase database not initialized');
+        return;
+      }
+
+      console.log(`===== Debugging Firebase Collections for ${user.email} =====`);
+
+      // Check emails collection
+      const emailsRef = collection(db, `users/${user.email}/emails`);
+      const emailsSnapshot = await getDocs(emailsRef);
+      console.log(`Found ${emailsSnapshot.size} documents in users/${user.email}/emails`);
+
+      // Check thread_cache collection
+      const threadCacheRef = collection(db, `users/${user.email}/thread_cache`);
+      const threadCacheSnapshot = await getDocs(threadCacheRef);
+      console.log(`Found ${threadCacheSnapshot.size} documents in users/${user.email}/thread_cache`);
+
+      // Check email_content collection
+      const emailContentRef = collection(db, `users/${user.email}/email_content`);
+      const emailContentSnapshot = await getDocs(emailContentRef);
+      console.log(`Found ${emailContentSnapshot.size} documents in users/${user.email}/email_content`);
+
+      // Sample a few documents from each collection
+      if (emailsSnapshot.size > 0) {
+        const sampleSize = Math.min(3, emailsSnapshot.size);
+        console.log(`Sample ${sampleSize} email documents:`);
+        for (let i = 0; i < sampleSize; i++) {
+          const doc = emailsSnapshot.docs[i];
+          console.log(`Email ${i + 1}: id=${doc.id}, threadId=${doc.data().threadId}`);
+        }
+      }
+
+      console.log('===== End Debugging Firebase Collections =====');
+    } catch (error) {
+      console.error('Error debugging Firebase collections:', error);
     }
   };
 
@@ -5169,3 +5229,4 @@ ${signature}`;
     </div>
   );
 }
+// Debug timestamp function removed
