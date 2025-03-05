@@ -913,9 +913,9 @@ const EmailContentSkeleton = () => (
 );
 
 // Add this helper function at the top level
-const extractEmailAddress = (sender: string) => {
+const extractEmailAddress = (sender: string): string => {
   const matches = sender.match(/<(.+?)>/) || [null, sender];
-  return matches[1] || sender;
+  return (matches[1] || sender).toLowerCase().trim();
 };
 
 // Replace the existing AutoReplySettings interface with this unified one
@@ -932,6 +932,10 @@ interface AutoReplySettings {
     includeSignature: boolean;
     signatureText: string;
   };
+  automaticFiltering: {
+    enabled: boolean;
+    blockedAddresses: string[];
+  };
 }
 
 const DEFAULT_SETTINGS: AutoReplySettings = {
@@ -946,6 +950,10 @@ const DEFAULT_SETTINGS: AutoReplySettings = {
     useHtml: true,
     includeSignature: true,
     signatureText: 'Best regards,\nSupport Team'
+  },
+  automaticFiltering: {
+    enabled: true,
+    blockedAddresses: []
   }
 };
 
@@ -1657,20 +1665,67 @@ export default function FAQAutoReplyV2() {
   const lastLoadTime = useRef<number>(0);
   const loadTimeout = useRef<NodeJS.Timeout | null>(null);
 
-  // Update the loadEmails function
+  // Add this helper function near the top with other utility functions
+  const extractEmailAddress = (sender: string): string => {
+    const matches = sender.match(/<(.+?)>/) || [null, sender];
+    return (matches[1] || sender).toLowerCase().trim();
+  };
+
+  const shouldAutoMarkNotRelevant = (email: ExtendedEmail, settings: AutoReplySettings | null): boolean => {
+    // Return false if settings or automaticFiltering is not properly initialized
+    if (!settings?.automaticFiltering?.enabled) {
+      console.log(`Auto-filtering disabled for email ${email.id}`);
+      return false;
+    }
+    if (!Array.isArray(settings.automaticFiltering.blockedAddresses)) {
+      console.log(`No blocked addresses array for email ${email.id}`);
+      return false;
+    }
+
+    const senderEmail = extractEmailAddress(email.sender);
+    const isBlocked = settings.automaticFiltering.blockedAddresses.some(
+      blocked => blocked.toLowerCase().trim() === senderEmail
+    );
+
+    if (isBlocked) {
+      console.log(`Email ${email.id} from ${senderEmail} is blocked`);
+    }
+
+    return isBlocked;
+  };
+
+  // Add this helper function to check if an email should be shown in unanswered
+  const shouldShowInUnanswered = (email: ExtendedEmail): boolean => {
+    // Don't show if email is replied, not relevant, processed, or user was last sender
+    if (email.isReplied ||
+      email.status === 'not_relevant' ||
+      email.status === 'processed' ||
+      isUserLastSender(email, user)) {
+      return false;
+    }
+
+    // Don't show if email should be auto-marked as not relevant
+    if (shouldAutoMarkNotRelevant(email, settings)) {
+      return false;
+    }
+
+    // Show if email has no matched FAQ or no questions
+    return !email.matchedFAQ || !(email.id && ((emailQuestions.get(email.id)?.length ?? 0) > 0));
+  };
+
+  // Update the loadEmails function to include the auto-marking logic
   const loadEmails = useCallback(async (skipCache: boolean = false, pageNumber?: number) => {
     // Add debounce check
     const now = Date.now();
     console.log('=== LOAD EMAILS FUNCTION CALLED ===');
-    console.log('Parameters:', { skipCache, pageNumber });
-    console.log('State:', {
+    console.log('Initial state:', {
       loading,
       loadingMore,
-      hasMore,
-      page,
-      'lastLoadTime.current': lastLoadTime.current,
-      'MIN_FETCH_INTERVAL': MIN_FETCH_INTERVAL,
-      'timeSinceLastLoad': now - lastLoadTime.current
+      isLoading,
+      skipCache,
+      pageNumber,
+      'emails.length': emails.length,
+      'initialDataLoaded': initialDataLoaded
     });
 
     if (now - lastLoadTime.current < MIN_FETCH_INTERVAL && !skipCache) {
@@ -1685,11 +1740,6 @@ export default function FAQAutoReplyV2() {
 
     // If pageNumber is provided and greater than 1, we're loading more emails
     const isLoadingMore = pageNumber && pageNumber > 1;
-    console.log("📊 loadEmails PAGINATION:", {
-      pageNumber,
-      isLoadingMore,
-      'current loadingMore state': loadingMore
-    });
 
     if (isLoadingMore) {
       console.log("🔄 Setting loadingMore = true for pagination");
@@ -1702,17 +1752,27 @@ export default function FAQAutoReplyV2() {
     try {
       // Only use cache for initial load, not for pagination
       if (!isLoadingMore) {
-        console.log("💾 Checking cache for initial load");
+        console.log('Checking cache...', { skipCache, isLoadingMore });
         const cached = !skipCache ? loadFromCache(CACHE_KEYS.EMAILS) : null;
         if (cached && !skipCache) {
-          // Handle both formats: direct array or nested in emails property
           const emailsData = Array.isArray(cached) ? cached : cached.emails;
           if (emailsData && emailsData.length > 0) {
-            // Cast the cached data to the correct type before setting
-            console.log('DEBUG: Using cached emails:', emailsData.length);
+            console.log('Found cached emails:', emailsData.length);
+            // Process cached emails against blocked list if settings are available
+            const processedEmails = emailsData.map(email => {
+              if (settings && shouldAutoMarkNotRelevant(email, settings)) {
+                console.log(`Auto-marking email ${email.id} as not relevant - sender: ${email.sender}`);
+                return {
+                  ...email,
+                  isNotRelevant: true,
+                  status: 'not_relevant' as const
+                };
+              }
+              return email;
+            });
 
-            // Ensure cached emails are sorted
-            const sortedCachedEmails = sortEmails(emailsData as ExtendedEmail[]) as ExtendedEmail[];
+            const sortedCachedEmails = sortEmails(processedEmails as ExtendedEmail[]);
+            console.log('Setting emails from cache and clearing loading state');
             setEmails(sortedCachedEmails);
             setLastFetchTimestamp(Date.now());
             setLoading(false);
@@ -1721,214 +1781,44 @@ export default function FAQAutoReplyV2() {
         }
       }
 
-      // For pagination (Load 5 More), fetch directly from Gmail API
-      if (isLoadingMore) {
-        console.log("📥 PAGINATION: Fetching directly from Gmail API");
-        console.log(`Current emails state: page=${page}, emails.length=${emails.length}`);
-        console.log(`Loading page ${pageNumber} of emails from Gmail API... isLoadingMore=${isLoadingMore}`);
-
-        if (!user?.accessToken) {
-          console.error("No access token available");
-          toast.error("Authentication error. Please sign in again.");
-          setLoadingMore(false);
-          return;
-        }
-
-        // Find the oldest email timestamp to ensure we get older emails
-        let oldestTimestamp: number | undefined = undefined;
-        if (emails.length > 0) {
-          console.log('Finding oldest email timestamp from', emails.length, 'emails');
-
-          // Get all timestamps from emails
-          const timestamps = emails.map(email => {
-            return email.sortTimestamp ||
-              (email.receivedAt ?
-                (typeof email.receivedAt === 'number' ?
-                  email.receivedAt :
-                  new Date(email.receivedAt).getTime())
-                : 0);
-          }).filter(timestamp => timestamp > 0);
-
-          // Sort timestamps in ascending order (oldest first)
-          timestamps.sort((a, b) => a - b);
-
-          // Get the oldest timestamp
-          if (timestamps.length > 0) {
-            oldestTimestamp = timestamps[0];
-
-            // Subtract 1 second to ensure we get emails older than this one
-            // This helps prevent edge cases where emails have the exact same timestamp
-            oldestTimestamp = oldestTimestamp - 1000;
-
-            console.log('Oldest email timestamp:', {
-              timestamp: oldestTimestamp,
-              date: new Date(oldestTimestamp).toISOString()
-            });
+      console.log('Loading emails from Firebase...');
+      // For pagination or fresh load
+      const firebaseEmails = await loadEmailsFromFirebase(user);
+      if (firebaseEmails && firebaseEmails.length > 0) {
+        console.log('Loaded emails from Firebase:', firebaseEmails.length);
+        // Process Firebase emails against blocked list if settings are available
+        const processedEmails = firebaseEmails.map(email => {
+          if (settings && shouldAutoMarkNotRelevant(email, settings)) {
+            console.log(`Auto-marking email ${email.id} as not relevant - sender: ${email.sender}`);
+            return {
+              ...email,
+              isNotRelevant: true,
+              status: 'not_relevant' as const
+            };
           }
-        }
-
-        // Build the API URL with pagination and oldest timestamp
-        let apiUrl = `/api/emails/inbox?page=${pageNumber}&limit=5`;
-        if (oldestTimestamp) {
-          apiUrl += `&oldestTimestamp=${oldestTimestamp}`;
-          console.log(`🔍 Requesting emails older than ${new Date(oldestTimestamp).toISOString()}`);
-        } else {
-          console.warn('⚠️ No oldest timestamp found, may fetch duplicate emails');
-        }
-
-        console.log('🔄 About to make API request to:', apiUrl);
-        console.log('Request headers:', {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${user.accessToken ? 'VALID_TOKEN_EXISTS' : 'NO_TOKEN'}`
+          return email;
         });
 
-        // Declare data variable outside the try/catch block
-        let data;
-
-        try {
-          // Fetch older emails from Gmail API with pagination
-          console.log('⚡ Executing fetch request...');
-          const response = await fetch(apiUrl, {
-            method: 'GET',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${user.accessToken}`
-            }
-          });
-
-          console.log('✅ Got response:', {
-            status: response.status,
-            statusText: response.statusText,
-            ok: response.ok
-          });
-
-          if (!response.ok) {
-            throw new Error(`Failed to fetch older emails: ${response.statusText}`);
-          }
-
-          data = await response.json();
-          console.log(`Fetched ${data.emails?.length || 0} older emails from Gmail API (page ${pageNumber})`);
-        } catch (error) {
-          console.error('🚨 Error making API request:', error);
-          throw error; // Re-throw to be handled by the outer catch block
-        }
-
-        // Check if data exists and has emails before proceeding
-        if (data && data.emails && data.emails.length > 0) {
-          // Transform the emails to match ExtendedEmail type
-          const transformedEmails = data.emails.map((email: any) => {
-            // Log the original timestamp data
-            console.log(`Email ${email.id} timestamps: internalDate=${email.internalDate}, receivedAt=${email.receivedAt}`);
-
-            // Ensure proper timestamp handling
-            let receivedAt = email.receivedAt || null;
-            let sortTimestamp = null;
-
-            // If email has internalDate from Gmail, use it
-            if (email.internalDate) {
-              const internalDateTimestamp = parseInt(email.internalDate);
-              if (!isNaN(internalDateTimestamp)) {
-                sortTimestamp = internalDateTimestamp;
-                if (!receivedAt) {
-                  receivedAt = new Date(internalDateTimestamp).toISOString();
-                }
-              }
-            }
-
-            // Ensure all required properties exist for ExtendedEmail type
-            return {
-              id: email.id || '',
-              threadId: email.threadId || '',
-              subject: email.subject || '',
-              sender: email.sender || '',
-              content: email.content || '',
-              receivedAt: receivedAt || new Date().toISOString(),
-              sortTimestamp: sortTimestamp || (receivedAt ? new Date(receivedAt).getTime() : Date.now()),
-              // Copy other properties from the original email
-              ...email,
-            } as ExtendedEmail;
-          });
-
-          // Add the new emails to the existing list
-          setEmails(prevEmails => {
-            // Filter out any duplicates
-            const existingIds = new Set(prevEmails.map((e: ExtendedEmail) => e.id));
-            const uniqueNewEmails = transformedEmails.filter((e: ExtendedEmail) => !existingIds.has(e.id));
-
-            console.log(`Found ${uniqueNewEmails.length} new unique emails out of ${transformedEmails.length} fetched`);
-
-            if (uniqueNewEmails.length === 0) {
-              console.warn('⚠️ No new unique emails found, may need to adjust oldestTimestamp logic');
-            }
-
-            // Combine and sort
-            const combinedEmails = [...prevEmails, ...uniqueNewEmails];
-            return sortEmails(combinedEmails) as ExtendedEmail[];
-          });
-
-          // Update pagination state
-          setPage(pageNumber);
-          setHasMore(data.hasMore);
-
-          // Save the combined emails to Firebase for persistence
-          saveEmailsToFirebase(transformedEmails, user);
-
-          // Load any existing questions for the new emails
-          for (const email of transformedEmails) {
-            getQuestionsForEmail(email.id).then(questions => {
-              if (questions && questions.length > 0) {
-                setEmailQuestions(prev => {
-                  const newMap = new Map(prev);
-                  newMap.set(email.id, questions);
-                  return newMap;
-                });
-                console.log(`Loaded ${questions.length} existing questions for email ${email.id}`);
-              }
-            }).catch(error => {
-              console.error(`Error loading questions for email ${email.id}:`, error);
-            });
-          }
-        } else {
-          // If no more emails were found, update hasMore
-          setHasMore(false);
-        }
-
-        setLastFetchTimestamp(Date.now());
-        setLoadingMore(false);
-        return;
-      }
-
-      // For initial load, try Firebase first
-      console.log("Loading fresh emails...");
-
-      // Actual fetch logic here - loading from Firebase
-      const firebaseEmails = await loadEmailsFromFirebase(user);
-      console.log('DEBUG: Loaded from Firebase:', firebaseEmails?.length || 0);
-
-      const readyToReplyEmails = await loadReadyToReplyFromFirebase(user);
-      console.log('DEBUG: Ready to reply emails from Firebase:', readyToReplyEmails?.length || 0);
-
-      if (firebaseEmails && firebaseEmails.length > 0) {
-        console.log(`Loaded ${firebaseEmails.length} emails from Firebase`);
-
-        // Use our sortEmails helper function for consistent sorting
-        console.log('DEBUG: Sorting emails using sortEmails helper');
-        const sortedEmails = sortEmails(firebaseEmails) as ExtendedEmail[];
-
-        console.log('DEBUG: Setting sorted emails:', sortedEmails.length);
+        const sortedEmails = sortEmails(processedEmails) as ExtendedEmail[];
         setEmails(sortedEmails);
 
-        // Save to cache - directly save the emails array without extra nesting
-        saveToCache(CACHE_KEYS.EMAILS, sortedEmails);
+        // Save processed emails back to Firebase if any were marked as not relevant
+        const hasChanges = processedEmails.some(email =>
+          email.status === 'not_relevant' &&
+          !firebaseEmails.find(fe => fe.id === email.id)?.isNotRelevant
+        );
 
+        if (hasChanges) {
+          console.log('Saving changes to Firebase - some emails were marked as not relevant');
+          await saveEmailsToFirebase(processedEmails, user);
+        }
+
+        // Save to cache
+        saveToCache(CACHE_KEYS.EMAILS, sortedEmails);
         setLastFetchTimestamp(Date.now());
-      } else {
-        console.log("No emails found in Firebase, keeping current emails");
       }
 
-      // Update last load time
       lastLoadTime.current = Date.now();
-
     } catch (error) {
       console.error("Error loading emails:", error);
       toast.error("Failed to load emails");
@@ -1937,7 +1827,7 @@ export default function FAQAutoReplyV2() {
       setLoadingMore(false);
       setManualRefreshTriggered(false);
     }
-  }, [user?.accessToken, page, MIN_FETCH_INTERVAL, setManualRefreshTriggered]);
+  }, [user?.accessToken, page, MIN_FETCH_INTERVAL, settings, setManualRefreshTriggered]);
 
   useEffect(() => {
     // Check if analysis is enabled via environment variable
@@ -1950,7 +1840,15 @@ export default function FAQAutoReplyV2() {
     const initialize = async () => {
       if (!user?.accessToken) return;
 
-      console.log('DEBUG: Initialize function started');
+      console.log('=== DEBUG: Initialize function started ===');
+      console.log('Initial state:', {
+        loading,
+        loadingMore,
+        isLoading,
+        'emails.length': emails.length,
+        'initialDataLoaded': initialDataLoaded,
+        'hasAccessToken': !!user?.accessToken
+      });
 
       // Add minimum time between loads
       await new Promise(resolve => setTimeout(resolve, 500));
@@ -1958,6 +1856,7 @@ export default function FAQAutoReplyV2() {
       if (controller.signal.aborted) return;
 
       try {
+        console.log('Setting loading=true for initialization');
         setLoading(true);
         // Ensure the manual refresh indicator is false during initialization
         setManualRefreshTriggered(false);
@@ -1968,12 +1867,12 @@ export default function FAQAutoReplyV2() {
           // Handle both formats: direct array or nested in emails property
           const emailsData = Array.isArray(cachedData) ? cachedData : cachedData.emails;
           if (emailsData && emailsData.length > 0) {
-            console.log('DEBUG: Emails loaded from local storage cache:', emailsData.length);
+            console.log('Found emails in local storage cache:', emailsData.length);
 
             // Sort emails by timestamp with most recent first before setting the state
             const sortedCachedEmails = sortEmails(emailsData) as ExtendedEmail[];
 
-            console.log('DEBUG: Setting sorted cached emails:', sortedCachedEmails.length);
+            console.log('Setting sorted cached emails:', sortedCachedEmails.length);
             setEmails(sortedCachedEmails);
           }
         }
@@ -1981,6 +1880,7 @@ export default function FAQAutoReplyV2() {
         // Then try Firebase cache and load refresh timestamp
         const db = getFirebaseDB();
         if (db) {
+          console.log('Loading data from Firebase...');
           // Load refresh timestamp
           const refreshMetadataRef = doc(db, 'email_metadata', 'refresh_timestamp');
           const refreshMetadata = await getDoc(refreshMetadataRef);
@@ -1990,16 +1890,16 @@ export default function FAQAutoReplyV2() {
 
           // Load emails and ready to reply data
           const firebaseEmails = await loadEmailsFromFirebase(user);
-          console.log('DEBUG: Emails loaded from Firebase:', firebaseEmails?.length || 0);
+          console.log('Loaded emails from Firebase:', firebaseEmails?.length || 0);
 
           const readyToReplyEmails = await loadReadyToReplyFromFirebase(user);
-          console.log('DEBUG: Ready to reply emails from Firebase:', readyToReplyEmails?.length || 0);
+          console.log('Loaded ready to reply emails:', readyToReplyEmails?.length || 0);
 
           if (firebaseEmails && firebaseEmails.length > 0) {
             setEmails(prevEmails => {
               const existingIds = new Set(prevEmails.map(e => e.id));
               const newEmails = firebaseEmails.filter(e => !existingIds.has(e.id));
-              console.log('DEBUG: New unique emails from Firebase:', newEmails.length);
+              console.log('New unique emails from Firebase:', newEmails.length);
 
               // Merge ready-to-reply data with emails
               if (readyToReplyEmails) {
@@ -2016,58 +1916,23 @@ export default function FAQAutoReplyV2() {
 
               // Sort the merged array by timestamp with most recent first
               const combinedEmails = [...prevEmails, ...newEmails];
-              // Use our sortEmails helper for consistent sorting
               return sortEmails(combinedEmails) as ExtendedEmail[];
-            });
-          }
-
-          // Load cached questions from Firebase
-          console.log('Loading cached questions from Firebase...');
-          const cachedQuestions = await loadQuestionsFromFirebase(user);
-          if (cachedQuestions) {
-            console.log('Found cached questions:', cachedQuestions);
-            setEmailQuestions(cachedQuestions);
-          }
-
-          // Also try to load cached questions for each email
-          const allEmails = [...(cachedData?.emails || []), ...(firebaseEmails || [])];
-          const uniqueEmails = Array.from(new Set(allEmails.map(e => e.id))).map(id =>
-            allEmails.find(e => e.id === id)
-          ).filter((e): e is ExtendedEmail => e !== undefined);
-
-          console.log('Loading cached questions for each email...');
-          const emailQuestionsPromises = uniqueEmails.map(async email => {
-            const questions = await getCachedQuestionsFromFirebase(email.id, user);
-            if (questions) {
-              return [email.id, questions] as [string, GenericFAQ[]];
-            }
-            return null;
-          });
-
-          const emailQuestionsResults = await Promise.all(emailQuestionsPromises);
-          const validResults = emailQuestionsResults.filter((result): result is [string, GenericFAQ[]] => result !== null);
-
-          if (validResults.length > 0) {
-            console.log(`Found cached questions for ${validResults.length} emails`);
-            setEmailQuestions(prev => {
-              const updated = new Map(prev);
-              validResults.forEach(([emailId, questions]) => {
-                updated.set(emailId, questions);
-              });
-              return updated;
             });
           }
         }
 
         // Finally, load fresh emails
+        console.log('Loading fresh emails...');
         await loadEmails(true);
 
         // Mark initial data as loaded
+        console.log('Setting initialDataLoaded=true');
         setInitialDataLoaded(true);
 
       } catch (error) {
         console.error('Error initializing data:', error);
       } finally {
+        console.log('Initialization complete - clearing loading state');
         setLoading(false);
         // Mark initial data as loaded even if there was an error
         setInitialDataLoaded(true);
@@ -2608,9 +2473,12 @@ export default function FAQAutoReplyV2() {
     try {
       // Store the email's current status before updating
       const emailToMark = emails.find(e => e.id === emailId);
-      if (emailToMark) {
-        prevEmailStatus.current[emailId] = emailToMark.status || 'pending';
-      }
+      if (!emailToMark) return;
+
+      prevEmailStatus.current[emailId] = emailToMark.status || 'pending';
+
+      // Extract the sender's email address
+      const senderEmail = extractEmailAddress(emailToMark.sender);
 
       // Optimistic UI update
       setEmails(prev =>
@@ -2621,8 +2489,48 @@ export default function FAQAutoReplyV2() {
         ))
       );
 
-      // Show immediate feedback to user
-      toast.success('Email marked as not relevant');
+      // Show immediate feedback to user with confirmation for future filtering
+      toast(
+        <div className="flex flex-col gap-3">
+          <div className="font-medium">Email marked as not relevant</div>
+          <div className="text-sm text-gray-600">
+            Would you like to filter future emails from {senderEmail}?
+          </div>
+          <div className="flex gap-2 mt-1">
+            <button
+              onClick={() => {
+                // Add the sender to blocked addresses
+                const newSettings = {
+                  ...settings,
+                  automaticFiltering: {
+                    ...settings.automaticFiltering,
+                    blockedAddresses: [...settings.automaticFiltering.blockedAddresses, senderEmail]
+                  }
+                };
+                setSettings(newSettings);
+                // Save settings to localStorage
+                localStorage.setItem('faq_autoreply_settings', JSON.stringify(newSettings));
+                toast.success(`Added ${senderEmail} to filtered addresses`);
+              }}
+              className="flex-1 px-3 py-2 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-md transition-colors duration-200 font-medium text-sm"
+            >
+              👍 Yes, filter them
+            </button>
+            <button
+              onClick={() => toast.dismiss()}
+              className="flex-1 px-3 py-2 bg-gray-50 hover:bg-gray-100 text-gray-700 rounded-md transition-colors duration-200 font-medium text-sm"
+            >
+              👎 No, thanks
+            </button>
+          </div>
+        </div>,
+        {
+          duration: 5000,
+          style: {
+            minWidth: '320px'
+          }
+        }
+      );
 
       try {
         const firebaseDB = getFirebaseDB();
@@ -2631,21 +2539,20 @@ export default function FAQAutoReplyV2() {
           const notRelevantRef = doc(firebaseDB, FIREBASE_COLLECTIONS.NOT_RELEVANT, emailId);
           await setDoc(notRelevantRef, {
             emailId: emailId,
-            threadId: emails.find(e => e.id === emailId)?.threadId || '',
+            threadId: emailToMark.threadId || '',
             markedAt: new Date().toISOString(),
             markedBy: user?.email || 'unknown'
           });
 
           // Update (or create) the email document in emails collection
-          // Using setDoc with merge:true instead of updateDoc to handle cases where the document doesn't exist
           const emailRef = doc(firebaseDB, FIREBASE_COLLECTIONS.EMAILS, emailId);
           await setDoc(emailRef, {
             id: emailId,
-            threadId: emails.find(e => e.id === emailId)?.threadId || '',
+            threadId: emailToMark.threadId || '',
             status: 'not_relevant',
-            subject: emails.find(e => e.id === emailId)?.subject || '',
-            sender: emails.find(e => e.id === emailId)?.sender || '',
-            receivedAt: emails.find(e => e.id === emailId)?.receivedAt || new Date().toISOString(),
+            subject: emailToMark.subject || '',
+            sender: emailToMark.sender || '',
+            receivedAt: emailToMark.receivedAt || new Date().toISOString(),
             updatedAt: new Date().toISOString()
           }, { merge: true });
 
@@ -2659,7 +2566,6 @@ export default function FAQAutoReplyV2() {
         }
       } catch (error) {
         console.error('Error marking email as not relevant:', error);
-        // Only show error toast if the operation fails
         toast.error('Failed to mark email as not relevant');
 
         // Revert the optimistic update if the operation failed
@@ -2680,8 +2586,6 @@ export default function FAQAutoReplyV2() {
             : email
         ))
       );
-
-      // ... existing code ...
     }
   };
 
@@ -3509,7 +3413,15 @@ ${signature}`;
   };
 
   const renderUnansweredEmails = () => {
-    console.log('DEBUG: Total emails before filtering:', emails.length);
+    console.log('=== DEBUG: renderUnansweredEmails ===');
+    console.log('Loading state:', {
+      loading,
+      loadingMore,
+      loadingNewEmails,
+      isLoading,
+      'emails.length': emails.length,
+      'initialDataLoaded': initialDataLoaded
+    });
 
     // Add debug logging to see what emails are being filtered out
     const repliedEmails = emails.filter(email => email.isReplied);
@@ -3517,18 +3429,24 @@ ${signature}`;
     const matchedFAQEmails = emails.filter(email => email.matchedFAQ && email.id && ((emailQuestions.get(email.id)?.length ?? 0) > 0));
     const processedEmails = emails.filter(email => email.status === 'processed');
     const userLastSenderEmails = emails.filter(email => isUserLastSender(email, user));
-    const readyToReplyEmails = emails.filter(email => isEmailReadyForReply(email, emailQuestions, user));
+    const autoBlockedEmails = emails.filter(email => shouldAutoMarkNotRelevant(email, settings));
 
-    console.log('DEBUG: Filtering breakdown:');
-    console.log('- Replied emails:', repliedEmails.length);
-    console.log('- Not relevant emails:', notRelevantEmails.length);
-    console.log('- Matched FAQ emails:', matchedFAQEmails.length);
-    console.log('- Processed emails:', processedEmails.length);
-    console.log('- User last sender emails:', userLastSenderEmails.length);
-    console.log('- Ready to reply emails:', readyToReplyEmails.length);
+    console.log('DEBUG: Filtering breakdown:', {
+      total: emails.length,
+      replied: repliedEmails.length,
+      notRelevant: notRelevantEmails.length,
+      matchedFAQ: matchedFAQEmails.length,
+      processed: processedEmails.length,
+      userLastSender: userLastSenderEmails.length,
+      autoBlocked: autoBlockedEmails.length,
+      'settings.automaticFiltering': settings?.automaticFiltering
+    });
 
-    // If emails are still loading, show skeleton UI
-    if (loading) {
+    // Only show skeleton UI during initial load (when we have no emails yet)
+    const isInitialLoading = loading && emails.length === 0 && !initialDataLoaded;
+
+    if (isInitialLoading) {
+      console.log('DEBUG: Showing skeleton UI - initial load in progress');
       return (
         <div className="space-y-6">
           {/* Email skeletons */}
@@ -3552,15 +3470,15 @@ ${signature}`;
       );
     }
 
-    // Simplified filtering logic: show in Unanswered if not ready for reply, not replied, not not-relevant, and user not last sender
-    const filteredEmails = emails.filter(email =>
-      !email.isReplied &&
-      email.status !== 'not_relevant' &&
-      !isUserLastSender(email, user) &&
-      !isEmailReadyForReply(email, emailQuestions, user)
-    );
+    // Use the new helper function to filter emails
+    const filteredEmails = emails.filter(shouldShowInUnanswered);
 
-    console.log('DEBUG: Emails after filtering:', filteredEmails.length);
+    console.log('DEBUG: After filtering:', {
+      filteredCount: filteredEmails.length,
+      showingSkeletonUI: isInitialLoading,
+      'emails.length': emails.length,
+      'initialDataLoaded': initialDataLoaded
+    });
 
     if (filteredEmails.length === 0) {
       return (

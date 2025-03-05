@@ -61,7 +61,16 @@ export async function POST(request: NextRequest) {
           // Reuse single refresh processing logic
           const messages = threadDetails.data.messages;
           const mostRecentMessage = messages[messages.length - 1];
-          const { content, contentType } = extractEmailBody(mostRecentMessage);
+          const extractResult = extractEmailBody(mostRecentMessage);
+          const { content, contentType } = extractResult;
+
+          // Debug the content extraction
+          console.log(`DEBUG refresh-batch for ${threadId} - Content type: ${contentType}`);
+          console.log(`DEBUG refresh-batch content sample: ${content?.substring(0, 100)}...`);
+
+          // Try to detect if this is an HTML email
+          const isHtml = content?.includes('<div') || content?.includes('<html') || content?.includes('<body');
+          console.log(`DEBUG refresh-batch isHtml detection: ${isHtml}`);
 
           // Prepare Firestore data (same structure as single refresh)
           const emailMetadata = {
@@ -89,13 +98,19 @@ export async function POST(request: NextRequest) {
           return {
             id: mostRecentMessage.id!,
             ...emailMetadata,
-            content,
+            content: (contentType === 'text/html' || isHtml) ? content : { text: content, html: null },
             contentType,
-            threadMessages: messages.map(message => ({
-              id: message.id!,
-              content: extractEmailBody(message).content,
-              sender: message.payload?.headers?.find(h => h.name === 'From')?.value || 'Unknown Sender'
-            }))
+            threadMessages: messages.map(message => {
+              const { content: messageContent, contentType: messageContentType } = extractEmailBody(message);
+              const messageIsHtml = messageContent?.includes('<div') || messageContent?.includes('<html') || messageContent?.includes('<body');
+
+              return {
+                id: message.id!,
+                content: (messageContentType === 'text/html' || messageIsHtml) ? messageContent : { text: messageContent, html: null },
+                contentType: messageContentType,
+                sender: message.payload?.headers?.find(h => h.name === 'From')?.value || 'Unknown Sender'
+              };
+            })
           };
         } catch (error) {
           console.error(`Error refreshing thread ${threadId}:`, error);

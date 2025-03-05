@@ -6,6 +6,7 @@ export interface Email {
   subject: string;
   sender: string;
   content: string | EmailContent;
+  contentType?: 'text/plain' | 'text/html';
   receivedAt: number;
   sortTimestamp: number;
   timestamp?: number;
@@ -57,6 +58,7 @@ export interface ThreadMessage {
   subject: string;
   sender: string;
   content: string;
+  contentType?: 'text/plain' | 'text/html';
   receivedAt: number;
 }
 

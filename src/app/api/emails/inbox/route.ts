@@ -4,6 +4,7 @@ import { google, gmail_v1 } from 'googleapis';
 import { getFirestore, Firestore } from 'firebase-admin/firestore';
 import { getFirebaseAdmin } from '@/lib/firebase/firebase-admin';
 import OpenAI from 'openai';
+import { extractEmailBody } from '@/lib/utils/email';  // Import the shared utility function
 
 // Add OpenAI initialization after imports
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
@@ -557,20 +558,16 @@ export async function GET(request: NextRequest) {
           }
 
           // Extract email content
-          const { content, error: extractionError } = extractEmailBody(mostRecentMessage);
+          const extractResult = extractEmailBody(mostRecentMessage);
+          const { content, contentType } = extractResult;
 
-          // Get thread messages for context
-          const threadMessages = messages.map(message => {
-            const { content: messageContent } = extractEmailBody(message);
-            return {
-              id: message.id!,
-              threadId: thread.id!,
-              subject: message.payload?.headers?.find(h => h.name === 'Subject')?.value || 'No Subject',
-              sender: message.payload?.headers?.find(h => h.name === 'From')?.value || 'Unknown Sender',
-              content: messageContent || '',
-              receivedAt: parseInt(message.internalDate || '0')  // Already using number
-            };
-          }).reverse(); // Reverse to get oldest first
+          // Check if content is HTML
+          const isHtml = content?.includes('<div') || content?.includes('<html') || content?.includes('<body');
+
+          // Format content properly for the EmailRenderNew component:
+          // - For HTML content: Pass the content directly as a string
+          // - For plain text: Use an object with { text: content, html: null }
+          const formattedContent = (contentType === 'text/html' || isHtml) ? content : { text: content, html: null };
 
           // Create response object
           const refreshedEmail = {
@@ -578,11 +575,31 @@ export async function GET(request: NextRequest) {
             threadId: thread.id!,
             subject: mostRecentMessage.payload?.headers?.find(h => h.name === 'Subject')?.value || 'No Subject',
             sender: mostRecentMessage.payload?.headers?.find(h => h.name === 'From')?.value || 'Unknown Sender',
-            content: content || '',
-            contentType: mostRecentMessage.payload?.mimeType || 'text/plain',
+            content: formattedContent,
+            contentType: contentType || mostRecentMessage.payload?.mimeType || 'text/plain',
             receivedAt: parseInt(mostRecentMessage.internalDate || '0'),  // Use number
             sortTimestamp: parseInt(mostRecentMessage.internalDate || '0'),  // Use same number for consistency
-            threadMessages
+            threadMessages: messages.map(message => {
+              const { content: messageContent, contentType: messageContentType } = extractEmailBody(message);
+
+              // Check if content is HTML by looking for common HTML tags
+              const messageIsHtml = messageContent?.includes('<div') || messageContent?.includes('<html') || messageContent?.includes('<body');
+
+              // Format content properly for the EmailRenderNew component:
+              // - For HTML content: Pass the content directly as a string
+              // - For plain text: Use an object with { text: content, html: null }
+              const formattedMessageContent = (messageContentType === 'text/html' || messageIsHtml) ? messageContent : { text: messageContent, html: null };
+
+              return {
+                id: message.id!,
+                threadId: thread.id!,
+                subject: message.payload?.headers?.find(h => h.name === 'Subject')?.value || 'No Subject',
+                sender: message.payload?.headers?.find(h => h.name === 'From')?.value || 'Unknown Sender',
+                content: formattedMessageContent,
+                contentType: messageContentType || 'text/plain',
+                receivedAt: parseInt(message.internalDate || '0')  // Already using number
+              };
+            }).reverse()
           };
 
           return refreshedEmail;
@@ -669,100 +686,6 @@ function calculateConfidence(subject: string, content: string, faqQuestion: stri
   const confidence = (subjectScore * 0.6) + (contentScore * 0.4);
 
   return confidence;
-}
-
-// Add helper functions for email parsing
-function extractEmailBody(message: gmail_v1.Schema$Message): { content: string | null; error?: { message: string; details?: any } } {
-  try {
-    if (!message.payload) {
-      return {
-        content: null,
-        error: {
-          message: 'No message payload found',
-          details: { messageId: message.id }
-        }
-      };
-    }
-
-    // Helper function to recursively search for text content in parts
-    const findTextContent = (part: gmail_v1.Schema$MessagePart): string | null => {
-      // Log the part structure for debugging
-      console.log('Processing part:', {
-        mimeType: part.mimeType,
-        hasBody: !!part.body,
-        hasData: !!part.body?.data,
-        hasParts: !!part.parts,
-        partId: part.partId
-      });
-
-      // Check if this part is text content
-      if (part.mimeType === 'text/plain' || part.mimeType === 'text/html') {
-        if (part.body?.data) {
-          return Buffer.from(part.body.data, 'base64').toString();
-        }
-      }
-
-      // If this is a multipart message, search through all parts
-      if (part.parts) {
-        for (const subPart of part.parts) {
-          const content = findTextContent(subPart);
-          if (content) return content;
-        }
-      }
-
-      return null;
-    };
-
-    // Try to find text content in the message
-    const content = findTextContent(message.payload);
-
-    if (content) {
-      return { content };
-    }
-
-    // If no content found, return detailed error
-    return {
-      content: null,
-      error: {
-        message: 'No email body content found',
-        details: {
-          messageId: message.id,
-          hasPayload: !!message.payload,
-          hasParts: !!message.payload.parts,
-          hasDirectBody: !!message.payload.body,
-          mimeType: message.payload.mimeType,
-          partStructure: message.payload.parts?.map(part => ({
-            mimeType: part.mimeType,
-            hasBody: !!part.body,
-            hasData: !!part.body?.data,
-            hasParts: !!part.parts
-          }))
-        }
-      }
-    };
-  } catch (error) {
-    console.error('Error extracting email body:', error);
-    return {
-      content: null,
-      error: {
-        message: 'Error extracting email body',
-        details: {
-          messageId: message.id,
-          error: error instanceof Error ? error.message : String(error),
-          mimeType: message.payload?.mimeType,
-          hasPayload: !!message.payload,
-          hasParts: !!message.payload?.parts,
-          hasDirectBody: !!message.payload?.body,
-          partStructure: message.payload?.parts?.map(part => ({
-            mimeType: part.mimeType,
-            hasBody: !!part.body,
-            hasData: !!part.body?.data,
-            hasParts: !!part.parts
-          }))
-        }
-      }
-    };
-  }
 }
 
 function parseGmailDate(dateStr: string): string {
