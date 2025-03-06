@@ -941,17 +941,17 @@ interface AutoReplySettings {
 }
 
 const DEFAULT_SETTINGS: AutoReplySettings = {
-  similarityThreshold: 70, // Changed from 0.7 to 70 (percentage)
-  confidenceThreshold: 0.8,
+  similarityThreshold: 0.6,
+  confidenceThreshold: 0.7,
   emailFormatting: {
-    greeting: "Hi [Name]",
+    greeting: 'Hello,',
     listStyle: 'bullet',
     spacing: 'normal',
-    signatureStyle: "Best,\nInterview Sidekick team",
-    customPrompt: "Please keep responses friendly but professional.",
+    signatureStyle: 'simple',
+    customPrompt: '',
     useHtml: true,
     includeSignature: true,
-    signatureText: 'Best regards,\nSupport Team'
+    signatureText: 'Best regards,'
   },
   automaticFiltering: {
     enabled: true,
@@ -1125,7 +1125,7 @@ const PreloadedEditor = React.memo(({ value, onEditorChange, isVisible }: {
 
 PreloadedEditor.displayName = 'PreloadedEditor';
 
-const FAQAutoReplyV2: React.FC = () => {
+const FAQAutoReplyV2: React.FC<{}> = () => {
   console.log('=== Component Render Start ===');
   const { user, checkGmailAccess, refreshAccessToken, loading: authLoading } = useAuth();
   const [emails, setEmails] = useState<ExtendedEmail[]>([]);
@@ -2309,40 +2309,6 @@ const FAQAutoReplyV2: React.FC = () => {
 
   const handleLoadMore = useCallback(() => {
     console.log('Load more clicked!');
-    console.log('Current state before load more:', {
-      loading,
-      isLoading,
-      loadingMore,
-      hasMore,
-      page,
-      user: user ? 'User exists' : 'No user',
-      userAccessToken: user?.accessToken ? 'Token exists' : 'No token',
-      emailsCount: emails.length
-    });
-
-    // Log the timestamps of current emails to help diagnose issues
-    if (emails.length > 0) {
-      console.log('CURRENT EMAILS TIMESTAMPS:');
-      const sortedEmails = [...emails].sort((a, b) => {
-        const aTime = a.sortTimestamp || (a.receivedAt ? new Date(a.receivedAt).getTime() : 0);
-        const bTime = b.sortTimestamp || (b.receivedAt ? new Date(b.receivedAt).getTime() : 0);
-        return aTime - bTime; // Ascending order (oldest first)
-      });
-
-      // Log oldest 3 and newest 3 emails
-      const oldestEmails = sortedEmails.slice(0, 3);
-      const newestEmails = sortedEmails.slice(-3);
-
-      oldestEmails.forEach((email, i) => {
-        const timestamp = email.sortTimestamp || (email.receivedAt ? new Date(email.receivedAt).getTime() : 0);
-        console.log(`Oldest #${i + 1}: ID=${email.id}, Subject="${email.subject}", Timestamp=${timestamp}, Date=${new Date(timestamp).toISOString()}`);
-      });
-
-      newestEmails.forEach((email, i) => {
-        const timestamp = email.sortTimestamp || (email.receivedAt ? new Date(email.receivedAt).getTime() : 0);
-        console.log(`Newest #${i + 1}: ID=${email.id}, Subject="${email.subject}", Timestamp=${timestamp}, Date=${new Date(timestamp).toISOString()}`);
-      });
-    }
 
     if (!loading && !loadingMore && hasMore) {
       const nextPage = page + 1;
@@ -2355,10 +2321,7 @@ const FAQAutoReplyV2: React.FC = () => {
       setLoadingMore(true);
       console.log('SETTING loadingMore = true');
 
-      // Now call loadEmails with the next page number - pass skipCache=true to bypass rate limit check
-      console.log(`Calling loadEmails with skipCache=true, pageNumber=${nextPage}`);
-
-      // Load and process the new emails
+      // Load and process the emails
       const loadAndProcessEmails = async () => {
         try {
           const firebaseEmails = await loadEmailsFromFirebase(user);
@@ -2393,12 +2356,20 @@ const FAQAutoReplyV2: React.FC = () => {
 
             const sortedEmails = sortEmails(processedEmails) as ExtendedEmail[];
 
-            // Update state with the processed emails
-            setEmails(prevEmails => {
-              const existingIds = new Set(prevEmails.map(e => e.id));
-              const newEmails = sortedEmails.filter(e => !existingIds.has(e.id));
-              return sortEmails([...prevEmails, ...newEmails]);
+            // First update the cache with the new emails
+            const existingEmails = emails;
+            const existingIds = new Set(existingEmails.map(e => e.id));
+            const newEmails = sortedEmails.filter(e => !existingIds.has(e.id));
+            const mergedEmails = sortEmails([...existingEmails, ...newEmails]);
+
+            // Update the cache before updating state
+            saveToCache(CACHE_KEYS.EMAILS, {
+              emails: mergedEmails,
+              timestamp: Date.now()
             });
+
+            // Then update the state
+            setEmails(mergedEmails);
 
             // Save any changes back to Firebase
             const hasChanges = processedEmails.some(email =>
@@ -2410,12 +2381,18 @@ const FAQAutoReplyV2: React.FC = () => {
               console.log('Saving changes to Firebase - some emails were marked as not relevant or answered');
               await saveEmailsToFirebase(processedEmails, user);
             }
+          } else {
+            // If no more emails are found, set hasMore to false
+            setHasMore(false);
           }
         } catch (error) {
           console.error('Error loading more emails:', error);
           toast.error('Failed to load more emails');
         } finally {
+          // Always clear the loading state
           setLoadingMore(false);
+          // Ensure initialDataLoaded is set to true
+          setInitialDataLoaded(true);
         }
       };
 
@@ -2427,7 +2404,7 @@ const FAQAutoReplyV2: React.FC = () => {
         hasMore: hasMore ? 'Has more' : 'No more emails'
       });
     }
-  }, [loading, loadingMore, hasMore, page, user, emails.length, settings]);
+  }, [loading, loadingMore, hasMore, page, user, emails, settings]);
 
   const handleAutoReply = async (email: ExtendedEmail) => {
     // Skip generating replies for emails where the user was last to reply
@@ -4634,66 +4611,38 @@ ${signature}`;
 
   // Add function to load ready to reply emails from Firebase
   const loadReadyToReplyFromFirebase = async (user: { email: string | null } | null) => {
+    if (!user?.email) return null;
+    const db = getFirebaseDB();
+    if (!db) return null;
+
     try {
-      const db = getFirebaseDB();
-      if (!db) return null;
-      if (!user?.email) {
-        console.error('Cannot load ready to reply emails: No user email provided');
-        return null;
-      }
-
-      const readyRef = doc(db, `users/${user.email}/ready_to_reply`, 'latest');
-      const readyDoc = await getDoc(readyRef);
-
-      if (readyDoc.exists()) {
-        const data = readyDoc.data();
-        return data.emails || [];
-      }
-      return null;
+      const readyToReplyRef = collection(db, `users/${user.email}/ready_to_reply`);
+      const snapshot = await getDocs(readyToReplyRef);
+      return snapshot.docs.map(doc => doc.data() as ExtendedEmail);
     } catch (error) {
-      console.error('Error loading ready to reply emails from Firebase:', error);
+      console.error('Error loading ready to reply from Firebase:', error);
       return null;
     }
   };
 
   // Add function to save ready to reply emails to Firebase
   const saveReadyToReplyToFirebase = async (emails: ExtendedEmail[], user: { email: string | null } | null) => {
+    if (!user?.email) return;
+    const db = getFirebaseDB();
+    if (!db) return;
+
     try {
-      const db = getFirebaseDB();
-      if (!db) return;
-      if (!user?.email) {
-        console.error('Cannot save ready to reply emails: No user email provided');
-        return;
-      }
+      const batch = writeBatch(db);
+      const readyToReplyRef = collection(db, `users/${user.email}/ready_to_reply`);
 
-      const sanitizedEmails = emails.map(email => ({
-        id: email.id,
-        threadId: email.threadId,
-        subject: email.subject,
-        sender: email.sender,
-        receivedAt: email.receivedAt,
-        status: email.status,
-        matchedFAQ: email.matchedFAQ ? {
-          question: email.matchedFAQ.question || '',
-          answer: email.matchedFAQ.answer || '',
-          confidence: email.matchedFAQ.confidence || 0
-        } : null,
-        content: typeof email.content === 'string'
-          ? email.content
-          : (email.content?.text || email.content?.html || ''),
-        suggestedReply: email.suggestedReply || '',
-        isReplied: !!email.isReplied,
-        isNotRelevant: !!email.isNotRelevant,
-        sortTimestamp: email.sortTimestamp || Date.now()
-      }));
-
-      const readyRef = doc(db, `users/${user.email}/ready_to_reply`, 'latest');
-      await setDoc(readyRef, {
-        emails: sanitizedEmails,
-        timestamp: Date.now()
+      emails.forEach(email => {
+        const docRef = doc(readyToReplyRef, email.id);
+        batch.set(docRef, email);
       });
+
+      await batch.commit();
     } catch (error) {
-      console.error('Error saving ready to reply emails to Firebase:', error);
+      console.error('Error saving ready to reply to Firebase:', error);
     }
   };
 
