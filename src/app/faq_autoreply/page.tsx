@@ -429,7 +429,7 @@ export default function FAQAutoReplyPage() {
               <Dialog.Panel className="mx-auto max-w-2xl w-full rounded-xl bg-white p-6 shadow-xl">
                 <div className="flex justify-between items-start mb-4">
                   <Dialog.Title className="text-lg font-semibold text-gray-900">
-                    Auto-Reply Settings
+                    FAQ Auto Reply Settings
                   </Dialog.Title>
                   <button
                     onClick={() => setShowSettingsModal(false)}

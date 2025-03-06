@@ -65,7 +65,7 @@
     "replicate": "^0.32.0",
     "sonner": "^1.7.2",
     "stripe": "^14.18.0",
-    "uuid": "^11.0.5"
+    "uuid": "^11.1.0"
   },
   "devDependencies": {
     "@tailwindcss/typography": "^0.5.9",

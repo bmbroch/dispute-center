@@ -7,8 +7,8 @@ export interface Email {
   sender: string;
   content: string | EmailContent;
   contentType?: 'text/plain' | 'text/html';
-  receivedAt: number;
-  sortTimestamp: number;
+  receivedAt: string | number;
+  sortTimestamp?: number;
   timestamp?: number;
   hasReply?: boolean;
   isReplied?: boolean;
@@ -47,7 +47,7 @@ export interface Email {
   isGeneratingReply?: boolean;
   showFullContent?: boolean;
   category?: 'support' | 'general' | 'spam';
-  status?: 'pending' | 'processed' | 'not_relevant';
+  status?: 'pending' | 'processed' | 'not_relevant' | 'answered';
   irrelevanceReason?: string;
   emailIds?: string[];
 }
@@ -65,6 +65,7 @@ export interface ThreadMessage {
 export interface EmailContent {
   html: string | null;
   text: string | null;
+  error?: string;
 }
 
 export interface BaseEmail {
@@ -79,11 +80,16 @@ export interface BaseEmail {
   };
 }
 
-export interface ExtendedEmail extends BaseEmail {
-  sortTimestamp: number;
+export interface ExtendedEmail extends Email {
+  id: string;
+  threadId: string;
+  subject: string;
+  sender: string;
+  content: string | { html: string | null; text: string | null };
+  receivedAt: string | number;
+  sortTimestamp?: number;
   isRefreshing?: boolean;
   isGeneratingReply?: boolean;
-  status?: 'pending' | 'processed' | 'not_relevant';
   matchedFAQ?: {
     question: string;
     answer: string;
@@ -92,19 +98,10 @@ export interface ExtendedEmail extends BaseEmail {
   suggestedReply?: string;
   isReplied?: boolean;
   isNotRelevant?: boolean;
-  questions?: GenericFAQ[];
+  status?: 'pending' | 'not_relevant' | 'processed' | 'answered';
   threadMessages?: ThreadMessage[];
-  showFullContent?: boolean;
+  questions?: GenericFAQ[];
   irrelevanceReason?: string;
-  irrelevanceCategory?: string;
-  irrelevanceConfidence?: number;
-  irrelevanceDetails?: string;
-  gmailError?: {
-    message: string;
-    details?: any;
-  };
-  content: string | {
-    html: string | null;
-    text: string | null;
-  };
+  gmailError?: string;
+  showFullContent?: boolean;
 }

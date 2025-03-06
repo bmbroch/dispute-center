@@ -1,11 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import DOMPurify from 'dompurify';
-
-interface EmailContent {
-  html: string | null;
-  text: string | null;
-  error?: string;
-}
+import { EmailContent } from '@/types/email';
 
 interface EmailRenderNewProps {
   content: string | EmailContent;
@@ -46,7 +41,6 @@ export default function EmailRenderNew({
       setHtmlContent(content);
       setError(null);
     } else if (!content) {
-      // Handle the case where content is undefined or null
       setError('No content available');
       setHtmlContent(null);
     } else {
@@ -68,14 +62,11 @@ export default function EmailRenderNew({
 
   useEffect(() => {
     try {
-      // Get the HTML content from the input
       let rawHtml = '';
       if (typeof content === 'object' && content !== null) {
         if (content.html) {
-          // If content is from Gmail API, decode the HTML entities
           rawHtml = decodeHtmlEntities(content.html);
         } else if (content.text) {
-          // Use text content if HTML is not available
           rawHtml = `<div style="white-space: pre-wrap;">${content.text}</div>`;
         }
         if (content.error) {
@@ -85,13 +76,11 @@ export default function EmailRenderNew({
         rawHtml = content;
       }
 
-      // If no content, set empty content but don't show error
       if (!rawHtml) {
         setProcessedContent('');
         return;
       }
 
-      // Sanitize the HTML
       const sanitizedHtml = DOMPurify.sanitize(rawHtml, {
         ADD_TAGS: [
           'html', 'head', 'meta', 'body', 'div', 'span', 'img',
@@ -112,7 +101,6 @@ export default function EmailRenderNew({
         ALLOW_DATA_ATTR: false
       });
 
-      // Wrap the content in a basic HTML structure with default styles
       const wrappedHtml = `
         <!DOCTYPE html>
         <html>
@@ -159,18 +147,13 @@ export default function EmailRenderNew({
     }
   }, [content]);
 
-  // Force iframe refresh when content changes
   useEffect(() => {
     const iframe = iframeRef.current;
     if (!iframe || !processedContent) return;
 
-    // Set fixed height
     iframe.style.height = '120px';
-
-    // Use srcdoc to set content directly
     iframe.srcdoc = processedContent;
 
-    // Handle links after load
     iframe.onload = () => {
       const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
       if (!iframeDoc) return;

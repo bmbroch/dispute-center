@@ -35,6 +35,7 @@ import {
   User,
   MailCheckIcon,
   MailIcon,
+  ReplyIcon,
 } from 'lucide-react';
 import { Dialog, Transition } from '@headlessui/react';
 import { Fragment } from 'react';
@@ -51,6 +52,7 @@ import { TINYMCE_CONFIG } from '@/lib/config/tinymce';
 import { Editor } from '@tinymce/tinymce-react';
 import { Cog6ToothIcon } from '@heroicons/react/24/outline';
 import SettingsModal from './components/SettingsModal';
+import StripeStatusIcon from '../components/StripeStatusIcon';
 
 // Dynamically import your email composer modal
 const FAQEmailComposer = dynamic(() => import('../faq_autoreply/components/FAQEmailComposer'), {
@@ -992,6 +994,135 @@ const safeISOString = (date: any): string => {
   }
 };
 
+// Update PreloadedEditor component with responsive height
+const PreloadedEditor = React.memo(({ value, onEditorChange, isVisible }: {
+  value: string;
+  onEditorChange: (content: string) => void;
+  isVisible: boolean;
+}) => {
+  // Increase default heights for better UX
+  const [editorHeight, setEditorHeight] = useState(500);
+  const editorRef = useRef<any>(null);
+  const [isEditorReady, setIsEditorReady] = useState(false);
+
+  useEffect(() => {
+    const updateHeight = () => {
+      // Increase mobile height as well
+      if (window.innerWidth < 768) {
+        setEditorHeight(350);
+      } else {
+        setEditorHeight(500);
+      }
+    };
+
+    updateHeight();
+    window.addEventListener('resize', updateHeight);
+    return () => window.removeEventListener('resize', updateHeight);
+  }, []);
+
+  // Handle cursor positioning after editor initialization
+  const handleEditorInit = (evt: any, editor: any) => {
+    editorRef.current = editor;
+
+    // Position cursor after initialization
+    if (editor && value.includes('<cursor>')) {
+      const content = editor.getContent();
+      const cursorPosition = content.indexOf('<p><cursor></p>');
+
+      if (cursorPosition !== -1) {
+        // Replace cursor marker with empty paragraph
+        const newContent = content.replace('<p><cursor></p>', '<p><br data-mce-bogus="1"></p>');
+        editor.setContent(newContent);
+
+        // Set cursor position
+        const bodyElement = editor.getBody();
+        const paragraphs = bodyElement.getElementsByTagName('p');
+        for (let i = 0; i < paragraphs.length; i++) {
+          if (paragraphs[i].innerHTML === '<br data-mce-bogus="1">') {
+            editor.selection.select(paragraphs[i], true);
+            editor.selection.collapse(true);
+            // Focus the editor
+            editor.focus();
+            break;
+          }
+        }
+      }
+    }
+
+    // Mark editor as ready
+    setIsEditorReady(true);
+  };
+
+  return (
+    <div style={{ display: isVisible ? 'block' : 'none' }}>
+      <div className={`transition-opacity duration-300 ${isEditorReady ? 'opacity-100' : 'opacity-0'}`}>
+        <Editor
+          id="email-editor"
+          apiKey={process.env.NEXT_PUBLIC_TINYMCE_API_KEY}
+          value={value}
+          onEditorChange={onEditorChange}
+          onInit={handleEditorInit}
+          init={{
+            height: editorHeight,
+            menubar: false,
+            statusbar: false,
+            plugins: [
+              'link', 'lists', 'emoticons', 'image', 'autoresize'
+            ],
+            toolbar_mode: 'sliding',
+            toolbar_sticky: true,
+            toolbar: 'undo redo | bold italic underline | alignleft aligncenter alignright | bullist numlist | link emoticons',
+            content_style: `
+              body {
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+                font-size: 14px;
+                line-height: 1.6;
+                color: #333;
+                margin: 1rem;
+                padding: 0;
+                max-width: 100%;
+                overflow-x: hidden;
+              }
+              p {
+                margin: 0 0 1rem 0;
+                padding: 0;
+              }
+              .emoji {
+                font-size: 1.2em;
+                vertical-align: middle;
+              }
+              @media (max-width: 768px) {
+                body {
+                  margin: 0.5rem;
+                  font-size: 16px;
+                }
+              }
+            `,
+            mobile: {
+              menubar: false,
+              toolbar_mode: 'scrolling',
+              toolbar: 'undo redo | bold italic | bullist numlist | link emoticons'
+            },
+            resize: false,
+            min_height: 350,
+            max_height: 800,
+            autoresize_bottom_margin: 50,
+            skin: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'oxide-dark' : 'oxide',
+            formats: {
+              p: { block: 'p', styles: { margin: '0 0 1rem 0' } }
+            },
+            forced_root_block: 'p',
+            paste_as_text: true,
+            browser_spellcheck: true,
+            contextmenu: false,
+            auto_focus: true // Enable auto focus
+          }}
+        />
+      </div>
+    </div>
+  );
+});
+
 export default function FAQAutoReplyV2() {
   console.log('=== Component Render Start ===');
   const { user, checkGmailAccess, refreshAccessToken, loading: authLoading } = useAuth();
@@ -1049,6 +1180,10 @@ export default function FAQAutoReplyV2() {
   const [manualRefreshTriggered, setManualRefreshTriggered] = useState(false);
   const [loadingRefresh, setLoadingRefresh] = useState(false);
   const [refreshComplete, setRefreshComplete] = useState(false);
+  const [editorContent, setEditorContent] = useState('');
+  const [showEditor, setShowEditor] = useState(false);
+  const [loadingReset, setLoadingReset] = useState(false);
+  const [resetComplete, setResetComplete] = useState(false);
 
   // Add storage for previous email status before marking not relevant
   const prevEmailStatus = useRef<Record<string, string>>({});
@@ -1758,8 +1893,9 @@ export default function FAQAutoReplyV2() {
           const emailsData = Array.isArray(cached) ? cached : cached.emails;
           if (emailsData && emailsData.length > 0) {
             console.log('Found cached emails:', emailsData.length);
-            // Process cached emails against blocked list if settings are available
+            // Process cached emails against blocked list and check for user's own emails
             const processedEmails = emailsData.map(email => {
+              // First check if email should be auto-marked as not relevant
               if (settings && shouldAutoMarkNotRelevant(email, settings)) {
                 console.log(`Auto-marking email ${email.id} as not relevant - sender: ${email.sender}`);
                 return {
@@ -1768,6 +1904,18 @@ export default function FAQAutoReplyV2() {
                   status: 'not_relevant' as const
                 };
               }
+
+              // Then check if the email is from the authenticated user
+              const senderEmail = extractEmailAddress(email.sender);
+              if (user?.email && senderEmail === user.email.toLowerCase()) {
+                console.log(`Auto-marking email ${email.id} as answered - from authenticated user`);
+                return {
+                  ...email,
+                  isReplied: true,
+                  status: 'answered' as const
+                };
+              }
+
               return email;
             });
 
@@ -1786,8 +1934,9 @@ export default function FAQAutoReplyV2() {
       const firebaseEmails = await loadEmailsFromFirebase(user);
       if (firebaseEmails && firebaseEmails.length > 0) {
         console.log('Loaded emails from Firebase:', firebaseEmails.length);
-        // Process Firebase emails against blocked list if settings are available
+        // Process Firebase emails against blocked list and check for user's own emails
         const processedEmails = firebaseEmails.map(email => {
+          // First check if email should be auto-marked as not relevant
           if (settings && shouldAutoMarkNotRelevant(email, settings)) {
             console.log(`Auto-marking email ${email.id} as not relevant - sender: ${email.sender}`);
             return {
@@ -1796,20 +1945,32 @@ export default function FAQAutoReplyV2() {
               status: 'not_relevant' as const
             };
           }
+
+          // Then check if the email is from the authenticated user
+          const senderEmail = extractEmailAddress(email.sender);
+          if (user?.email && senderEmail === user.email.toLowerCase()) {
+            console.log(`Auto-marking email ${email.id} as answered - from authenticated user`);
+            return {
+              ...email,
+              isReplied: true,
+              status: 'answered' as const
+            };
+          }
+
           return email;
         });
 
         const sortedEmails = sortEmails(processedEmails) as ExtendedEmail[];
         setEmails(sortedEmails);
 
-        // Save processed emails back to Firebase if any were marked as not relevant
+        // Save processed emails back to Firebase if any were marked as not relevant or answered
         const hasChanges = processedEmails.some(email =>
-          email.status === 'not_relevant' &&
-          !firebaseEmails.find(fe => fe.id === email.id)?.isNotRelevant
+          (email.status === 'not_relevant' && !firebaseEmails.find(fe => fe.id === email.id)?.isNotRelevant) ||
+          (email.status === 'answered' && !firebaseEmails.find(fe => fe.id === email.id)?.isReplied)
         );
 
         if (hasChanges) {
-          console.log('Saving changes to Firebase - some emails were marked as not relevant');
+          console.log('Saving changes to Firebase - some emails were marked as not relevant or answered');
           await saveEmailsToFirebase(processedEmails, user);
         }
 
@@ -1827,7 +1988,7 @@ export default function FAQAutoReplyV2() {
       setLoadingMore(false);
       setManualRefreshTriggered(false);
     }
-  }, [user?.accessToken, page, MIN_FETCH_INTERVAL, settings, setManualRefreshTriggered]);
+  }, [user?.accessToken, page, MIN_FETCH_INTERVAL, settings, setManualRefreshTriggered, user?.email]);
 
   useEffect(() => {
     // Check if analysis is enabled via environment variable
@@ -2194,7 +2355,69 @@ export default function FAQAutoReplyV2() {
 
       // Now call loadEmails with the next page number - pass skipCache=true to bypass rate limit check
       console.log(`Calling loadEmails with skipCache=true, pageNumber=${nextPage}`);
-      loadEmails(true, nextPage);
+
+      // Load and process the new emails
+      const loadAndProcessEmails = async () => {
+        try {
+          const firebaseEmails = await loadEmailsFromFirebase(user);
+          if (firebaseEmails && firebaseEmails.length > 0) {
+            console.log('Loaded more emails from Firebase:', firebaseEmails.length);
+
+            // Process emails for both auto-marking not relevant and checking for user's own emails
+            const processedEmails = firebaseEmails.map(email => {
+              // First check if email should be auto-marked as not relevant
+              if (settings && shouldAutoMarkNotRelevant(email, settings)) {
+                console.log(`Auto-marking email ${email.id} as not relevant - sender: ${email.sender}`);
+                return {
+                  ...email,
+                  isNotRelevant: true,
+                  status: 'not_relevant' as const
+                };
+              }
+
+              // Then check if the email is from the authenticated user
+              const senderEmail = extractEmailAddress(email.sender);
+              if (user?.email && senderEmail === user.email.toLowerCase()) {
+                console.log(`Auto-marking email ${email.id} as answered - from authenticated user`);
+                return {
+                  ...email,
+                  isReplied: true,
+                  status: 'answered' as const
+                };
+              }
+
+              return email;
+            });
+
+            const sortedEmails = sortEmails(processedEmails) as ExtendedEmail[];
+
+            // Update state with the processed emails
+            setEmails(prevEmails => {
+              const existingIds = new Set(prevEmails.map(e => e.id));
+              const newEmails = sortedEmails.filter(e => !existingIds.has(e.id));
+              return sortEmails([...prevEmails, ...newEmails]);
+            });
+
+            // Save any changes back to Firebase
+            const hasChanges = processedEmails.some(email =>
+              (email.status === 'not_relevant' && !firebaseEmails.find(fe => fe.id === email.id)?.isNotRelevant) ||
+              (email.status === 'answered' && !firebaseEmails.find(fe => fe.id === email.id)?.isReplied)
+            );
+
+            if (hasChanges) {
+              console.log('Saving changes to Firebase - some emails were marked as not relevant or answered');
+              await saveEmailsToFirebase(processedEmails, user);
+            }
+          }
+        } catch (error) {
+          console.error('Error loading more emails:', error);
+          toast.error('Failed to load more emails');
+        } finally {
+          setLoadingMore(false);
+        }
+      };
+
+      loadAndProcessEmails();
     } else {
       console.log('⚠️ Not loading more because:', {
         loading: loading ? 'Already loading' : 'Not loading',
@@ -2202,7 +2425,7 @@ export default function FAQAutoReplyV2() {
         hasMore: hasMore ? 'Has more' : 'No more emails'
       });
     }
-  }, [loading, loadingMore, hasMore, page, loadEmails, user, emails]);
+  }, [loading, loadingMore, hasMore, page, user, emails.length, settings]);
 
   const handleAutoReply = async (email: ExtendedEmail) => {
     // Skip generating replies for emails where the user was last to reply
@@ -2499,6 +2722,8 @@ export default function FAQAutoReplyV2() {
           <div className="flex gap-2 mt-1">
             <button
               onClick={() => {
+                // Dismiss the current toast
+                toast.dismiss();
                 // Add the sender to blocked addresses
                 const newSettings = {
                   ...settings,
@@ -3001,55 +3226,134 @@ export default function FAQAutoReplyV2() {
   };
 
   const handleEditReply = (email: ExtendedEmail) => {
-    const reply = email.suggestedReply || generateDefaultReply(email);
+    // Get name from email sender
+    const fullSender = email.sender;
+    let senderName = '';
 
-    // Remove the subject line and any extra newlines after it
-    const contentWithoutSubject = reply.replace(/^Subject:.*?\n+/m, '');
+    if (fullSender.includes('<')) {
+      // If format is "Name <email@domain.com>"
+      senderName = fullSender.split('<')[0].trim();
+    } else if (fullSender.includes('@')) {
+      // If just email, use part before @
+      senderName = fullSender.split('@')[0];
+      // Capitalize first letter of each word
+      senderName = senderName
+        .split(/[._-]/)
+        .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+        .join(' ');
+    } else {
+      // Fallback to full sender
+      senderName = fullSender;
+    }
 
-    // Convert line breaks to proper HTML paragraphs
-    const formattedReply = contentWithoutSubject
-      .split('\n\n')  // Split on double line breaks first
-      .map(paragraph => `<p>${paragraph.replace(/\n/g, '<br>')}</p>`)  // Handle single line breaks
-      .join('');
+    // Use greeting from settings or default
+    const greeting = (settings.emailFormatting?.greeting || 'Hi [Name]')
+      .replace('[Name]', senderName);
 
+    // Use signature from settings or default
+    const signature = settings.emailFormatting?.signatureText || 'Best regards,\nSupport Team';
+
+    // Create email template with cursor position marker - only one line break
+    const emailTemplate = `<p>${greeting}</p>
+<p><cursor></p>
+<p>${signature}</p>`;
+
+    // First show modal, then set content after animation
     setEditingReply({
       emailId: email.id,
-      reply: formattedReply
+      reply: emailTemplate
     });
+
+    // Delay showing editor content until modal is visible
+    setTimeout(() => {
+      setEditorContent(emailTemplate);
+      setShowEditor(true);
+    }, 300); // Match this with the modal animation duration
   };
 
   const handleSaveReply = async (emailId: string) => {
-    if (!editingReply) return;
+    if (!editingReply || !user?.accessToken) return;
+
+    const toastId = toast.loading('Sending email...');
+
+    setEditingReply(null);
+    setShowEditor(false);
+    setEditorContent('');
 
     try {
-      const response = await fetch('/api/emails/send', {
+      const email = emails.find(e => e.id === emailId);
+      if (!email) {
+        throw new Error('Email not found');
+      }
+
+      const fullEmailContent = `<div dir="ltr" style="font-family:Arial,sans-serif;font-size:14px">
+${editingReply.reply}
+</div>`;
+
+      const response = await fetch('/api/gmail/send', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': `Bearer ${user.accessToken}`
         },
         body: JSON.stringify({
-          emailId,
-          reply: editingReply.reply,
-        }),
+          to: email.sender,
+          subject: `Re: ${email.subject}`,
+          content: fullEmailContent,
+          threadId: email.threadId
+        })
       });
 
       if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.details || errorData.error || 'Failed to send email');
+      }
+
+      const data = await response.json();
+      if (!data.success) {
         throw new Error('Failed to send email');
       }
+
+      // Create new thread message
+      const newMessage = {
+        id: `reply-${Date.now()}`,
+        threadId: email.threadId,
+        subject: `Re: ${email.subject}`,
+        sender: user.email || '',
+        receivedAt: Date.now(),
+        content: fullEmailContent
+      };
 
       // Update local state
       setEmails(prev => prev.map(e => {
         if (e.id === emailId) {
-          return { ...e, isReplied: true };
+          const updatedEmail: ExtendedEmail = {
+            ...e,
+            isReplied: true,
+            status: 'answered',
+            threadMessages: e.threadMessages ? [newMessage, ...e.threadMessages] : [newMessage]
+          };
+          return updatedEmail;
         }
         return e;
       }));
 
-      toast.success('Email sent successfully');
-      setEditingReply(null);
+      // Update Firebase
+      const db = getFirebaseDB();
+      if (db && user?.email) {
+        const emailRef = doc(db, `users/${user.email}/emails`, emailId);
+        await setDoc(emailRef, {
+          isReplied: true,
+          status: 'answered',
+          threadMessages: email.threadMessages ? [newMessage, ...email.threadMessages] : [newMessage],
+          lastUpdated: Date.now()
+        }, { merge: true });
+      }
+
+      toast.success('Email sent successfully', { id: toastId });
     } catch (error) {
       console.error('Error sending email:', error);
-      toast.error('Failed to send email');
+      toast.error(error instanceof Error ? error.message : 'Failed to send email', { id: toastId });
     }
   };
 
@@ -3190,16 +3494,26 @@ ${signature}`;
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2 text-sm text-gray-500">
             {new Date(receivedAt).toLocaleString()}
-            <button
-              onClick={() => refreshSingleEmail(email)}
-              className="text-gray-400 hover:text-gray-600 transition-colors p-1.5 hover:bg-gray-50 rounded-full disabled:opacity-50 disabled:cursor-not-allowed"
-              title="Refresh email content"
-              disabled={email.isRefreshing}
-            >
-              <RefreshCw
-                className={`h-4 w-4 ${email.isRefreshing ? 'animate-spin text-blue-600' : ''}`}
-              />
-            </button>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => refreshSingleEmail(email)}
+                className="text-gray-400 hover:text-gray-600 transition-colors p-1.5 hover:bg-gray-50 rounded-full disabled:opacity-50 disabled:cursor-not-allowed"
+                title="Refresh email content"
+                disabled={email.isRefreshing}
+              >
+                <RefreshCw
+                  className={`h-4 w-4 ${email.isRefreshing ? 'animate-spin text-blue-600' : ''}`}
+                />
+              </button>
+              <StripeStatusIcon customerEmail={email.sender} />
+              <button
+                onClick={() => handleEditReply(email)}
+                className="text-gray-400 hover:text-gray-600 transition-colors p-1.5 hover:bg-gray-50 rounded-full"
+                title="Reply to email"
+              >
+                <ReplyIcon className="h-4 w-4" />
+              </button>
+            </div>
           </div>
         </div>
         <EmailRenderNew
@@ -3483,13 +3797,30 @@ ${signature}`;
     if (filteredEmails.length === 0) {
       return (
         <div className="text-center py-12">
-          <div className="mx-auto h-12 w-12 text-gray-400 mb-4">
-            <InboxIcon className="h-12 w-12" />
+          <div className="mx-auto h-12 w-12 text-blue-500 mb-4">
+            <Rocket className="h-12 w-12" />
           </div>
-          <h3 className="text-lg font-medium text-gray-900">No unanswered emails</h3>
-          <p className="mt-2 text-sm text-gray-500">
-            All emails have been processed or marked as not relevant
+          <h3 className="text-xl font-medium text-gray-900 mb-3">Welcome to FAQ Auto Reply!</h3>
+          <p className="mt-2 text-sm text-gray-600 mb-6 max-w-md mx-auto">
+            Let's get started by pulling in your recent emails. We'll help you manage and respond to customer inquiries efficiently.
           </p>
+          <button
+            onClick={refreshAllEmailsFromGmail}
+            disabled={loading || loadingNewEmails}
+            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:bg-indigo-300 transition-all duration-200"
+          >
+            {loading || loadingNewEmails ? (
+              <>
+                <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                Fetching Emails...
+              </>
+            ) : (
+              <>
+                <Rocket className="h-4 w-4 mr-2" />
+                Let's Get Started
+              </>
+            )}
+          </button>
         </div>
       );
     }
@@ -3566,7 +3897,7 @@ ${signature}`;
                         <button
                           onClick={() => handleCreateFAQ(email)}
                           disabled={isAnalyzing}
-                          className="inline-flex items-center px-3 py-1.5 border border-transparent text-xs font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50"
+                          className="inline-flex items-center px-3 py-1.5 border border-transparent text-xs font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50"
                         >
                           {isAnalyzing ? (
                             <>
@@ -3772,7 +4103,7 @@ ${signature}`;
               <div className="flex gap-2">
                 <button
                   onClick={() => handleAutoReply(email)}
-                  className="inline-flex items-center px-3 py-1.5 border border-transparent text-xs font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700"
+                  className="inline-flex items-center px-3 py-1.5 border border-transparent text-xs font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700"
                 >
                   Send Auto-Reply
                 </button>
@@ -4182,7 +4513,15 @@ ${signature}`;
 
     return (
       <Transition.Root show={!!editingReply} as={Fragment}>
-        <Dialog as="div" className="relative z-50" onClose={() => setEditingReply(null)}>
+        <Dialog
+          as="div"
+          className="relative z-50"
+          onClose={() => {
+            setEditingReply(null);
+            setShowEditor(false);
+            setEditorContent('');
+          }}
+        >
           <Transition.Child
             as={Fragment}
             enter="ease-out duration-300"
@@ -4196,7 +4535,7 @@ ${signature}`;
           </Transition.Child>
 
           <div className="fixed inset-0 z-50 overflow-y-auto">
-            <div className="flex min-h-full items-center justify-center p-4 text-center sm:p-0">
+            <div className="flex min-h-full items-start justify-center sm:items-center p-0 sm:p-4">
               <Transition.Child
                 as={Fragment}
                 enter="ease-out duration-300"
@@ -4206,117 +4545,75 @@ ${signature}`;
                 leaveFrom="opacity-100 translate-y-0 sm:scale-100"
                 leaveTo="opacity-0 translate-y-4 sm:translate-y-0 sm:scale-95"
               >
-                <Dialog.Panel className="relative transform overflow-hidden rounded-lg bg-white shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-2xl">
-                  <div className="absolute right-4 top-4">
+                <Dialog.Panel className="relative transform overflow-hidden bg-white w-full h-full sm:h-auto sm:rounded-lg sm:max-w-2xl shadow-xl transition-all">
+                  {/* Mobile-friendly header */}
+                  <div className="sticky top-0 z-10 bg-white border-b border-gray-200 px-4 py-3 sm:px-6 flex items-center justify-between">
+                    <Dialog.Title className="text-lg font-semibold text-gray-900 line-clamp-1">
+                      Edit AI-Generated Response
+                    </Dialog.Title>
                     <button
                       type="button"
-                      className="text-gray-400 hover:text-gray-500"
-                      onClick={() => setEditingReply(null)}
+                      className="text-gray-400 hover:text-gray-500 p-2 -mr-2"
+                      onClick={() => {
+                        setEditingReply(null);
+                        setShowEditor(false);
+                        setEditorContent('');
+                      }}
                     >
                       <span className="sr-only">Close</span>
-                      <XIcon className="h-6 w-6" />
+                      <XIcon className="h-5 w-5" />
                     </button>
                   </div>
 
-                  <div className="p-6">
-                    {/* Remove blue background, make it cleaner */}
-                    <Dialog.Title className="text-xl font-semibold text-gray-900 mb-6">
-                      Edit AI-Generated Response
-                    </Dialog.Title>
-
+                  <div className="p-4 sm:p-6">
                     <div className="space-y-4">
+                      {/* Recipient field */}
                       <div className="flex items-center gap-2">
-                        <label className="block text-sm font-medium text-gray-700">
+                        <label className="block text-sm font-medium text-gray-700 whitespace-nowrap">
                           To:
                         </label>
                         <input
                           type="email"
                           className="flex-1 text-sm text-gray-900 bg-gray-50 rounded-md px-3 py-1.5 border border-gray-200"
                           value={extractEmailAddress(emails.find(e => e.id === editingReply.emailId)?.sender || '')}
-                          onChange={(e) => {
-                            const email = emails.find(em => em.id === editingReply.emailId);
-                            if (email) {
-                              setEmails(prev => prev.map(em =>
-                                em.id === email.id ? { ...em, sender: e.target.value } : em
-                              ));
-                            }
-                          }}
+                          readOnly
                         />
                       </div>
 
+                      {/* Editor with loading transition */}
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">
                           Message
                         </label>
-                        <Editor
-                          apiKey={process.env.NEXT_PUBLIC_TINYMCE_API_KEY}
-                          value={editingReply.reply}
-                          onEditorChange={(content) =>
-                            setEditingReply({ ...editingReply, reply: content })
-                          }
-                          init={{
-                            height: 400,
-                            menubar: false,
-                            statusbar: false,
-                            plugins: [
-                              'link', 'lists', 'emoticons', 'image'
-                            ],
-                            toolbar: 'undo redo | bold italic underline | alignleft aligncenter alignright | bullist numlist outdent indent | link image | emoticons',
-                            content_style: `
-                              body {
-                                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-                                font-size: 14px;
-                                line-height: 1.6;
-                                color: #333;
-                                margin: 1rem;
-                                padding: 0;
-                              }
-                              p {
-                                margin: 0 0 1rem 0;
-                                padding: 0;
-                              }
-                              .emoji {
-                                font-size: 1.2em;
-                                vertical-align: middle;
-                              }
-                            `,
-                            formats: {
-                              p: { block: 'p', styles: { margin: '0 0 1rem 0' } }
-                            },
-                            forced_root_block: 'p',
-                            convert_newlines_to_brs: false,
-                            remove_trailing_brs: false,
-                            paste_as_text: false,
-                            paste_enable_default_filters: true,
-                            paste_word_valid_elements: "p,b,strong,i,em,h1,h2,h3,h4,h5,h6,br",
-                            paste_retain_style_properties: "none",
-                            paste_merge_formats: true,
-                            paste_convert_word_fake_lists: true,
-                            entity_encoding: 'raw',
-                            indent_use_margin: true,
-                            visual_table_class: 'border-1',
-                            verify_html: false,
-                            // Add these to better handle whitespace and formatting
-                            whitespace_elements: 'pre,textarea',
-                            element_format: 'html',
-                            keep_styles: true,
-                            valid_elements: '*[*]'  // Allow all elements and attributes
-                          }}
-                        />
+                        <div className="rounded-lg border border-gray-200 overflow-hidden transition-opacity duration-300">
+                          <PreloadedEditor
+                            value={editorContent}
+                            onEditorChange={(content) => {
+                              setEditorContent(content);
+                              setEditingReply(prev => prev ? { ...prev, reply: content } : null);
+                            }}
+                            isVisible={showEditor}
+                          />
+                        </div>
                       </div>
                     </div>
 
-                    <div className="mt-6 flex justify-end gap-3">
+                    {/* Mobile-friendly footer */}
+                    <div className="mt-6 flex gap-3 flex-col-reverse sm:flex-row sm:justify-end">
                       <button
                         type="button"
-                        className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
-                        onClick={() => setEditingReply(null)}
+                        className="w-full sm:w-auto px-4 py-2.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500"
+                        onClick={() => {
+                          setEditingReply(null);
+                          setShowEditor(false);
+                          setEditorContent('');
+                        }}
                       >
                         Cancel
                       </button>
                       <button
                         type="button"
-                        className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 border border-transparent rounded-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 inline-flex items-center gap-2"
+                        className="w-full sm:w-auto px-4 py-2.5 text-sm font-medium text-white bg-indigo-600 border border-transparent rounded-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 inline-flex items-center justify-center gap-2"
                         onClick={() => handleSaveReply(editingReply.emailId)}
                       >
                         <span>Send Reply</span>
@@ -4756,7 +5053,7 @@ ${signature}`;
               refreshAllEmailsFromGmail();
             }}
             disabled={isLoading}
-            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:bg-blue-300"
+            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:bg-indigo-300"
           >
             <RefreshCw className={`h-4 w-4 mr-2 ${isLoading && manualRefreshTriggered ? 'animate-spin' : ''}`} />
             Refresh
@@ -4783,74 +5080,98 @@ ${signature}`;
 
     setLoadingRefresh(true);
     setRefreshComplete(false);
+    setInitialDataLoaded(false); // Reset initial data loaded state
+    const loadingToastId = toast.loading("Refreshing emails from Gmail..."); // Store toast ID
 
     try {
-      toast.loading("Refreshing emails from Gmail...");
-
-      const response = await fetch(`/api/emails/refresh-all?limit=40`, {
-        method: "GET",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${user.accessToken}`,
-        },
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        console.log(`Refreshed ${data.emails.length} emails from Gmail`);
-        console.log("Refreshed email structure:", data.emails[0]);
-
-        // Transform the emails to match the expected format in saveEmailsToFirebase
-        const transformedEmails = data.emails.map((email: any) => ({
-          ...email,
-          receivedAt: email.receivedAt ? new Date(email.receivedAt).getTime() : Date.now(),
-          timestamp: email.timestamp ? new Date(email.timestamp).getTime() : Date.now()
-        }));
-
-        // Instead of merging with existing emails, we'll directly save them to Firebase
-        // This follows the approach used in Complete Email Reset
-        await saveEmailsToFirebase(transformedEmails, user);
-
-        // Update the UI with the new emails
-        setEmails(prevEmails => {
-          // Create a map of existing emails to preserve status flags
-          const emailMap = new Map();
-          prevEmails.forEach(email => {
-            emailMap.set(email.threadId, {
-              ...email,
-            });
-          });
-
-          // Update with new emails while preserving flags
-          transformedEmails.forEach((email: any) => {
-            const existingEmail = emailMap.get(email.threadId);
-            if (existingEmail) {
-              emailMap.set(email.threadId, {
-                ...email,
-                isNotRelevant: existingEmail.isNotRelevant,
-                status: existingEmail.status
-              });
-            } else {
-              emailMap.set(email.threadId, email);
-            }
-          });
-
-          return Array.from(emailMap.values());
+      const makeRequest = async (token: string) => {
+        const response = await fetch(`/api/emails/refresh-all?limit=40`, {
+          method: "GET",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
         });
 
-        toast.success(`Refreshed ${data.emails.length} emails from Gmail`);
-      } else {
-        const errorData = await response.json();
-        console.error("Failed to refresh emails:", errorData);
-        toast.error("Failed to refresh emails from Gmail");
+        if (!response.ok) {
+          const errorData = await response.json();
+          if (errorData.error === 'Invalid Credentials' && refreshAccessToken) {
+            // Try to refresh the token
+            const newToken = await refreshAccessToken();
+            if (newToken) {
+              return makeRequest(newToken);
+            }
+          }
+          throw new Error(errorData.error || 'Failed to refresh emails');
+        }
+
+        return response;
+      };
+
+      const response = await makeRequest(user.accessToken);
+      const data = await response.json();
+      console.log(`Refreshed ${data.emails.length} emails from Gmail`);
+
+      if (!data.emails || data.emails.length === 0) {
+        toast.dismiss(loadingToastId);
+        toast.info("No emails found in Gmail");
+        return;
       }
+
+      // Transform the emails to match the expected format
+      const transformedEmails = data.emails.map((email: any) => ({
+        ...email,
+        receivedAt: email.receivedAt ? new Date(email.receivedAt).getTime() : Date.now(),
+        timestamp: email.timestamp ? new Date(email.timestamp).getTime() : Date.now()
+      }));
+
+      // Update toast to show we're saving to Firebase
+      toast.loading("Saving emails to database...", { id: loadingToastId });
+
+      // Save to Firebase
+      await saveEmailsToFirebase(transformedEmails, user);
+
+      // Update the UI with the new emails
+      setEmails(prevEmails => {
+        // Create a map of existing emails to preserve status flags
+        const emailMap = new Map();
+        prevEmails.forEach(email => {
+          emailMap.set(email.threadId, {
+            ...email,
+          });
+        });
+
+        // Update with new emails while preserving flags
+        transformedEmails.forEach((email: any) => {
+          const existingEmail = emailMap.get(email.threadId);
+          if (existingEmail) {
+            emailMap.set(email.threadId, {
+              ...email,
+              isNotRelevant: existingEmail.isNotRelevant,
+              status: existingEmail.status
+            });
+          } else {
+            emailMap.set(email.threadId, email);
+          }
+        });
+
+        // Convert map to sorted array
+        return sortEmails(Array.from(emailMap.values()));
+      });
+
+      // Mark data as loaded and show success toast
+      setInitialDataLoaded(true);
+      toast.dismiss(loadingToastId);
+      toast.success(`Successfully loaded ${data.emails.length} emails`);
+
     } catch (error) {
       console.error("Error refreshing emails:", error);
-      toast.error("An error occurred while refreshing emails");
+      toast.dismiss(loadingToastId);
+      toast.error(error instanceof Error ? error.message : "An error occurred while refreshing emails");
     } finally {
-      toast.dismiss();
       setLoadingRefresh(false);
       setRefreshComplete(true);
+      setLoading(false); // Ensure loading state is cleared
     }
   };
 
@@ -4875,184 +5196,100 @@ ${signature}`;
 
   // New function to completely reset emails and fetch fresh ones from Gmail
   const resetAllEmailsAndRefresh = async () => {
+    if (!user?.accessToken) {
+      toast.error("You must be logged in to reset emails");
+      return;
+    }
+
+    setLoadingReset(true);
+    setResetComplete(false);
+
     try {
-      const db = getFirebaseDB();
-      if (!db || !user?.accessToken) {
-        toast.error('Failed to connect to the database or user not authenticated');
-        return;
-      }
+      // Step 1: Delete all emails from Firebase
+      await deleteAllEmailsFromFirebase(user);
 
-      // Show loading toast
-      toast.loading('Performing complete email reset...', { id: 'reset-emails' });
-
-      // Clear emails from state first (immediate feedback)
+      // Step 2: Clear local state
       setEmails([]);
-
-      // Step 1: Delete all emails from Firebase collections
-      // User's email collection
-      const userEmailsRef = collection(db, `users/${user.email}/emails`);
-      const emailsSnapshot = await getDocs(userEmailsRef);
-
-      if (emailsSnapshot.size > 0) {
-        const emailBatch = writeBatch(db);
-        emailsSnapshot.forEach((doc) => {
-          emailBatch.delete(doc.ref);
-        });
-        await emailBatch.commit();
-        console.log(`Deleted ${emailsSnapshot.size} emails from user's emails collection`);
-      }
-
-      // User's not relevant collection
-      const userNotRelevantRef = collection(db, `users/${user.email}/not_relevant`);
-      const notRelevantSnapshot = await getDocs(userNotRelevantRef);
-      if (notRelevantSnapshot.size > 0) {
-        const notRelevantBatch = writeBatch(db);
-        notRelevantSnapshot.forEach((doc) => {
-          notRelevantBatch.delete(doc.ref);
-        });
-        await notRelevantBatch.commit();
-        console.log(`Deleted ${notRelevantSnapshot.size} entries from user's not_relevant collection`);
-      }
-
-      // User's ready to reply collection
-      try {
-        const readyRef = doc(db, `users/${user.email}/ready_to_reply`, 'latest');
-        await setDoc(readyRef, { emails: [], timestamp: Date.now() });
-        console.log('Cleared user ready_to_reply collection');
-      } catch (error) {
-        console.error('Error clearing ready_to_reply collection:', error);
-      }
-
-      // User's thread cache collection
-      const userThreadCacheRef = collection(db, `users/${user.email}/thread_cache`);
-      const threadsSnapshot = await getDocs(userThreadCacheRef);
-      if (threadsSnapshot.size > 0) {
-        const threadBatch = writeBatch(db);
-        threadsSnapshot.forEach((doc) => {
-          threadBatch.delete(doc.ref);
-        });
-        await threadBatch.commit();
-        console.log(`Deleted ${threadsSnapshot.size} threads from user's thread_cache collection`);
-      }
-
-      // User's email content collection
-      const userEmailContentRef = collection(db, `users/${user.email}/email_content`);
-      const contentSnapshot = await getDocs(userEmailContentRef);
-      if (contentSnapshot.size > 0) {
-        // Due to potentially large number of documents, delete in batches
-        let count = 0;
-        const BATCH_SIZE = 500; // Firebase batch limit
-
-        for (let i = 0; i < contentSnapshot.size; i += BATCH_SIZE) {
-          const batch = writeBatch(db);
-          const batchDocs = contentSnapshot.docs.slice(i, i + BATCH_SIZE);
-
-          batchDocs.forEach(doc => {
-            batch.delete(doc.ref);
-            count++;
-          });
-
-          await batch.commit();
-          console.log(`Deleted batch of ${batchDocs.length} email contents`);
-        }
-
-        console.log(`Deleted ${count} email contents from user's email_content collection`);
-      }
-
-      // Also clear local cache
-      clearCache();
-      setEmailQuestions(new Map());
-
-      // Step 2: Update the toast to indicate progress
-      toast.loading('All emails deleted. Fetching 20 most recent emails from Gmail...', { id: 'reset-emails' });
+      setNewEmailsCount(0);
+      setNewThreadIds([]);
+      setShowNewEmailsButton(false);
 
       // Step 3: Fetch fresh emails from Gmail API (most recent 20 threads)
-      try {
+      const makeRequest = async (token: string) => {
         const response = await fetch('/api/emails/inbox?limit=20', {
           method: 'GET',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${user.accessToken}`
+            'Authorization': `Bearer ${token}`
           }
         });
 
         if (!response.ok) {
-          throw new Error('Failed to fetch emails from Gmail');
-        }
-
-        const data = await response.json();
-        console.log('Fetched fresh emails from Gmail:', data.emails.length);
-
-        // Transform the emails to match ExtendedEmail type
-        const transformedEmails = data.emails.map((email: any) => {
-          // Log the original timestamp data
-          console.log(`Email ${email.id} timestamps: internalDate=${email.internalDate}, receivedAt=${email.receivedAt}`);
-
-          // Ensure proper timestamp handling
-          let receivedAt = email.receivedAt || null;
-          let sortTimestamp = null;
-
-          // If email has internalDate from Gmail, use it
-          if (email.internalDate) {
-            const internalDateTimestamp = parseInt(email.internalDate);
-            if (!isNaN(internalDateTimestamp)) {
-              sortTimestamp = internalDateTimestamp;
-              if (!receivedAt) {
-                receivedAt = new Date(internalDateTimestamp).toISOString();
-              }
+          const errorData = await response.json();
+          if (errorData.error === 'Invalid Credentials' && refreshAccessToken) {
+            // Try to refresh the token
+            const newToken = await refreshAccessToken();
+            if (newToken) {
+              return makeRequest(newToken);
             }
           }
-
-          // Ensure all required properties exist for ExtendedEmail type
-          return {
-            id: email.id || '',
-            threadId: email.threadId || '',
-            subject: email.subject || '',
-            sender: email.sender || '',
-            content: email.content || '',
-            receivedAt: receivedAt || new Date().toISOString(),
-            sortTimestamp: sortTimestamp || (receivedAt ? new Date(receivedAt).getTime() : Date.now()),
-            // Copy other properties from the original email
-            ...email,
-          } as ExtendedEmail;
-        });
-
-        // Log debug info about timestamps
-        console.log(`DEBUG: Created ${transformedEmails.length} emails with timestamps`);
-        console.log(`DEBUG: First 3 email timestamps for verification:`);
-        for (let i = 0; i < Math.min(3, transformedEmails.length); i++) {
-          const email = transformedEmails[i];
-          console.log(`Email ${i + 1}: ${email.subject}`);
-          console.log(`  - receivedAt: ${email.receivedAt}`);
-          console.log(`  - sortTimestamp: ${email.sortTimestamp} (${email.sortTimestamp ? safeISOString(email.sortTimestamp) : 'N/A'})`);
+          throw new Error(errorData.error || 'Failed to fetch emails from Gmail');
         }
 
-        // Log timestamp info without accessing properties directly
-        console.log(`DEBUG: Created ${transformedEmails.length} emails with timestamps`);
+        return response;
+      };
 
-        // Set the new emails in state
-        const sortedEmails = sortEmails(transformedEmails) as ExtendedEmail[];
-        setEmails(sortedEmails);
+      const response = await makeRequest(user.accessToken);
+      const data = await response.json();
+      console.log('Fetched fresh emails from Gmail:', data.emails.length);
 
-        // Save the emails to Firebase
-        console.log('Saving fresh emails to Firebase...');
-        await saveEmailsToFirebase(sortedEmails, user);
+      // Transform the emails to match ExtendedEmail type
+      const transformedEmails = data.emails.map((email: any) => {
+        // Log the original timestamp data
+        console.log(`Email ${email.id} timestamps: internalDate=${email.internalDate}, receivedAt=${email.receivedAt}`);
 
-        // Debug: Verify timestamps after saving
-        // Debug timestamp check removed
+        // Ensure proper timestamp handling
+        let receivedAt = email.receivedAt || null;
+        let sortTimestamp = null;
 
-        console.log(`Saved ${sortedEmails.length} emails to Firebase`);
+        // If email has internalDate from Gmail, use it
+        if (email.internalDate) {
+          const internalDateTimestamp = parseInt(email.internalDate);
+          if (!isNaN(internalDateTimestamp)) {
+            sortTimestamp = internalDateTimestamp;
+            if (!receivedAt) {
+              receivedAt = new Date(internalDateTimestamp).toISOString();
+            }
+          }
+        }
 
-        // Success toast - restore this line
-        toast.success(`Complete reset finished. Loaded ${data.emails.length} fresh emails from Gmail and saved to Firebase`, { id: 'reset-emails' });
-      } catch (error) {
-        console.error('Error fetching fresh emails:', error);
-        toast.error('Failed to fetch fresh emails from Gmail. Please try manually refreshing.', { id: 'reset-emails' });
-      }
+        // Ensure all required properties exist for ExtendedEmail type
+        return {
+          id: email.id || '',
+          threadId: email.threadId || '',
+          subject: email.subject || '',
+          sender: email.sender || '',
+          content: email.content || '',
+          receivedAt: receivedAt || new Date().toISOString(),
+          sortTimestamp: sortTimestamp || (receivedAt ? new Date(receivedAt).getTime() : Date.now()),
+          // Copy other properties from the original email
+          ...email,
+        } as ExtendedEmail;
+      });
 
+      // Save the transformed emails to Firebase
+      await saveEmailsToFirebase(transformedEmails, user);
+
+      // Update local state with the new emails
+      setEmails(transformedEmails);
+
+      toast.success('Successfully reset and refreshed emails');
     } catch (error) {
-      console.error('Error during complete email reset:', error);
-      toast.error('Failed to complete email reset', { id: 'reset-emails' });
+      console.error('Error resetting emails:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to reset emails');
+    } finally {
+      setLoadingReset(false);
+      setResetComplete(true);
     }
   };
 
@@ -5122,6 +5359,49 @@ ${signature}`;
     } catch (error) {
       console.error('Error debugging Firebase collections:', error);
     }
+  };
+
+  // Add the deleteAllEmailsFromFirebase function
+  const deleteAllEmailsFromFirebase = async (user: { email: string | null }) => {
+    if (!user.email) {
+      throw new Error('User email is required');
+    }
+
+    const db = getFirebaseDB();
+    if (!db) {
+      throw new Error('Failed to connect to the database');
+    }
+
+    // Delete from all relevant collections
+    const collections = [
+      `users/${user.email}/emails`,
+      `users/${user.email}/not_relevant`,
+      `users/${user.email}/thread_cache`,
+      `users/${user.email}/email_content`
+    ];
+
+    for (const collectionPath of collections) {
+      const collectionRef = collection(db, collectionPath);
+      const snapshot = await getDocs(collectionRef);
+
+      if (snapshot.size > 0) {
+        const batch = writeBatch(db);
+        snapshot.forEach(doc => {
+          batch.delete(doc.ref);
+        });
+        await batch.commit();
+        console.log(`Deleted ${snapshot.size} documents from ${collectionPath}`);
+      }
+    }
+
+    // Clear ready_to_reply collection
+    const readyRef = doc(db, `users/${user.email}/ready_to_reply`, 'latest');
+    await setDoc(readyRef, { emails: [], timestamp: Date.now() });
+    console.log('Cleared ready_to_reply collection');
+
+    // Clear local cache
+    clearCache();
+    setEmailQuestions(new Map());
   };
 
   return (
