@@ -1123,7 +1123,9 @@ const PreloadedEditor = React.memo(({ value, onEditorChange, isVisible }: {
   );
 });
 
-export default function FAQAutoReplyV2() {
+PreloadedEditor.displayName = 'PreloadedEditor';
+
+const FAQAutoReplyV2: React.FC = () => {
   console.log('=== Component Render Start ===');
   const { user, checkGmailAccess, refreshAccessToken, loading: authLoading } = useAuth();
   const [emails, setEmails] = useState<ExtendedEmail[]>([]);
@@ -5426,5 +5428,8 @@ ${signature}`;
       </Layout>
     </div>
   );
-}
-// Debug timestamp function removed
+};
+
+FAQAutoReplyV2.displayName = 'FAQAutoReplyV2';
+
+export default FAQAutoReplyV2;

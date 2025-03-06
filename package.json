@@ -9,7 +9,7 @@
     "dev": "NODE_OPTIONS='--max-old-space-size=4096' next dev -p 3002",
     "prebuild": "NODE_ENV=production ts-node -P tsconfig.build.json scripts/prebuild.ts",
     "build": "next build",
-    "build:vercel": "npm run lint || true && npm run type-check || true && next build",
+    "build:vercel": "node -r dotenv/config ./scripts/check-env.js && npm run lint || true && npm run type-check || true && next build",
     "start": "next start -p 3002",
     "lint": "next lint",
     "type-check": "tsc --noEmit",
