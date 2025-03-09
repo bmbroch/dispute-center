@@ -104,4 +104,5 @@ export interface ExtendedEmail extends Email {
   irrelevanceReason?: string;
   gmailError?: string;
   showFullContent?: boolean;
+  isNew?: boolean;
 }
