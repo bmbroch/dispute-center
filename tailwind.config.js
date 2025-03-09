@@ -16,6 +16,9 @@ module.exports = {
                     ...defaultTheme.fontFamily.sans
                 ]
   		},
+      screens: {
+        'xs': '480px',
+      },
   		borderRadius: {
   			lg: 'var(--radius)',
   			md: 'calc(var(--radius) - 2px)',

@@ -23,6 +23,8 @@ import {
   Lightbulb,
   ChevronDown,
   DownloadCloud,
+  ArrowLeft,
+  Menu,
 } from "lucide-react"
 import { Textarea } from "@/components/ui/textarea"
 import Link from "next/link"
@@ -46,6 +48,10 @@ export default function RedesignPage() {
   const [newThreadIds, setNewThreadIds] = useState<string[]>([])
   const [showNewEmailsButton, setShowNewEmailsButton] = useState(false)
   const [loadingNewEmails, setLoadingNewEmails] = useState(false)
+  
+  // Mobile responsiveness states
+  const [isMobileView, setIsMobileView] = useState(false)
+  const [showEmailDetail, setShowEmailDetail] = useState(false)
   
   // Store the last selected email for each tab to preserve selection when switching tabs
   const [tabSelections, setTabSelections] = useState<{[key: string]: ExtendedEmail | null}>({
@@ -97,12 +103,35 @@ export default function RedesignPage() {
     email.isNotRelevant
   )
 
-  // Handle selecting an email without triggering loading state
+  // Detect mobile view on window resize
+  useEffect(() => {
+    const checkMobileView = () => {
+      setIsMobileView(window.innerWidth < 768);
+    };
+    
+    // Initial check
+    checkMobileView();
+    
+    // Add event listener for window resize
+    window.addEventListener('resize', checkMobileView);
+    
+    // Cleanup
+    return () => {
+      window.removeEventListener('resize', checkMobileView);
+    };
+  }, []);
+  
+  // Reset detail view when switching tabs on mobile
+  useEffect(() => {
+    if (isMobileView) {
+      setShowEmailDetail(false);
+    }
+  }, [activeTab, isMobileView]);
+
+  // Modified handleSelectEmail for mobile
   const handleSelectEmail = (email: ExtendedEmail) => {
     // Clear any isNew animation flag from the email being selected
-    // to prevent unwanted animation when clicking
     if (email.isNew) {
-      // First update the emails array to remove the isNew flag from all emails
       setEmails(prevEmails => 
         prevEmails.map(e => ({
           ...e,
@@ -112,13 +141,24 @@ export default function RedesignPage() {
     }
     
     setSelectedEmail(email);
+    
     // Also store this selection for the current tab
     setTabSelections(prev => ({
       ...prev,
       [activeTab]: email
     }));
+    
+    // For mobile view, show the detail screen
+    if (isMobileView) {
+      setShowEmailDetail(true);
+    }
   };
   
+  // Handle going back to the email list on mobile
+  const handleBackToList = () => {
+    setShowEmailDetail(false);
+  };
+
   // Utility function to clear all isNew flags, used when loading new emails
   const clearNewEmailAnimations = useCallback(() => {
     setEmails(prevEmails => 
@@ -1101,12 +1141,12 @@ Support Team`;
 
   // Email detail component
   const EmailDetail = ({ email, showReply = false }: { email: ExtendedEmail; showReply?: boolean }) => {
-    const [quickReply, setQuickReply] = useState("")
+    const [quickReply, setQuickReply] = useState("");
 
     if (!email) {
       return (
         <div className="flex flex-col items-center justify-center h-full text-center p-8">
-          <MessageSquareText className="h-16 w-16 text-gray-300 mb-4" />
+          <MessageSquare className="h-16 w-16 text-gray-300 mb-4" />
           <h3 className="text-xl font-medium text-gray-700 mb-2">No email selected</h3>
           <p className="text-sm text-gray-500">Select an email from the list to view its details</p>
         </div>
@@ -1135,11 +1175,11 @@ Support Team`;
       since: "Jan 2023",
       billingCycle: "Monthly",
       nextBilling: "Aug 15, 2023",
-    }
+    };
 
     return (
       <div className="h-full flex flex-col p-3 max-w-4xl mx-auto">
-        {/* Email Header - Keep compact */}
+        {/* Email Header - Keep compact, especially on mobile */}
         <div className="flex-shrink-0 pb-2 border-b border-gray-100">
           <div className="flex items-center gap-3 mb-1">
             <Avatar className="h-8 w-8 border border-gray-200 shadow-sm">
@@ -1147,23 +1187,26 @@ Support Team`;
                 {email.sender.charAt(0).toUpperCase()}
               </AvatarFallback>
             </Avatar>
-            <div className="flex-1">
+            <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2">
-                <span className="text-base font-medium text-gray-800">
+                <span className="text-base font-medium text-gray-800 truncate">
                   {getSenderName()}
                 </span>
-                <span className="text-sm text-gray-500">&lt;{email.sender}&gt;</span>
-                <span className="text-xs text-gray-400 ml-auto">
+                <span className="text-sm text-gray-500 truncate hidden sm:inline">
+                  &lt;{email.sender}&gt;
+                </span>
+                <span className="text-xs text-gray-400 ml-auto whitespace-nowrap">
                   {formatEmailTime(email.receivedAt)}
                 </span>
               </div>
-              <div className="text-sm text-gray-500">to me</div>
+              <div className="text-sm text-gray-500 hidden sm:block">to me</div>
             </div>
           </div>
 
-          <h2 className="text-lg font-semibold text-gray-900 mb-1">{email.subject}</h2>
+          <h2 className="text-lg font-semibold text-gray-900 mb-1 break-words">{email.subject}</h2>
 
-          <div className="flex flex-wrap gap-2">
+          {/* Action buttons - flex-wrap on mobile */}
+          <div className="flex flex-wrap gap-2 mt-3">
             <Dialog>
               <DialogTrigger asChild>
                 <Button
@@ -1178,10 +1221,10 @@ Support Team`;
                     />
                     <path d="M21.5 20.5h-11v-9h11v9zm-7-3h4v-3h-4v3z" fill="#6772e5" />
                   </svg>
-                  Customer Info
+                  <span className="hidden xs:inline">Customer Info</span>
                 </Button>
               </DialogTrigger>
-              <DialogContent className="rounded-2xl border-0 shadow-lg p-0 overflow-hidden">
+              <DialogContent className="rounded-2xl border-0 shadow-lg p-0 overflow-hidden w-[95vw] max-w-lg sm:w-full">
                 <DialogHeader className="bg-indigo-600 text-white p-6">
                   <DialogTitle className="text-xl font-medium">Customer Information</DialogTitle>
                 </DialogHeader>
@@ -1200,30 +1243,47 @@ Support Team`;
                       <div className="text-sm text-gray-500">{customerData.email}</div>
                     </div>
                   </div>
-                  <div className="space-y-5">
-                    <div className="flex justify-between items-center py-2 border-b border-gray-100">
-                      <span className="text-gray-600 font-medium">Plan</span>
-                      <span className="text-gray-900">{customerData.subscription}</span>
+
+                  <div className="border rounded-lg overflow-hidden mb-6">
+                    <div className="border-b bg-gray-50 px-4 py-3">
+                      <div className="font-medium text-gray-800">Subscription Details</div>
                     </div>
-                    <div className="flex justify-between items-center py-2 border-b border-gray-100">
-                      <span className="text-gray-600 font-medium">Status</span>
-                      <Badge className="bg-green-50 text-green-700 rounded-full px-3 py-0.5">
-                        {customerData.status}
-                      </Badge>
-                    </div>
-                    <div className="flex justify-between items-center py-2 border-b border-gray-100">
-                      <span className="text-gray-600 font-medium">Customer since</span>
-                      <span className="text-gray-900">{customerData.since}</span>
-                    </div>
-                    <div className="flex justify-between items-center py-2 border-b border-gray-100">
-                      <span className="text-gray-600 font-medium">Billing cycle</span>
-                      <span className="text-gray-900">{customerData.billingCycle}</span>
-                    </div>
-                    <div className="flex justify-between items-center py-2 border-b border-gray-100">
-                      <span className="text-gray-600 font-medium">Next billing</span>
-                      <span className="text-gray-900">{customerData.nextBilling}</span>
+                    <div className="p-4 text-sm">
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <div className="text-gray-500">Plan</div>
+                          <div className="font-medium">{customerData.subscription}</div>
+                        </div>
+                        <div>
+                          <div className="text-gray-500">Status</div>
+                          <div className="font-medium">
+                            <span className="inline-flex items-center">
+                              <span className="h-2 w-2 bg-green-500 rounded-full mr-2"></span>
+                              {customerData.status}
+                            </span>
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-gray-500">Customer Since</div>
+                          <div className="font-medium">{customerData.since}</div>
+                        </div>
+                        <div>
+                          <div className="text-gray-500">Billing Cycle</div>
+                          <div className="font-medium">{customerData.billingCycle}</div>
+                        </div>
+                        <div className="col-span-2">
+                          <div className="text-gray-500">Next Payment</div>
+                          <div className="font-medium">{customerData.nextBilling}</div>
+                        </div>
+                      </div>
                     </div>
                   </div>
+
+                  <Button
+                    className="w-full bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm hover:shadow rounded-full"
+                  >
+                    View Full Customer Profile
+                  </Button>
                 </div>
               </DialogContent>
             </Dialog>
@@ -1238,7 +1298,7 @@ Support Team`;
               <RefreshCw 
                 className={`h-4 w-4 mr-1 ${email.isRefreshing ? 'animate-spin text-indigo-600' : ''}`} 
               />
-              {email.isRefreshing ? 'Refreshing...' : 'Refresh'}
+              <span className="hidden xs:inline">{email.isRefreshing ? 'Refreshing...' : 'Refresh'}</span>
             </Button>
 
             <Button
@@ -1248,7 +1308,7 @@ Support Team`;
               onClick={() => handleGenerateReply()}
             >
               <MessageSquare className="h-4 w-4 mr-1" />
-              Reply
+              <span className="hidden xs:inline">Reply</span>
             </Button>
 
             <Button
@@ -1257,7 +1317,7 @@ Support Team`;
               className="h-7 px-2 rounded-full text-gray-600 hover:text-gray-900 hover:bg-gray-100 transition-all ml-auto"
             >
               <ThumbsDown className="h-4 w-4 mr-1" />
-              Not Relevant
+              <span className="hidden xs:inline">Not Relevant</span>
             </Button>
           </div>
         </div>
@@ -1274,77 +1334,38 @@ Support Team`;
 
         {/* Questions Section - Only show if there are questions */}
         {email.questions && email.questions.length > 0 && (
-          <div className="flex-shrink-0 mt-2">
-            <h3 className="text-sm font-medium mb-1 flex items-center text-gray-800">
-              <Lightbulb className="h-4 w-4 mr-1 text-amber-500" />
-              Extracted Questions
+          <div className="mt-4 border-t border-gray-100 pt-4">
+            <h3 className="text-sm font-semibold text-gray-700 mb-2 flex items-center">
+              <Lightbulb className="h-4 w-4 text-indigo-600 mr-1" />
+              Detected Questions
             </h3>
-            <div className="space-y-1">
-              {email.questions.map((questionItem, index) => (
-                <div key={index} className="bg-indigo-50 p-2 rounded text-sm text-indigo-800 shadow-sm">
-                  {questionItem.question}
-                  {email.matchedFAQ && index === 0 && (
-                    <Badge className="ml-2 bg-indigo-100 text-indigo-700 hover:bg-indigo-100 rounded-full text-xs">
-                      FAQ Match
-                    </Badge>
-                  )}
+            <div className="space-y-2">
+              {email.questions.map((question: any, index: number) => (
+                <div
+                  key={index}
+                  className="p-3 bg-indigo-50 border border-indigo-100 rounded-lg text-sm text-indigo-900"
+                >
+                  {question.question}
                 </div>
               ))}
             </div>
           </div>
         )}
 
-        {/* Quick Reply Section - Minimize space used */}
-        <div className="mt-2 flex-shrink-0">
-          <div className="flex items-center justify-between mb-1">
-            <h3 className="text-sm font-medium text-gray-800">Quick Reply</h3>
-            <Button
-              size="sm"
-              className="h-7 px-2 bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm hover:shadow rounded-full transition-all"
-              disabled={!quickReply.trim()}
-            >
-              <Send className="h-3 w-3 mr-1" />
-              Send
-            </Button>
-          </div>
-          <Textarea
-            placeholder="Type a quick reply..."
-            className="min-h-[60px] rounded-lg border-gray-200 resize-none focus:ring-indigo-600 focus:border-indigo-600"
-            value={quickReply}
-            onChange={(e) => setQuickReply(e.target.value)}
-          />
-        </div>
-
-        {/* Suggested Reply Section - Only show if needed */}
-        {(showReply || email.suggestedReply) && (
-          <div className="mt-2 flex-shrink-0">
-            <div className="flex justify-between items-center mb-1">
-              <h3 className="text-sm font-medium flex items-center text-gray-800">
-                <MessageSquare className="h-4 w-4 mr-1 text-green-600" />
-                Suggested Reply
-              </h3>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setEditingReply(!editingReply)}
-                className="h-7 px-2 text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50 rounded-full"
-              >
-                <Edit className="h-4 w-4 mr-1" />
-                {editingReply ? "Cancel" : "Edit"}
-              </Button>
-            </div>
-
-            {editingReply ? (
-              <div className="space-y-3">
-                <Textarea
-                  className="min-h-[200px] rounded-lg border-gray-200 resize-none focus:ring-indigo-600 focus:border-indigo-600"
-                  defaultValue={
-                    email.suggestedReply ||
-                    `Dear ${email.sender
-                      .split("@")[0]
-                      .split(".")
-                      .map((name: string) => name.charAt(0).toUpperCase() + name.slice(1))
-                      .join(" ")},
+        {/* Reply Section - Show when replying */}
+        {showReply ? (
+          <div className="mt-4 border-t border-gray-100 pt-4">
+            <h3 className="text-sm font-semibold text-gray-700 mb-2">Your Reply</h3>
+            <div className="space-y-3">
+              <Textarea
+                className="min-h-[200px] rounded-lg border-gray-200 resize-none focus:ring-indigo-600 focus:border-indigo-600"
+                defaultValue={
+                  email.suggestedReply ||
+                  `Dear ${email.sender
+                    .split("@")[0]
+                    .split(".")
+                    .map((name: string) => name.charAt(0).toUpperCase() + name.slice(1))
+                    .join(" ")},
 
 Thank you for reaching out to our support team.
 
@@ -1357,41 +1378,33 @@ If you have any further questions, please don't hesitate to contact us.
 
 Best regards,
 Support Team`
-                  }
-                />
-                <div className="flex justify-end gap-2">
-                  <Button variant="outline" className="rounded-full">
-                    Cancel
-                  </Button>
-                  <Button className="bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm hover:shadow rounded-full transition-all">
-                    <Send className="h-4 w-4 mr-2" />
-                    Send Reply
-                  </Button>
-                </div>
+                }
+              />
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" className="rounded-full">
+                  Cancel
+                </Button>
+                <Button className="bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm hover:shadow rounded-full transition-all">
+                  <Send className="h-4 w-4 mr-2" />
+                  Send Reply
+                </Button>
               </div>
-            ) : (
-              <Card className="p-4 rounded-lg border-0 shadow-sm overflow-hidden">
-                <div className="font-mono text-sm whitespace-pre-wrap">
-                  {email.suggestedReply || `Dear ${getSenderName()},
-
-Thank you for reaching out to our support team.
-
-${email.matchedFAQ && email.questions && email.questions.length > 0 && email.questions[0]?.question ? 
-  faqLibrary.find((faq) => faq.question.toLowerCase().includes(email.questions?.[0]?.question?.toLowerCase?.()?.split(" ")?.pop?.() || ''))?.answer || 
-  "I'll look into this issue for you right away." : 
-  "I'll look into this issue for you right away."}
-
-If you have any further questions, please don't hesitate to contact us.
-
-Best regards,
-Support Team`}
-                </div>
-              </Card>
-            )}
+            </div>
+          </div>
+        ) : (
+          // Only show on mobile - floating action button for reply
+          <div className="md:hidden fixed bottom-6 right-6">
+            <Button 
+              size="lg"
+              className="h-14 w-14 rounded-full bg-indigo-600 hover:bg-indigo-700 text-white shadow-lg"
+              onClick={() => handleGenerateReply()}
+            >
+              <Send className="h-6 w-6" />
+            </Button>
           </div>
         )}
       </div>
-    )
+    );
   }
 
   // FAQ Library content
@@ -1461,186 +1474,109 @@ Support Team`}
 
   return (
     <div className="flex h-screen bg-gray-50">
-      <Sidebar />
-      <div className="flex-1 flex flex-col overflow-hidden md:pl-64">
-        <header className="bg-white shadow-sm px-8 py-5 flex justify-between items-center">
-          <div>
-            <h1 className="text-2xl font-semibold text-gray-900">FAQ Auto Reply</h1>
-            <p className="text-sm text-gray-500 mt-1">Automatically match and reply to customer support emails</p>
-          </div>
-          <div className="flex items-center gap-3">
-            <Button
-              variant="outline"
-              size="sm"
-              className="rounded-full border-gray-200 shadow-sm hover:shadow hover:border-gray-300 transition-all"
+      {/* Sidebar - always visible on desktop, hidden on mobile when viewing email detail */}
+      <div className={`bg-white w-64 border-r ${isMobileView ? 'hidden' : 'hidden md:block'}`}>
+        <Sidebar />
+      </div>
+      
+      <div className="flex-1 flex flex-col overflow-hidden">
+        {/* Top navigation bar - adjust for mobile */}
+        <header className="bg-white border-b px-4 py-3 flex items-center justify-between">
+          {isMobileView && showEmailDetail ? (
+            <Button 
+              variant="ghost" 
+              size="sm" 
+              onClick={handleBackToList}
+              className="mr-2"
             >
-              <Settings className="h-4 w-4 mr-2" />
-              Settings
+              <ArrowLeft className="h-4 w-4 mr-1" />
+              Back
             </Button>
-            <Button
-              size="sm"
-              className="bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm hover:shadow rounded-full transition-all"
+          ) : isMobileView ? (
+            <Button variant="ghost" size="sm" className="mr-2">
+              <Menu className="h-5 w-5" />
+            </Button>
+          ) : null}
+          
+          <h1 className="text-xl font-semibold text-gray-800">
+            {isMobileView && showEmailDetail && selectedEmail 
+              ? 'Email Details' 
+              : 'Support Inbox'}
+          </h1>
+          
+          <div className="flex items-center gap-2">
+            <Button 
+              variant="outline" 
+              size="sm" 
               onClick={handleRefreshEmails}
+              disabled={dataRefreshing}
             >
-              <RefreshCw className="h-4 w-4 mr-2" />
-              Refresh Emails
+              <RefreshCw className={`h-4 w-4 mr-1 ${dataRefreshing ? 'animate-spin' : ''}`} />
+              {dataRefreshing ? 'Refreshing...' : 'Refresh'}
             </Button>
           </div>
         </header>
-
-        <div className="flex-1 overflow-hidden">
-          <Tabs defaultValue="unanswered" value={activeTab} onValueChange={handleTabChange} className="h-full flex flex-col">
-            <div className="px-8 pb-0">
-              <TabsList className="bg-transparent border-b border-gray-200 w-full max-w-full p-0 h-auto">
-                <TabsTrigger
-                  value="unanswered"
-                  className="px-6 py-2 rounded-t-2xl data-[state=active]:bg-indigo-600 data-[state=active]:text-white data-[state=active]:shadow-lg transition-all border-b-2 border-transparent data-[state=active]:border-indigo-600 text-gray-600 hover:text-gray-900"
-                >
+        
+        <div className="flex-1 flex overflow-hidden">
+          {/* Email list - visible on desktop or mobile list view */}
+          <div className={`
+            w-full md:w-1/2 lg:w-2/5 bg-gray-50 overflow-auto p-4 border-r
+            ${isMobileView && showEmailDetail ? 'hidden' : 'block'}
+          `}>
+            <Tabs defaultValue={activeTab} onValueChange={handleTabChange}>
+              <TabsList className="grid grid-cols-4 mb-4">
+                <TabsTrigger value="unanswered" className="text-xs">
                   Unanswered
+                  {unansweredEmails.length > 0 && (
+                    <Badge className="ml-1 bg-indigo-600 hover:bg-indigo-600 text-[10px]">
+                      {unansweredEmails.length}
+                    </Badge>
+                  )}
                 </TabsTrigger>
-                <TabsTrigger
-                  value="ready"
-                  className="px-6 py-2 rounded-t-2xl data-[state=active]:bg-indigo-600 data-[state=active]:text-white data-[state=active]:shadow-lg transition-all border-b-2 border-transparent data-[state=active]:border-indigo-600 text-gray-600 hover:text-gray-900"
-                >
-                  Ready to Reply
+                <TabsTrigger value="ready" className="text-xs">
+                  Ready
+                  {readyEmails.length > 0 && (
+                    <Badge className="ml-1 bg-green-600 hover:bg-green-600 text-[10px]">
+                      {readyEmails.length}
+                    </Badge>
+                  )}
                 </TabsTrigger>
-                <TabsTrigger
-                  value="faq"
-                  className="px-6 py-2 rounded-t-2xl data-[state=active]:bg-indigo-600 data-[state=active]:text-white data-[state=active]:shadow-lg transition-all border-b-2 border-transparent data-[state=active]:border-indigo-600 text-gray-600 hover:text-gray-900"
-                >
-                  FAQ Library
-                </TabsTrigger>
-                <TabsTrigger
-                  value="not-relevant"
-                  className="px-6 py-2 rounded-t-2xl data-[state=active]:bg-indigo-600 data-[state=active]:text-white data-[state=active]:shadow-lg transition-all border-b-2 border-transparent data-[state=active]:border-indigo-600 text-gray-600 hover:text-gray-900"
-                >
-                  Not Relevant
-                </TabsTrigger>
-                <TabsTrigger
-                  value="answered"
-                  className="px-6 py-2 rounded-t-2xl data-[state=active]:bg-indigo-600 data-[state=active]:text-white data-[state=active]:shadow-lg transition-all border-b-2 border-transparent data-[state=active]:border-indigo-600 text-gray-600 hover:text-gray-900"
-                >
-                  Answered
-                </TabsTrigger>
+                <TabsTrigger value="not-relevant" className="text-xs">Not Relevant</TabsTrigger>
+                <TabsTrigger value="answered" className="text-xs">Answered</TabsTrigger>
               </TabsList>
-            </div>
-
-            <div className="flex-1 overflow-hidden mt-0">
-              <TabsContent value="unanswered" className="h-full flex data-[state=active]:flex-row">
-                <div className="w-1/3 border-r border-gray-100 overflow-y-auto p-2">
-                  <div className="mb-2 flex justify-between items-center">
-                    <h3 className="font-medium text-gray-700">Unanswered Emails ({unansweredEmails.length})</h3>
-                    {dataRefreshing && <RefreshCw className="h-4 w-4 animate-spin text-indigo-600" />}
-                  </div>
-                  <EmailList emails={unansweredEmails} />
-                </div>
-                <div className="w-2/3 overflow-y-auto">
-                  {selectedEmail ? (
-                    <EmailDetail email={selectedEmail} />
-                  ) : (
-                    <div className="h-full flex items-center justify-center text-gray-400">
-                      <div className="text-center">
-                        <MessageSquareText className="h-12 w-12 mx-auto text-gray-200 mb-4" />
-                        <p className="text-lg">Select an email to view details</p>
-                      </div>
-                    </div>
-                  )}
-                </div>
+              
+              <TabsContent value="unanswered">
+                <EmailList emails={unansweredEmails} />
               </TabsContent>
-
-              <TabsContent value="ready" className="h-full data-[state=active]:flex flex-row">
-                <div className="w-1/3 border-r border-gray-100 overflow-y-auto p-2">
-                  <div className="mb-2 flex justify-between items-center">
-                    <h3 className="font-medium text-gray-700">Ready to Reply ({readyEmails.length})</h3>
-                    {dataRefreshing && <RefreshCw className="h-4 w-4 animate-spin text-indigo-600" />}
-                  </div>
-                  <EmailList emails={readyEmails} />
-                </div>
-                <div className="w-2/3 overflow-y-auto">
-                  {selectedEmail ? (
-                    <EmailDetail email={selectedEmail} showReply={true} />
-                  ) : (
-                    <div className="h-full flex items-center justify-center text-gray-400">
-                      <div className="text-center">
-                        <MessageSquareText className="h-12 w-12 mx-auto text-gray-200 mb-4" />
-                        <p className="text-lg">Select an email to view details</p>
-                      </div>
-                    </div>
-                  )}
-                </div>
+              <TabsContent value="ready">
+                <EmailList emails={readyEmails} />
               </TabsContent>
-
-              <TabsContent value="faq" className="h-full overflow-y-auto">
-                <FAQLibraryContent />
+              <TabsContent value="not-relevant">
+                <EmailList emails={notRelevantEmails} />
               </TabsContent>
-
-              <TabsContent value="not-relevant" className="h-full data-[state=active]:flex flex-row">
-                {notRelevantEmails.length > 0 ? (
-                  <>
-                    <div className="w-1/3 border-r border-gray-100 overflow-y-auto p-2">
-                      <div className="mb-2 flex justify-between items-center">
-                        <h3 className="font-medium text-gray-700">Not Relevant ({notRelevantEmails.length})</h3>
-                        {dataRefreshing && <RefreshCw className="h-4 w-4 animate-spin text-indigo-600" />}
-                      </div>
-                      <EmailList emails={notRelevantEmails} />
-                    </div>
-                    <div className="w-2/3 overflow-y-auto">
-                      {selectedEmail ? (
-                        <EmailDetail email={selectedEmail} />
-                      ) : (
-                        <div className="h-full flex items-center justify-center text-gray-400">
-                          <div className="text-center">
-                            <MessageSquareText className="h-12 w-12 mx-auto text-gray-200 mb-4" />
-                            <p className="text-lg">Select an email to view details</p>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </>
-                ) : (
-                <div className="w-full flex items-center justify-center text-gray-400">
-                  <div className="text-center">
-                    <ThumbsDown className="h-12 w-12 mx-auto text-gray-200 mb-4" />
-                    <p className="text-lg">No emails marked as not relevant</p>
-                  </div>
+              <TabsContent value="answered">
+                <EmailList emails={answeredEmails} />
+              </TabsContent>
+            </Tabs>
+          </div>
+          
+          {/* Email detail view - visible on desktop or mobile detail view */}
+          <div className={`
+            w-full md:w-1/2 lg:w-3/5 overflow-auto
+            ${isMobileView && !showEmailDetail ? 'hidden' : 'block'}
+          `}>
+            {selectedEmail ? (
+              <EmailDetail email={selectedEmail} showReply={editingReply} />
+            ) : (
+              <div className="flex items-center justify-center h-full">
+                <div className="text-center">
+                  <MessageSquare className="h-12 w-12 text-gray-300 mx-auto mb-4" />
+                  <h3 className="text-lg font-medium text-gray-700 mb-1">No email selected</h3>
+                  <p className="text-sm text-gray-500">Select an email from the list to view its details</p>
                 </div>
-                )}
-              </TabsContent>
-
-              <TabsContent value="answered" className="h-full data-[state=active]:flex flex-row">
-                {answeredEmails.length > 0 ? (
-                  <>
-                    <div className="w-1/3 border-r border-gray-100 overflow-y-auto p-2">
-                      <div className="mb-2 flex justify-between items-center">
-                        <h3 className="font-medium text-gray-700">Answered Emails ({answeredEmails.length})</h3>
-                        {dataRefreshing && <RefreshCw className="h-4 w-4 animate-spin text-indigo-600" />}
-                      </div>
-                      <EmailList emails={answeredEmails} />
-                    </div>
-                    <div className="w-2/3 overflow-y-auto">
-                      {selectedEmail ? (
-                        <EmailDetail email={selectedEmail} />
-                      ) : (
-                        <div className="h-full flex items-center justify-center text-gray-400">
-                          <div className="text-center">
-                            <MessageSquareText className="h-12 w-12 mx-auto text-gray-200 mb-4" />
-                            <p className="text-lg">Select an email to view details</p>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </>
-                ) : (
-                <div className="w-full flex items-center justify-center text-gray-400">
-                  <div className="text-center">
-                    <CheckCircle className="h-12 w-12 mx-auto text-gray-200 mb-4" />
-                    <p className="text-lg">No answered emails</p>
-                  </div>
-                </div>
-                )}
-              </TabsContent>
-            </div>
-          </Tabs>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>
