@@ -1200,9 +1200,6 @@ Support Team`;
     const [isLoadingStripe, setIsLoadingStripe] = useState(false)
     const [stripeInfo, setStripeInfo] = useState<StripeSubscriptionInfo | null>(null)
     const [showStripeInfo, setShowStripeInfo] = useState(false)
-    const [showDebugInfo, setShowDebugInfo] = useState(false)
-    const [debugInfo, setDebugInfo] = useState<any>(null)
-    const [isDebugLoading, setIsDebugLoading] = useState(false)
     const { user } = useAuth(); // Get the current user from auth context
 
     if (!email) {
@@ -1215,38 +1212,6 @@ Support Team`;
       );
     }
 
-    // Debug function to troubleshoot Stripe key issues
-    const debugStripeKey = async () => {
-      setIsDebugLoading(true);
-      setShowDebugInfo(false);
-      setDebugInfo(null);
-      
-      try {
-        if (!user || !user.email) {
-          toast.error('User email not available');
-          return;
-        }
-        
-        const response = await fetch(`/api/stripe/debug-key?userEmail=${encodeURIComponent(user.email)}`);
-        
-        if (!response.ok) {
-          throw new Error(`Server error: ${response.status} ${response.statusText}`);
-        }
-        
-        const data = await response.json();
-        console.log('Debug info:', data);
-        setDebugInfo(data);
-        setShowDebugInfo(true);
-      } catch (error: unknown) {
-        console.error('Error fetching debug info:', error);
-        const errorMessage = error instanceof Error ? error.message : 'Failed to get debug info';
-        setDebugInfo({ error: errorMessage });
-        setShowDebugInfo(true);
-      } finally {
-        setIsDebugLoading(false);
-      }
-    };
-    
     // Extract sender name from email
     const getSenderName = () => {
       try {
@@ -1375,7 +1340,7 @@ Support Team`;
         } else if (stripeInfo.subscription?.currentPeriodEnd) {
           nextBillingDate = formatDate(stripeInfo.subscription.currentPeriodEnd);
         }
-
+  
         return {
           name: stripeInfo.customer?.name || getSenderName(),
           email: stripeInfo.customer?.email || email.sender,
@@ -1576,7 +1541,7 @@ Support Team`;
     };
 
     return (
-      <div className="h-full flex flex-col p-3 max-w-4xl mx-auto">
+      <div className="h-full flex flex-col p-3 max-w-4xl mx-auto overflow-hidden">
         {/* Mobile Back Button - Only show on mobile */}
         <div className="md:hidden mb-3 sticky top-0 z-10 bg-white py-2 border-b">
           <Button 
@@ -1647,19 +1612,6 @@ Support Team`;
               </DialogContent>
             </Dialog>
 
-            {/* Add Stripe Debug button - only visible in development */}
-            {process.env.NODE_ENV === 'development' && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-7 px-2 rounded-full text-amber-600 hover:text-amber-900 hover:bg-amber-50 transition-all"
-                onClick={debugStripeKey}
-              >
-                <Lightbulb className="h-4 w-4 mr-1" />
-                Debug Stripe
-              </Button>
-            )}
-
             <Button
               variant="ghost"
               size="sm"
@@ -1695,7 +1647,7 @@ Support Team`;
         </div>
 
         {/* Email Content - Give maximum space */}
-        <div className="flex-grow overflow-auto flex flex-col bg-white rounded-lg border border-gray-200 mt-2 hover:shadow-sm transition-shadow">
+        <div className="flex-grow flex flex-col bg-white rounded-lg border border-gray-200 mt-2 hover:shadow-sm transition-shadow" style={{ minHeight: "300px", maxHeight: "calc(100vh - 250px)", overflow: "hidden" }}>
           <EmailRenderNew 
             content={email.content} 
             showDebugInfo={false} 
@@ -1703,110 +1655,6 @@ Support Team`;
             isLoading={email.isRefreshing} 
           />
         </div>
-
-        {/* Debug Dialog */}
-        {showDebugInfo && (
-          <Dialog open={showDebugInfo} onOpenChange={setShowDebugInfo}>
-            <DialogContent className="max-w-4xl">
-              <DialogHeader>
-                <DialogTitle className="flex items-center">
-                  <Lightbulb className="h-5 w-5 mr-2 text-amber-500" />
-                  Stripe Connection Debug Info
-                </DialogTitle>
-              </DialogHeader>
-              <div className="overflow-auto max-h-[70vh]">
-                {debugInfo === null ? (
-                  <div className="animate-pulse space-y-3 p-4">
-                    <div className="h-4 bg-gray-100 rounded w-3/4"></div>
-                    <div className="h-4 bg-gray-100 rounded w-5/6"></div>
-                    <div className="h-4 bg-gray-100 rounded w-2/3"></div>
-                  </div>
-                ) : debugInfo.error ? (
-                  <div className="p-4 bg-red-50 text-red-700 rounded-md">
-                    <p className="font-medium">Error:</p>
-                    <p>{debugInfo.error}</p>
-                  </div>
-                ) : (
-                  <div className="space-y-4">
-                    <div className="bg-blue-50 p-4 rounded-md">
-                      <h3 className="font-medium text-blue-800 mb-2">User Info</h3>
-                      <div className="grid grid-cols-2 gap-2 text-sm">
-                        <div className="font-medium">Current User Email:</div>
-                        <div>{user?.email || 'Not signed in'}</div>
-                        <div className="font-medium">Looking up API key for:</div>
-                        <div>{debugInfo.email || 'N/A'}</div>
-                        <div className="font-medium">API Key Found:</div>
-                        <div className={debugInfo.keyExists ? 'text-green-600 font-medium' : 'text-red-600 font-medium'}>
-                          {debugInfo.keyExists ? 'Yes' : 'No'}
-                        </div>
-                        {debugInfo.keyExists && (
-                          <>
-                            <div className="font-medium">API Key Length:</div>
-                            <div>{debugInfo.keyLength || 0} characters</div>
-                            <div className="font-medium">API Key Prefix:</div>
-                            <div>{debugInfo.keyStartsWith || 'N/A'}</div>
-                          </>
-                        )}
-                      </div>
-                    </div>
-
-                    {debugInfo.steps && (
-                      <div className="border rounded-md">
-                        <h3 className="font-medium p-3 bg-gray-50 border-b">Debug Steps</h3>
-                        <ul className="divide-y">
-                          {debugInfo.steps.map((step: string, i: number) => (
-                            <li key={i} className={`p-2 text-sm ${step.includes('ERROR') ? 'text-red-600' : ''}`}>
-                              {i + 1}. {step}
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-
-                    {debugInfo.documents && debugInfo.documents.length > 0 && (
-                      <div className="border rounded-md">
-                        <h3 className="font-medium p-3 bg-gray-50 border-b">Found Documents</h3>
-                        <div className="p-3 space-y-3">
-                          {debugInfo.documents.map((doc: any, i: number) => (
-                            <div key={i} className="border p-3 rounded-md text-sm">
-                              <div className="grid grid-cols-2 gap-2">
-                                <div className="font-medium">Document ID:</div>
-                                <div>{doc.id}</div>
-                                <div className="font-medium">Match Type:</div>
-                                <div>{doc.match}</div>
-                                <div className="font-medium">User Email:</div>
-                                <div>{doc.userEmail}</div>
-                                <div className="font-medium">Has Stripe Key:</div>
-                                <div className={doc.hasStripeKey ? 'text-green-600' : 'text-red-600'}>
-                                  {doc.hasStripeKey ? 'Yes' : 'No'}
-                                </div>
-                                {doc.hasStripeKey && (
-                                  <>
-                                    <div className="font-medium">Key Length:</div>
-                                    <div>{doc.keyLength} characters</div>
-                                  </>
-                                )}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    <div className="flex justify-end gap-2 mt-4">
-                      <Button 
-                        variant="ghost" 
-                        onClick={() => setShowDebugInfo(false)}
-                      >
-                        Close
-                      </Button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </DialogContent>
-          </Dialog>
-        )}
 
         {/* Questions Section - Only show if there are questions */}
         {email.questions && email.questions.length > 0 && (

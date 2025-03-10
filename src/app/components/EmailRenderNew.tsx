@@ -116,6 +116,8 @@ export default function EmailRenderNew({
                 color: #000000;
                 background-color: #ffffff;
                 height: 100%;
+                overflow-y: auto;
+                overflow-x: hidden;
               }
               * {
                 max-width: 100%;
@@ -135,8 +137,22 @@ export default function EmailRenderNew({
                 border-left: 1px solid #ccc;
                 padding-left: 1ex;
               }
-              html, body {
+              html {
                 height: 100%;
+                min-height: 100%;
+                overflow: hidden;
+              }
+              /* This ensures scrollbars only appear when needed and look consistent */
+              ::-webkit-scrollbar {
+                width: 8px;
+                height: 8px;
+              }
+              ::-webkit-scrollbar-thumb {
+                background-color: rgba(0, 0, 0, 0.2);
+                border-radius: 4px;
+              }
+              ::-webkit-scrollbar-track {
+                background: transparent;
               }
             </style>
           </head>
@@ -159,28 +175,62 @@ export default function EmailRenderNew({
     iframe.style.height = '100%';
     iframe.srcdoc = processedContent;
 
+    let resizeObserver: ResizeObserver | null = null;
+
     iframe.onload = () => {
       const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
       if (!iframeDoc) return;
 
-      // Adjust the iframe height to fit content
-      const updateHeight = () => {
-        if (!iframe.contentWindow) return;
-        const height = iframe.contentWindow.document.body.scrollHeight;
-        iframe.style.height = `${Math.max(height, 400)}px`; // Set minimum height
-      };
-
-      // Add event listener for window resize
-      iframe.contentWindow?.addEventListener('resize', updateHeight);
-      
-      // Update height initially
-      updateHeight();
+      // Add scrolling styles to the iframe body
+      if (iframe.contentWindow?.document.body) {
+        // Make the body use auto overflow to only show scrollbars when needed
+        iframe.contentWindow.document.body.style.minHeight = '100%';
+        
+        // Function to check if scrolling is needed and update accordingly
+        const updateScrollState = () => {
+          if (!iframe.contentWindow || !iframe.contentWindow.document.body) return;
+          
+          const contentHeight = iframe.contentWindow.document.body.scrollHeight || 0;
+          const containerHeight = iframe.clientHeight;
+          
+          // Only allow scrolling if content exceeds container
+          if (contentHeight <= containerHeight) {
+            iframe.contentWindow.document.body.style.overflowY = 'hidden';
+          } else {
+            // When content is larger than container, show scrollbar
+            iframe.contentWindow.document.body.style.overflowY = 'auto';
+            
+            // Ensure there's no horizontal scrollbar
+            iframe.contentWindow.document.body.style.overflowX = 'hidden';
+            
+            // Apply some padding to account for scrollbar width and prevent content shift
+            iframe.contentWindow.document.body.style.paddingRight = '8px';
+          }
+        };
+        
+        // Initial update
+        updateScrollState();
+        
+        // Add resize event listener to handle dynamic content changes
+        resizeObserver = new ResizeObserver(() => {
+          updateScrollState();
+        });
+        
+        resizeObserver.observe(iframe.contentWindow.document.body);
+      }
 
       const links = iframeDoc.getElementsByTagName('a');
       Array.from(links).forEach(link => {
         link.target = '_blank';
         link.rel = 'noopener noreferrer';
       });
+    };
+
+    // Cleanup function
+    return () => {
+      if (resizeObserver) {
+        resizeObserver.disconnect();
+      }
     };
   }, [processedContent]);
 
@@ -208,14 +258,14 @@ export default function EmailRenderNew({
         </div>
       )}
 
-      <div className="relative bg-white rounded-lg overflow-hidden h-full">
+      <div className="relative bg-white rounded-lg h-full">
         <iframe
           ref={iframeRef}
           className="w-full border-0 h-full"
           sandbox="allow-same-origin"
           title="Email Content"
           srcDoc={processedContent}
-          style={{ minHeight: '400px' }}
+          style={{ minHeight: '400px', height: '100%' }}
         />
       </div>
     </div>
