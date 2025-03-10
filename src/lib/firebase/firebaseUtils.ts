@@ -80,77 +80,95 @@ export const getStripeKey = async (userEmail: string): Promise<string | null> =>
   }
 };
 
-// Debug function for Stripe key
-export const debugStripeKey = async (userEmail: string) => {
-  if (!userEmail) {
-    return { error: 'No email provided' };
-  }
+interface DebugDocument {
+  id: string;
+  match: string;
+  hasStripeKey: boolean;
+  keyLength: any;
+  fields: string[];
+  userEmail: any;
+  createdAt: any;
+}
 
-  const debug = {
-    email: userEmail,
-    normalizedEmail: userEmail.toLowerCase().trim(),
-    emailsMatch: userEmail === userEmail.toLowerCase().trim(),
+interface DebugInfo {
+  userEmail: string;
+  error: string | null;
+  steps: string[];
+  collections: {
+    stripeKeys?: {
+      exists: boolean;
+      size: number;
+    }
+  };
+  documents: DebugDocument[];
+  queryTime: number;
+}
+
+export const debugStripeKey = async (userEmail: string) => {
+  const startTime = Date.now();
+  
+  // Create a debug object to collect information
+  const debug: DebugInfo = {
+    userEmail,
+    error: null,
     steps: [],
     collections: {},
     documents: [],
-    error: null
+    queryTime: 0
   };
-
+  
   try {
     const db = getFirebaseDB();
     if (!db) {
       debug.error = 'Firebase DB not initialized';
       return debug;
     }
-
+    
     debug.steps.push('Firebase DB initialized successfully');
-
-    // Check if the stripeKeys collection exists and list its documents
+    
     try {
+      // Get a reference to the stripeKeys collection
       const stripeKeysRef = collection(db, 'stripeKeys');
       debug.steps.push('Retrieved stripeKeys collection reference');
-
-      // List all documents in the collection (limit to 10 for safety)
-      const allDocsSnapshot = await getDocs(query(stripeKeysRef, limit(10)));
+      
+      // Add collection info to debug output
       debug.collections.stripeKeys = {
         exists: true,
-        docCount: allDocsSnapshot.size,
-        sampleEmails: allDocsSnapshot.docs.map(doc => {
-          const data = doc.data();
-          return data.userEmail || 'No userEmail field';
-        })
+        size: 0
       };
+      
+      // Get all documents to check if collection exists and is populated
+      const allDocsSnapshot = await getDocs(stripeKeysRef);
+      debug.collections.stripeKeys.size = allDocsSnapshot.size;
       debug.steps.push(`Found ${allDocsSnapshot.size} total documents in stripeKeys collection`);
-
-      // Exact match query
-      const exactMatchRef = query(stripeKeysRef, where('userEmail', '==', userEmail));
-      const exactMatchSnapshot = await getDocs(exactMatchRef);
+      
+      // Try exact match first
+      const exactMatchQuery = query(stripeKeysRef, where('userEmail', '==', userEmail));
+      const exactMatchSnapshot = await getDocs(exactMatchQuery);
       debug.steps.push(`Exact match query complete (found: ${exactMatchSnapshot.size})`);
-
-      // Lowercase match query
-      const lowercaseEmail = userEmail.toLowerCase().trim();
-      const lowercaseMatchRef = query(stripeKeysRef, where('userEmail', '==', lowercaseEmail));
-      const lowercaseMatchSnapshot = await getDocs(lowercaseMatchRef);
+      
+      // Try lowercase match as fallback
+      const lowercaseMatchQuery = query(stripeKeysRef, where('userEmail', '==', userEmail.toLowerCase()));
+      const lowercaseMatchSnapshot = await getDocs(lowercaseMatchQuery);
       debug.steps.push(`Lowercase match query complete (found: ${lowercaseMatchSnapshot.size})`);
-
-      // Document details
-      if (exactMatchSnapshot.size > 0) {
-        exactMatchSnapshot.docs.forEach(doc => {
-          const data = doc.data();
-          debug.documents.push({
-            id: doc.id,
-            match: 'exact',
-            hasStripeKey: !!data.stripeKey,
-            keyLength: data.stripeKey?.length || 0,
-            fields: Object.keys(data),
-            userEmail: data.userEmail,
-            createdAt: data.createdAt?.toDate?.() || 'No createdAt field'
-          });
+      
+      // Process exact matches
+      exactMatchSnapshot.forEach((doc) => {
+        const data = doc.data();
+        debug.documents.push({
+          id: doc.id,
+          match: 'exact',
+          hasStripeKey: !!data.stripeKey,
+          keyLength: data.stripeKey?.length || 0,
+          fields: Object.keys(data),
+          userEmail: data.userEmail,
+          createdAt: data.createdAt?.toDate?.() || 'No createdAt field'
         });
-      }
-
-      if (lowercaseMatchSnapshot.size > 0 && userEmail !== lowercaseEmail) {
-        lowercaseMatchSnapshot.docs.forEach(doc => {
+      });
+      
+      // Process lowercase matches (only if not already found with exact match)
+      if (exactMatchSnapshot.empty) {
+        lowercaseMatchSnapshot.forEach((doc) => {
           const data = doc.data();
           debug.documents.push({
             id: doc.id,
@@ -163,17 +181,21 @@ export const debugStripeKey = async (userEmail: string) => {
           });
         });
       }
-    } catch (collectionError) {
-      debug.error = `Error accessing stripeKeys collection: ${collectionError.message}`;
+      
+    } catch (collectionError: unknown) {
+      const errorMessage = collectionError instanceof Error ? collectionError.message : 'Unknown error';
+      debug.error = `Error accessing stripeKeys collection: ${errorMessage}`;
       debug.steps.push(`ERROR: ${debug.error}`);
     }
-
-    return debug;
-  } catch (error) {
-    debug.error = `Unhandled error in debugStripeKey: ${error.message}`;
+    
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    debug.error = `Unhandled error in debugStripeKey: ${errorMessage}`;
     debug.steps.push(`ERROR: ${debug.error}`);
-    return debug;
   }
+  
+  debug.queryTime = Date.now() - startTime;
+  return debug;
 };
 
 // Firestore functions

@@ -115,6 +115,7 @@ export default function EmailRenderNew({
                 line-height: 1.5;
                 color: #000000;
                 background-color: #ffffff;
+                height: 100%;
               }
               * {
                 max-width: 100%;
@@ -134,6 +135,9 @@ export default function EmailRenderNew({
                 border-left: 1px solid #ccc;
                 padding-left: 1ex;
               }
+              html, body {
+                height: 100%;
+              }
             </style>
           </head>
           <body>${sanitizedHtml}</body>
@@ -151,12 +155,26 @@ export default function EmailRenderNew({
     const iframe = iframeRef.current;
     if (!iframe || !processedContent) return;
 
-    iframe.style.height = '120px';
+    // Initialize with a reasonable height
+    iframe.style.height = '100%';
     iframe.srcdoc = processedContent;
 
     iframe.onload = () => {
       const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
       if (!iframeDoc) return;
+
+      // Adjust the iframe height to fit content
+      const updateHeight = () => {
+        if (!iframe.contentWindow) return;
+        const height = iframe.contentWindow.document.body.scrollHeight;
+        iframe.style.height = `${Math.max(height, 400)}px`; // Set minimum height
+      };
+
+      // Add event listener for window resize
+      iframe.contentWindow?.addEventListener('resize', updateHeight);
+      
+      // Update height initially
+      updateHeight();
 
       const links = iframeDoc.getElementsByTagName('a');
       Array.from(links).forEach(link => {
@@ -183,21 +201,21 @@ export default function EmailRenderNew({
   }
 
   return (
-    <div className={`relative ${className}`}>
+    <div className={`relative ${className} h-full`}>
       {error && (
         <div className="mb-2 p-2 bg-red-50 text-red-700 text-sm rounded">
           {error}
         </div>
       )}
 
-      <div className="relative bg-white rounded-lg overflow-hidden">
+      <div className="relative bg-white rounded-lg overflow-hidden h-full">
         <iframe
           ref={iframeRef}
-          className="w-full border-0"
+          className="w-full border-0 h-full"
           sandbox="allow-same-origin"
           title="Email Content"
-          style={{ height: '120px' }}
           srcDoc={processedContent}
+          style={{ minHeight: '400px' }}
         />
       </div>
     </div>
