@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import {
   MessageSquare,
   ChevronLeft,
@@ -40,7 +40,9 @@ import {
   Lightbulb,
   Ban,
   FileText,
-  Loader
+  Loader,
+  PlusCircle,
+  Trash2
 } from "lucide-react"
 import { Textarea } from "@/components/ui/textarea"
 import Link from "next/link"
@@ -51,6 +53,7 @@ import { collection, doc, setDoc, getDoc, getDocs, query, where, deleteDoc, writ
 import type { Email, ExtendedEmail, EmailContent, BaseEmail } from '@/types/email'
 import { toast } from 'sonner'
 import EmailRenderNew from '@/app/components/EmailRenderNew'
+import { Label } from "@/components/ui/label"
 
 // Add a StripeSubscriptionInfo interface 
 interface StripeSubscriptionInfo {
@@ -112,6 +115,7 @@ export default function RedesignPage() {
   const [tabSelections, setTabSelections] = useState<{[key: string]: ExtendedEmail | null}>({
     "unanswered": null,
     "ready": null,
+    "faq": null,
     "not-relevant": null,
     "answered": null
   });
@@ -200,45 +204,18 @@ export default function RedesignPage() {
 
   // Handle tab changes - preserve email selections for each tab
   const handleTabChange = (tab: string) => {
+    console.log("Tab changed to:", tab);
+    
+    // Always clear the selected email when changing tabs
+    // This ensures we don't show an email from a different tab
+    setSelectedEmail(null);
+    
+    // Set the active tab
     setActiveTab(tab);
     
-    // On mobile, when changing tabs, show the list view first
-    setMobileView('list');
-    
-    // Restore the previously selected email for this tab if available
-    const previousSelection = tabSelections[tab];
-    
-    // If we have a previous selection for this tab and it still exists in the current email list
-    if (previousSelection) {
-      // Find the email in the current list (it might have been updated)
-      let emailList: ExtendedEmail[] = [];
-      switch (tab) {
-        case "unanswered":
-          emailList = unansweredEmails;
-          break;
-        case "ready":
-          emailList = readyEmails;
-          break;
-        case "not-relevant":
-          emailList = notRelevantEmails;
-          break;
-        case "answered":
-          emailList = answeredEmails;
-          break;
-      }
-      
-      // Find the email in the current list by ID
-      const currentEmail = emailList.find(e => e.id === previousSelection.id);
-      
-      // If found, select it, otherwise clear the selection
-      if (currentEmail) {
-        setSelectedEmail(currentEmail);
-      } else {
-        setSelectedEmail(null);
-      }
-    } else {
-      // No previous selection, clear the selection
-      setSelectedEmail(null);
+    // For email tabs, reset to list view on mobile
+    if (tab !== "faq") {
+      setMobileView('list');
     }
   };
 
@@ -711,22 +688,41 @@ export default function RedesignPage() {
     }
   };
 
-  // FAQ data
-  const faqLibrary = [
+  // FAQ state management
+  const [faqLibrary, setFaqLibrary] = useState([
     {
-      id: 1,
+      id: "1",
       question: "How do I cancel my subscription?",
       answer:
         "You can cancel your subscription at any time from your account settings. Once canceled, you will still have access to the service until the end of your billing period.",
     },
     {
-      id: 2,
+      id: "2",
       question: "How to reset your password",
       answer:
         "To reset your password, please click on the 'Forgot Password' link on the login page. You will receive an email with instructions to create a new password.",
     },
-  ]
+  ])
+  const [showAddFAQModal, setShowAddFAQModal] = useState(false)
+  const [editingFaqId, setEditingFaqId] = useState<string | null>(null)
+  const [newFAQ, setNewFAQ] = useState({ question: '', answer: '' })
 
+  // Load FAQs from localStorage on mount
+  useEffect(() => {
+    const savedFaqs = localStorage.getItem('redesign_faqs');
+    if (savedFaqs) {
+      setFaqLibrary(JSON.parse(savedFaqs));
+    } else {
+      // Initialize with default FAQs
+      localStorage.setItem('redesign_faqs', JSON.stringify(faqLibrary));
+    }
+  }, []);
+
+  // Update localStorage whenever FAQs change
+  useEffect(() => {
+    localStorage.setItem('redesign_faqs', JSON.stringify(faqLibrary));
+  }, [faqLibrary]);
+  
   // Function to generate a reply based on FAQ
   const generateReplyFromFAQ = (email: ExtendedEmail) => {
     // Use existing suggestedReply if available
@@ -1646,8 +1642,8 @@ Support Team`;
           </div>
         </div>
 
-        {/* Email Content - Give maximum space */}
-        <div className="flex-grow flex flex-col bg-white rounded-lg border border-gray-200 mt-2 hover:shadow-sm transition-shadow" style={{ minHeight: "300px", maxHeight: "calc(100vh - 250px)", overflow: "hidden" }}>
+        {/* Email Content - Give maximum space but leave room for reply section */}
+        <div className="flex-grow flex flex-col bg-white rounded-lg border border-gray-200 mt-2 hover:shadow-sm transition-shadow" style={{ minHeight: "200px", maxHeight: "calc(100vh - 400px)", overflow: "auto" }}>
           <EmailRenderNew 
             content={email.content} 
             showDebugInfo={false} 
@@ -1779,40 +1775,88 @@ Support Team`}
   }
 
   // FAQ Library content
-  const FAQLibraryContent = () => (
-    <div className="p-4 md:p-8 h-full overflow-y-auto">
+  const FAQLibraryContent = () => {
+    return (
       <div className="max-w-4xl mx-auto">
         <div className="flex justify-between items-center mb-6">
           <h2 className="text-xl md:text-2xl font-bold text-gray-900">FAQ Library</h2>
           <Button 
             variant="outline"
             className="rounded-full border-gray-200 shadow-sm hover:shadow hover:border-gray-300 transition-all text-xs md:text-sm py-1 px-3 md:py-2 md:px-4"
+            onClick={() => {
+              setNewFAQ({ question: '', answer: '' });
+              setEditingFaqId(null);
+              setShowAddFAQModal(true);
+            }}
           >
-            <Edit className="h-3 w-3 md:h-4 md:w-4 mr-1 md:mr-2" />
+            <PlusCircle className="h-3 w-3 md:h-4 md:w-4 mr-1 md:mr-2" />
             Add New FAQ
           </Button>
         </div>
         
-        <div className="space-y-6">
-          {faqLibrary.map((faq, index) => (
-            <Card key={index} className="overflow-hidden border-0 shadow-sm">
-              <CardHeader className="bg-gray-50 py-2 px-4">
-                <CardTitle className="text-base md:text-lg font-medium flex items-center justify-between">
-                  <span className="flex-1">{faq.question}</span>
-                  <Button variant="ghost" size="sm" className="h-8 w-8 p-0 rounded-full">
-                    <Edit className="h-4 w-4 text-gray-500" />
-                  </Button>
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="pt-3 px-4 pb-4 text-sm md:text-base">
-                <p>{faq.answer}</p>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
+        {Array.isArray(faqLibrary) && faqLibrary.length > 0 ? (
+          <div className="space-y-6">
+            {faqLibrary.map((faq) => (
+              <Card key={faq.id} className="overflow-hidden border-0 shadow-sm hover:shadow-md transition-all">
+                <CardHeader className="bg-gray-50 py-2 px-4">
+                  <CardTitle className="text-base md:text-lg font-medium flex items-center justify-between">
+                    <span className="flex-1">{faq.question}</span>
+                    <div className="flex space-x-1">
+                      <Button 
+                        variant="ghost" 
+                        size="sm" 
+                        className="h-8 w-8 p-0 rounded-full text-gray-500 hover:text-blue-600 hover:bg-blue-50"
+                        onClick={() => handleEditFAQ(faq)}
+                      >
+                        <Edit className="h-4 w-4" />
+                      </Button>
+                      <Button 
+                        variant="ghost" 
+                        size="sm" 
+                        className="h-8 w-8 p-0 rounded-full text-gray-500 hover:text-red-600 hover:bg-red-50"
+                        onClick={() => handleDeleteFAQ(faq.id)}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="pt-3 px-4 pb-4 text-sm md:text-base">
+                  <p className="whitespace-pre-line">{faq.answer}</p>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        ) : (
+          <div className="text-center py-12 px-4">
+            <div className="mx-auto w-24 h-24 bg-gray-100 rounded-full flex items-center justify-center mb-4">
+              <div className="text-gray-400">
+                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M9.09 9C9.3251 8.33167 9.78915 7.76811 10.4 7.40913C11.0108 7.05016 11.7289 6.91894 12.4272 7.03871C13.1255 7.15849 13.7588 7.52152 14.2151 8.06353C14.6713 8.60553 14.9211 9.29152 14.92 10C14.92 12 11.92 13 11.92 13" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                  <circle cx="12" cy="17" r="1" fill="currentColor"/>
+                  <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2"/>
+                </svg>
+              </div>
+            </div>
+            <h3 className="text-lg font-medium text-gray-900 mb-2">No FAQs available</h3>
+            <p className="text-gray-500 mb-6">Add your first FAQ to start building your library</p>
+            <Button 
+              variant="outline"
+              className="rounded-full border-gray-200 shadow-sm hover:shadow hover:border-gray-300 transition-all"
+              onClick={() => {
+                setNewFAQ({ question: '', answer: '' });
+                setEditingFaqId(null);
+                setShowAddFAQModal(true);
+              }}
+            >
+              <PlusCircle className="h-4 w-4 mr-2" />
+              Add Your First FAQ
+            </Button>
+          </div>
+        )}
       </div>
-    </div>
-  )
+    );
+  };
 
   // Set up the periodic check for new emails
   useEffect(() => {
@@ -1864,170 +1908,369 @@ Support Team`}
     return () => window.removeEventListener('resize', handleResize);
   }, [selectedEmail]);
 
+  // FAQ management functions
+  const handleAddFAQ = () => {
+    if (!newFAQ.question.trim() || !newFAQ.answer.trim()) {
+      toast.error('Please provide both a question and an answer');
+      return;
+    }
+
+    if (editingFaqId) {
+      // Update existing FAQ
+      setFaqLibrary(prev => prev.map(faq =>
+        faq.id === editingFaqId
+          ? {
+            ...faq,
+            question: newFAQ.question.trim(),
+            answer: newFAQ.answer.trim(),
+          }
+          : faq
+      ));
+      toast.success('FAQ updated successfully!');
+    } else {
+      // Add new FAQ
+      const newFaqEntry = {
+        id: Date.now().toString(),
+        question: newFAQ.question.trim(),
+        answer: newFAQ.answer.trim(),
+      };
+
+      setFaqLibrary(prev => [...prev, newFaqEntry]);
+      toast.success('New FAQ added successfully!');
+    }
+
+    setNewFAQ({ question: '', answer: '' });
+    setEditingFaqId(null);
+    setShowAddFAQModal(false);
+  };
+
+  const handleEditFAQ = (faq: typeof faqLibrary[0]) => {
+    setNewFAQ({
+      question: faq.question,
+      answer: faq.answer,
+    });
+    setEditingFaqId(faq.id);
+    setShowAddFAQModal(true);
+  };
+
+  const handleDeleteFAQ = (id: string) => {
+    if (confirm('Are you sure you want to delete this FAQ?')) {
+      setFaqLibrary(prev => prev.filter(faq => faq.id !== id));
+      toast.success('FAQ deleted successfully!');
+    }
+  };
+
+  // Add a useEffect to ensure the FAQ tab renders properly
+  useEffect(() => {
+    // When the activeTab is set to "faq", force a re-render after a small delay
+    if (activeTab === "faq") {
+      console.log("FAQ tab selected, forcing refresh");
+      // This delay helps ensure the tab has time to become visible before we force a refresh
+      const timer = setTimeout(() => {
+        // Force a re-render by making a small state update
+        setFaqLibrary(prev => [...prev]);
+      }, 100);
+      
+      return () => clearTimeout(timer);
+    }
+  }, [activeTab]);
+
+  // Add useEffect to force re-render of the entire tabs container based on active tab
+  useEffect(() => {
+    // Set a flag in the DOM to make CSS selectors easier
+    document.documentElement.setAttribute('data-active-tab', activeTab);
+    
+    // Special handling for FAQ tab
+    if (activeTab === 'faq') {
+      // Force a re-render with a small state update
+      setFaqLibrary(prev => [...prev]);
+    }
+  }, [activeTab]);
+
+  // Implement a custom tab selector component that is more reliable but matches original UI
+  const CustomTabSelector = () => {
+    return (
+      <div className="px-2 md:px-8 pb-0">
+        <div className="bg-transparent border-b border-gray-200 w-full max-w-full p-0 h-auto overflow-x-auto flex">
+          {[
+            { id: "unanswered", label: "Unanswered" },
+            { id: "ready", label: "Ready to Reply" },
+            { id: "faq", label: "FAQ Library" },
+            { id: "not-relevant", label: "Not Relevant" },
+            { id: "answered", label: "Answered" }
+          ].map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => {
+                console.log(`Custom tab clicked: ${tab.id}`);
+                // Clear selected email when changing tabs to prevent showing email details from a different tab
+                setSelectedEmail(null);
+                // Then change the tab
+                setActiveTab(tab.id);
+              }}
+              className={`
+                px-3 md:px-6 py-2 rounded-t-2xl transition-all border-b-2 whitespace-nowrap
+                ${activeTab === tab.id 
+                  ? "bg-indigo-600 text-white shadow-lg border-indigo-600" 
+                  : "border-transparent text-gray-600 hover:text-gray-900"}
+              `}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  // Custom tab content renderer that handles each tab type appropriately
+  const CustomTabContent = () => {
+    // Return different content based on active tab
+    switch (activeTab) {
+      case "faq":
+        return (
+          <div className="h-full overflow-auto">
+            <div className="p-4 md:p-8 h-full">
+              <div className="max-w-4xl mx-auto">
+                <FAQLibraryContent />
+              </div>
+            </div>
+            
+            {/* Add/Edit FAQ Modal */}
+            <Dialog open={showAddFAQModal} onOpenChange={setShowAddFAQModal}>
+              <DialogContent className="sm:max-w-[600px]">
+                <DialogHeader>
+                  <DialogTitle>{editingFaqId ? 'Edit FAQ' : 'Add New FAQ'}</DialogTitle>
+                  <DialogDescription>
+                    {editingFaqId 
+                      ? 'Update this FAQ question and answer template.' 
+                      : 'Create a new FAQ to add to your library.'}
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="grid gap-4 py-4">
+                  <div className="grid gap-2">
+                    <Label htmlFor="question">Question</Label>
+                    <Textarea
+                      id="question"
+                      placeholder="Enter the frequently asked question"
+                      value={newFAQ.question}
+                      onChange={(e) => setNewFAQ(prev => ({ ...prev, question: e.target.value }))}
+                      className="min-h-[80px]"
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="answer">Answer Template</Label>
+                    <Textarea
+                      id="answer"
+                      placeholder="Enter the answer template"
+                      value={newFAQ.answer}
+                      onChange={(e) => setNewFAQ(prev => ({ ...prev, answer: e.target.value }))}
+                      className="min-h-[160px]"
+                    />
+                  </div>
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setShowAddFAQModal(false)}>
+                    Cancel
+                  </Button>
+                  <Button onClick={handleAddFAQ} disabled={!newFAQ.question.trim() || !newFAQ.answer.trim()}>
+                    {editingFaqId ? 'Update FAQ' : 'Add FAQ'}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+          </div>
+        );
+      case "unanswered":
+        return (
+          <div className="h-full flex flex-col md:flex-row">
+            <div className={`${mobileView === 'detail' ? 'hidden md:block' : 'block'} w-full md:w-1/3 border-r border-gray-100 overflow-y-auto p-2 h-full`}>
+              <div className="mb-2 flex justify-between items-center">
+                <h3 className="font-medium text-gray-700">Unanswered Emails ({unansweredEmails.length})</h3>
+                {dataRefreshing && <RefreshCw className="h-4 w-4 animate-spin text-indigo-600" />}
+              </div>
+              <div className="h-[calc(100vh-220px)] overflow-y-auto">
+                <EmailList emails={unansweredEmails} />
+              </div>
+            </div>
+            <div className={`${mobileView === 'list' ? 'hidden md:block' : 'block'} w-full md:w-2/3 overflow-y-auto h-full`}>
+              {selectedEmail ? (
+                <div className="p-4 h-full overflow-y-auto">
+                  <EmailDetail email={selectedEmail} showReply={true} />
+                </div>
+              ) : (
+                <div className="h-full flex items-center justify-center text-gray-400">
+                  <div className="text-center">
+                    <MessageSquareText className="h-12 w-12 mx-auto text-gray-200 mb-4" />
+                    <p>Select an email to view details</p>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      case "ready":
+        return (
+          <div className="h-full flex flex-col md:flex-row">
+            <div className={`${mobileView === 'detail' ? 'hidden md:block' : 'block'} w-full md:w-1/3 border-r border-gray-100 overflow-y-auto p-2 h-full`}>
+              <div className="mb-2 flex justify-between items-center">
+                <h3 className="font-medium text-gray-700">Ready to Reply ({readyEmails.length})</h3>
+                {dataRefreshing && <RefreshCw className="h-4 w-4 animate-spin text-indigo-600" />}
+              </div>
+              <div className="h-[calc(100vh-220px)] overflow-y-auto">
+                <EmailList emails={readyEmails} />
+              </div>
+            </div>
+            <div className={`${mobileView === 'list' ? 'hidden md:block' : 'block'} w-full md:w-2/3 overflow-y-auto h-full`}>
+              {selectedEmail ? (
+                <div className="p-4 h-full overflow-y-auto">
+                  <EmailDetail email={selectedEmail} showReply={true} />
+                </div>
+              ) : (
+                <div className="h-full flex items-center justify-center text-gray-400">
+                  <div className="text-center">
+                    <MessageSquareText className="h-12 w-12 mx-auto text-gray-200 mb-4" />
+                    <p>Select an email to view details</p>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      case "not-relevant":
+        return (
+          <div className="h-full flex flex-col md:flex-row">
+            <div className={`${mobileView === 'detail' ? 'hidden md:block' : 'block'} w-full md:w-1/3 border-r border-gray-100 overflow-y-auto p-2 h-full`}>
+              <div className="mb-2 flex justify-between items-center">
+                <h3 className="font-medium text-gray-700">Not Relevant ({notRelevantEmails.length})</h3>
+                {dataRefreshing && <RefreshCw className="h-4 w-4 animate-spin text-indigo-600" />}
+              </div>
+              <div className="h-[calc(100vh-220px)] overflow-y-auto">
+                <EmailList emails={notRelevantEmails} />
+              </div>
+            </div>
+            <div className={`${mobileView === 'list' ? 'hidden md:block' : 'block'} w-full md:w-2/3 overflow-y-auto h-full`}>
+              {selectedEmail ? (
+                <div className="p-4 h-full overflow-y-auto">
+                  <EmailDetail email={selectedEmail} showReply={true} />
+                </div>
+              ) : (
+                <div className="h-full flex items-center justify-center text-gray-400">
+                  <div className="text-center">
+                    <MessageSquareText className="h-12 w-12 mx-auto text-gray-200 mb-4" />
+                    <p>Select an email to view details</p>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      case "answered":
+        return (
+          <div className="h-full flex flex-col md:flex-row">
+            <div className={`${mobileView === 'detail' ? 'hidden md:block' : 'block'} w-full md:w-1/3 border-r border-gray-100 overflow-y-auto p-2 h-full`}>
+              <div className="mb-2 flex justify-between items-center">
+                <h3 className="font-medium text-gray-700">Answered ({answeredEmails.length})</h3>
+                {dataRefreshing && <RefreshCw className="h-4 w-4 animate-spin text-indigo-600" />}
+              </div>
+              <div className="h-[calc(100vh-220px)] overflow-y-auto">
+                <EmailList emails={answeredEmails} />
+              </div>
+            </div>
+            <div className={`${mobileView === 'list' ? 'hidden md:block' : 'block'} w-full md:w-2/3 overflow-y-auto h-full`}>
+              {selectedEmail ? (
+                <div className="p-4 h-full overflow-y-auto">
+                  <EmailDetail email={selectedEmail} showReply={true} />
+                </div>
+              ) : (
+                <div className="h-full flex items-center justify-center text-gray-400">
+                  <div className="text-center">
+                    <MessageSquareText className="h-12 w-12 mx-auto text-gray-200 mb-4" />
+                    <p>Select an email to view details</p>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      default:
+        return null;
+    }
+  };
+
+  // Replace the renderTabContent function
+  const renderTabContent = () => {
+    return (
+      <div className="flex-1 overflow-hidden flex flex-col">
+        <CustomTabSelector />
+        <div className="flex-1 overflow-hidden">
+          <CustomTabContent />
+        </div>
+      </div>
+    );
+  };
+
+  // Add effect to handle tab changes and ensure content refreshes properly
+  useEffect(() => {
+    // Log active tab for debugging
+    console.log("Active tab changed to:", activeTab);
+    
+    // Special handling for FAQ tab
+    if (activeTab === 'faq') {
+      // Force a refresh of the faqLibrary state to ensure rendering
+      const timer = setTimeout(() => {
+        console.log("Refreshing FAQ library state");
+        setFaqLibrary(prev => [...prev]);
+      }, 100);
+      
+      return () => clearTimeout(timer);
+    }
+  }, [activeTab]);
+
+  // In the return section, use the renderTabContent function
   return (
     <div className="flex h-screen bg-gray-50">
       <Sidebar />
       <div className="flex-1 flex flex-col overflow-hidden md:pl-64">
-        <header className="bg-white shadow-sm px-4 md:px-8 py-4 md:py-5 flex justify-between items-center">
-          <div>
+        <header className="border-b border-gray-100 shadow-sm p-2 md:p-4 flex items-center justify-between bg-white">
+          <div className="flex items-center">
             <h1 className="text-xl md:text-2xl font-semibold text-gray-900">FAQ Auto Reply</h1>
-            <p className="text-xs md:text-sm text-gray-500 mt-1">Automatically match and reply to customer support emails</p>
+            <Button
+              variant="outline"
+              className="ml-4 text-xs"
+              onClick={() => {
+                console.log("Direct to FAQ tab button clicked");
+                setActiveTab("faq");
+              }}
+            >
+              Debug: Go to FAQ Tab
+            </Button>
           </div>
           <div className="flex items-center gap-2 md:gap-3">
             <Button
               variant="outline"
               size="sm"
-              className="rounded-full border-gray-200 shadow-sm hover:shadow hover:border-gray-300 transition-all"
+              className="h-8 w-8 rounded-full p-0"
             >
-              <Settings className="h-4 w-4 md:mr-2" />
-              <span className="hidden md:inline">Settings</span>
+              <Settings className="h-4 w-4" />
             </Button>
             <Button
               size="sm"
-              className="bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm hover:shadow rounded-full transition-all"
+              className="rounded-full gap-1 md:gap-2 shadow-md bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-600"
               onClick={handleRefreshEmails}
             >
-              <RefreshCw className="h-4 w-4 md:mr-2" />
-              <span className="hidden md:inline">Refresh Emails</span>
+              {dataRefreshing ? (
+                <Loader className="animate-spin h-4 w-4" />
+              ) : (
+                <RefreshCw className="h-4 w-4" />
+              )}
+              <span className="hidden sm:inline">Refresh Emails</span>
             </Button>
           </div>
         </header>
 
-        <div className="flex-1 overflow-hidden">
-          <Tabs defaultValue="unanswered" value={activeTab} onValueChange={handleTabChange} className="h-full flex flex-col">
-            <div className="px-2 md:px-8 pb-0">
-              <TabsList className="bg-transparent border-b border-gray-200 w-full max-w-full p-0 h-auto overflow-x-auto">
-                <TabsTrigger
-                  value="unanswered"
-                  className="px-3 md:px-6 py-2 rounded-t-2xl data-[state=active]:bg-indigo-600 data-[state=active]:text-white data-[state=active]:shadow-lg transition-all border-b-2 border-transparent data-[state=active]:border-indigo-600 text-gray-600 hover:text-gray-900"
-                >
-                  Unanswered
-                </TabsTrigger>
-                <TabsTrigger
-                  value="ready"
-                  className="px-3 md:px-6 py-2 rounded-t-2xl data-[state=active]:bg-indigo-600 data-[state=active]:text-white data-[state=active]:shadow-lg transition-all border-b-2 border-transparent data-[state=active]:border-indigo-600 text-gray-600 hover:text-gray-900"
-                >
-                  Ready to Reply
-                </TabsTrigger>
-                <TabsTrigger
-                  value="faq"
-                  className="px-3 md:px-6 py-2 rounded-t-2xl data-[state=active]:bg-indigo-600 data-[state=active]:text-white data-[state=active]:shadow-lg transition-all border-b-2 border-transparent data-[state=active]:border-indigo-600 text-gray-600 hover:text-gray-900"
-                >
-                  FAQ Library
-                </TabsTrigger>
-                <TabsTrigger
-                  value="not-relevant"
-                  className="px-3 md:px-6 py-2 rounded-t-2xl data-[state=active]:bg-indigo-600 data-[state=active]:text-white data-[state=active]:shadow-lg transition-all border-b-2 border-transparent data-[state=active]:border-indigo-600 text-gray-600 hover:text-gray-900"
-                >
-                  Not Relevant
-                </TabsTrigger>
-                <TabsTrigger
-                  value="answered"
-                  className="px-3 md:px-6 py-2 rounded-t-2xl data-[state=active]:bg-indigo-600 data-[state=active]:text-white data-[state=active]:shadow-lg transition-all border-b-2 border-transparent data-[state=active]:border-indigo-600 text-gray-600 hover:text-gray-900"
-                >
-                  Answered
-                </TabsTrigger>
-              </TabsList>
-            </div>
-
-            <div className="flex-1 overflow-hidden mt-0">
-              <TabsContent value="unanswered" className="h-full flex flex-col md:flex-row">
-                {/* Email List - Show on desktop and on mobile in list view */}
-                <div className={`${mobileView === 'detail' ? 'hidden md:block' : 'block'} w-full md:w-1/3 border-r border-gray-100 overflow-y-auto p-2`}>
-                  <div className="mb-2 flex justify-between items-center">
-                    <h3 className="font-medium text-gray-700">Unanswered Emails ({unansweredEmails.length})</h3>
-                    {dataRefreshing && <RefreshCw className="h-4 w-4 animate-spin text-indigo-600" />}
-                  </div>
-                  <EmailList emails={unansweredEmails} />
-                </div>
-                
-                {/* Email Detail - Show on desktop and on mobile in detail view */}
-                <div className={`${mobileView === 'list' ? 'hidden md:block' : 'block'} w-full md:w-2/3 overflow-y-auto`}>
-                  {selectedEmail ? (
-                    <EmailDetail email={selectedEmail} />
-                  ) : (
-                    <div className="h-full flex items-center justify-center text-gray-400">
-                      <div className="text-center">
-                        <MessageSquareText className="h-12 w-12 mx-auto text-gray-200 mb-4" />
-                        <p className="text-lg">Select an email to view details</p>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </TabsContent>
-
-              <TabsContent value="ready" className="h-full flex flex-col md:flex-row">
-                <div className={`${mobileView === 'detail' ? 'hidden md:block' : 'block'} w-full md:w-1/3 border-r border-gray-100 overflow-y-auto p-2`}>
-                  <div className="mb-2 flex justify-between items-center">
-                    <h3 className="font-medium text-gray-700">Ready to Reply ({readyEmails.length})</h3>
-                    {dataRefreshing && <RefreshCw className="h-4 w-4 animate-spin text-indigo-600" />}
-                  </div>
-                  <EmailList emails={readyEmails} />
-                </div>
-                <div className={`${mobileView === 'list' ? 'hidden md:block' : 'block'} w-full md:w-2/3 overflow-y-auto`}>
-                  {selectedEmail ? (
-                    <EmailDetail email={selectedEmail} showReply={true} />
-                  ) : (
-                    <div className="h-full flex items-center justify-center text-gray-400">
-                      <div className="text-center">
-                        <MessageSquareText className="h-12 w-12 mx-auto text-gray-200 mb-4" />
-                        <p className="text-lg">Select an email to view details</p>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </TabsContent>
-
-              <TabsContent value="faq" className="h-full overflow-auto">
-                <FAQLibraryContent />
-              </TabsContent>
-
-              <TabsContent value="not-relevant" className="h-full flex flex-col md:flex-row">
-                <div className={`${mobileView === 'detail' ? 'hidden md:block' : 'block'} w-full md:w-1/3 border-r border-gray-100 overflow-y-auto p-2`}>
-                  <div className="mb-2 flex justify-between items-center">
-                    <h3 className="font-medium text-gray-700">Not Relevant ({notRelevantEmails.length})</h3>
-                    {dataRefreshing && <RefreshCw className="h-4 w-4 animate-spin text-indigo-600" />}
-                  </div>
-                  <EmailList emails={notRelevantEmails} />
-                </div>
-                <div className={`${mobileView === 'list' ? 'hidden md:block' : 'block'} w-full md:w-2/3 overflow-y-auto`}>
-                  {selectedEmail ? (
-                    <EmailDetail email={selectedEmail} />
-                  ) : (
-                    <div className="h-full flex items-center justify-center text-gray-400">
-                      <div className="text-center">
-                        <MessageSquareText className="h-12 w-12 mx-auto text-gray-200 mb-4" />
-                        <p className="text-lg">Select an email to view details</p>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </TabsContent>
-
-              <TabsContent value="answered" className="h-full flex flex-col md:flex-row">
-                <div className={`${mobileView === 'detail' ? 'hidden md:block' : 'block'} w-full md:w-1/3 border-r border-gray-100 overflow-y-auto p-2`}>
-                  <div className="mb-2 flex justify-between items-center">
-                    <h3 className="font-medium text-gray-700">Answered Emails ({answeredEmails.length})</h3>
-                    {dataRefreshing && <RefreshCw className="h-4 w-4 animate-spin text-indigo-600" />}
-                  </div>
-                  <EmailList emails={answeredEmails} />
-                </div>
-                <div className={`${mobileView === 'list' ? 'hidden md:block' : 'block'} w-full md:w-2/3 overflow-y-auto`}>
-                  {selectedEmail ? (
-                    <EmailDetail email={selectedEmail} />
-                  ) : (
-                    <div className="h-full flex items-center justify-center text-gray-400">
-                      <div className="text-center">
-                        <MessageSquareText className="h-12 w-12 mx-auto text-gray-200 mb-4" />
-                        <p className="text-lg">Select an email to view details</p>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </TabsContent>
-            </div>
-          </Tabs>
-        </div>
+        {/* Use the renderTabContent function */}
+        {renderTabContent()}
       </div>
     </div>
   )
