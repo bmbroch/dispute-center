@@ -9,88 +9,170 @@ import {
   deleteDoc,
   query,
   where,
+  limit,
 } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import Stripe from "stripe";
 
 // Stripe functions
 export const getStripeKey = async (userEmail: string): Promise<string | null> => {
-  const db = getFirebaseDB();
-  if (!db) throw new Error('Firebase DB not initialized');
+  if (!userEmail) {
+    console.error('getStripeKey called with empty userEmail');
+    return null;
+  }
 
+  console.log(`Getting Stripe key for user: ${userEmail}`);
+  
   try {
-    const stripeKeysRef = collection(db, 'stripeKeys');
-    const q = query(stripeKeysRef, where('userEmail', '==', userEmail));
-    const querySnapshot = await getDocs(q);
-
-    if (querySnapshot.empty) {
-      console.log('No Stripe key found for user:', userEmail);
+    const db = getFirebaseDB();
+    if (!db) {
+      console.error('Firebase DB not initialized in getStripeKey');
       return null;
     }
 
+    // Normalize the email to lowercase for consistent lookups
+    const normalizedEmail = userEmail.toLowerCase().trim();
+    console.log(`Normalized email for Stripe key lookup: ${normalizedEmail}`);
+    
+    const stripeKeysRef = collection(db, 'stripeKeys');
+    const q = query(stripeKeysRef, where('userEmail', '==', normalizedEmail));
+    
+    console.log(`Querying stripeKeys collection with: userEmail == ${normalizedEmail}`);
+    const querySnapshot = await getDocs(q);
+    
+    console.log(`Found ${querySnapshot.docs.length} stripe key documents for ${normalizedEmail}`);
+    
+    if (querySnapshot.empty) {
+      console.log(`No Stripe key found for user: ${normalizedEmail}`);
+      
+      // Try a secondary lookup without normalization (for backward compatibility)
+      const q2 = query(stripeKeysRef, where('userEmail', '==', userEmail));
+      const querySnapshot2 = await getDocs(q2);
+      
+      console.log(`Secondary lookup found ${querySnapshot2.docs.length} stripe key documents for ${userEmail}`);
+      
+      if (querySnapshot2.empty) {
+        console.log('No Stripe key found in secondary lookup either');
+        return null;
+      }
+      
+      const stripeKey = querySnapshot2.docs[0].data().stripeKey;
+      if (!stripeKey) {
+        console.log('Stripe key field exists but is empty in secondary lookup');
+        return null;
+      }
+      
+      console.log(`Found Stripe key in secondary lookup (length: ${stripeKey.length})`);
+      return stripeKey;
+    }
+    
     const stripeKey = querySnapshot.docs[0].data().stripeKey;
     if (!stripeKey) {
-      console.log('Stripe key is empty for user:', userEmail);
+      console.log(`Stripe key is empty for user: ${normalizedEmail}`);
       return null;
     }
-
+    
+    console.log(`Found Stripe key for ${normalizedEmail} (length: ${stripeKey.length})`);
     return stripeKey;
   } catch (error) {
     console.error('Error fetching Stripe key:', error);
-    throw error;
+    return null;
   }
 };
 
 // Debug function for Stripe key
 export const debugStripeKey = async (userEmail: string) => {
-  const db = getFirebaseDB();
-  if (!db) throw new Error('Firebase DB not initialized');
+  if (!userEmail) {
+    return { error: 'No email provided' };
+  }
+
+  const debug = {
+    email: userEmail,
+    normalizedEmail: userEmail.toLowerCase().trim(),
+    emailsMatch: userEmail === userEmail.toLowerCase().trim(),
+    steps: [],
+    collections: {},
+    documents: [],
+    error: null
+  };
 
   try {
-    // Check if Firebase is initialized
-    console.log('Firebase DB initialized successfully');
-
-    // Query for existing key
-    const stripeKeysRef = collection(db, 'stripeKeys');
-    const q = query(stripeKeysRef, where('userEmail', '==', userEmail));
-    const querySnapshot = await getDocs(q);
-
-    console.log('Stripe key query results:', {
-      empty: querySnapshot.empty,
-      size: querySnapshot.size,
-      docs: querySnapshot.docs.map(doc => ({
-        id: doc.id,
-        exists: doc.exists(),
-        data: { ...doc.data(), stripeKey: '***' }
-      }))
-    });
-
-    if (querySnapshot.empty) {
-      console.log('No Stripe key found for email:', userEmail);
-      return false;
+    const db = getFirebaseDB();
+    if (!db) {
+      debug.error = 'Firebase DB not initialized';
+      return debug;
     }
 
-    const stripeKey = querySnapshot.docs[0].data().stripeKey;
-    
-    // Log key format (safely)
-    console.log('Stripe key format check:', {
-      exists: !!stripeKey,
-      startsWithSk: stripeKey?.startsWith('sk_'),
-      length: stripeKey?.length
-    });
+    debug.steps.push('Firebase DB initialized successfully');
 
-    // Only validate format, don't test the key yet
-    if (!stripeKey) {
-      console.error('No Stripe key value found');
-      return false;
+    // Check if the stripeKeys collection exists and list its documents
+    try {
+      const stripeKeysRef = collection(db, 'stripeKeys');
+      debug.steps.push('Retrieved stripeKeys collection reference');
+
+      // List all documents in the collection (limit to 10 for safety)
+      const allDocsSnapshot = await getDocs(query(stripeKeysRef, limit(10)));
+      debug.collections.stripeKeys = {
+        exists: true,
+        docCount: allDocsSnapshot.size,
+        sampleEmails: allDocsSnapshot.docs.map(doc => {
+          const data = doc.data();
+          return data.userEmail || 'No userEmail field';
+        })
+      };
+      debug.steps.push(`Found ${allDocsSnapshot.size} total documents in stripeKeys collection`);
+
+      // Exact match query
+      const exactMatchRef = query(stripeKeysRef, where('userEmail', '==', userEmail));
+      const exactMatchSnapshot = await getDocs(exactMatchRef);
+      debug.steps.push(`Exact match query complete (found: ${exactMatchSnapshot.size})`);
+
+      // Lowercase match query
+      const lowercaseEmail = userEmail.toLowerCase().trim();
+      const lowercaseMatchRef = query(stripeKeysRef, where('userEmail', '==', lowercaseEmail));
+      const lowercaseMatchSnapshot = await getDocs(lowercaseMatchRef);
+      debug.steps.push(`Lowercase match query complete (found: ${lowercaseMatchSnapshot.size})`);
+
+      // Document details
+      if (exactMatchSnapshot.size > 0) {
+        exactMatchSnapshot.docs.forEach(doc => {
+          const data = doc.data();
+          debug.documents.push({
+            id: doc.id,
+            match: 'exact',
+            hasStripeKey: !!data.stripeKey,
+            keyLength: data.stripeKey?.length || 0,
+            fields: Object.keys(data),
+            userEmail: data.userEmail,
+            createdAt: data.createdAt?.toDate?.() || 'No createdAt field'
+          });
+        });
+      }
+
+      if (lowercaseMatchSnapshot.size > 0 && userEmail !== lowercaseEmail) {
+        lowercaseMatchSnapshot.docs.forEach(doc => {
+          const data = doc.data();
+          debug.documents.push({
+            id: doc.id,
+            match: 'lowercase',
+            hasStripeKey: !!data.stripeKey,
+            keyLength: data.stripeKey?.length || 0,
+            fields: Object.keys(data),
+            userEmail: data.userEmail,
+            createdAt: data.createdAt?.toDate?.() || 'No createdAt field'
+          });
+        });
+      }
+    } catch (collectionError) {
+      debug.error = `Error accessing stripeKeys collection: ${collectionError.message}`;
+      debug.steps.push(`ERROR: ${debug.error}`);
     }
 
-    // Return true if we have a key, let the actual API calls validate it
-    console.log('Stripe key found and basic validation passed');
-    return true;
+    return debug;
   } catch (error) {
-    console.error('Error in debugStripeKey:', error);
-    throw error;
+    debug.error = `Unhandled error in debugStripeKey: ${error.message}`;
+    debug.steps.push(`ERROR: ${debug.error}`);
+    return debug;
   }
 };
 

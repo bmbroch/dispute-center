@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, Fragment } from "react"
+import { useState, useEffect, useCallback, Fragment, useMemo, useRef } from "react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -8,22 +8,39 @@ import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import {
-  Settings,
-  MessageSquareText,
-  Home,
-  BookOpen,
-  Shield,
-  Send,
-  ThumbsDown,
-  Edit,
-  CheckCircle,
-  Circle,
-  RefreshCw,
   MessageSquare,
-  Lightbulb,
-  ChevronDown,
-  DownloadCloud,
   ChevronLeft,
+  RefreshCw,
+  MessageSquareText,
+  Circle,
+  CheckCircle,
+  DownloadCloud,
+  AlertCircle,
+  Settings,
+  MoreHorizontal,
+  User,
+  UserCircle,
+  Mail,
+  Clock,
+  Search,
+  ShieldCheck,
+  Link2,
+  ExternalLink,
+  Trash,
+  Plus,
+  Menu,
+  X,
+  MailPlus,
+  Download,
+  ChevronDown,
+  Filter,
+  ThumbsDown,
+  Send,
+  Edit,
+  Lightbulb,
+  Ban,
+  FileText,
+  Loader
 } from "lucide-react"
 import { Textarea } from "@/components/ui/textarea"
 import Link from "next/link"
@@ -34,6 +51,48 @@ import { collection, doc, setDoc, getDoc, getDocs, query, where, deleteDoc, writ
 import type { Email, ExtendedEmail, EmailContent, BaseEmail } from '@/types/email'
 import { toast } from 'sonner'
 import EmailRenderNew from '@/app/components/EmailRenderNew'
+
+// Add a StripeSubscriptionInfo interface 
+interface StripeSubscriptionInfo {
+  found: boolean;
+  error?: string;
+  hasActiveSubscription?: boolean;
+  customer?: {
+    id: string;
+    email: string;
+    created: number;
+    name?: string;
+    metadata?: Record<string, any>;
+  };
+  subscription?: {
+    id: string;
+    status: string;
+    currentPeriodStart: number;
+    currentPeriodEnd: number;
+    plan: {
+      id: string;
+      name: string;
+      amount: number;
+      currency: string;
+      interval: string;
+      intervalCount: number;
+    };
+    paymentMethod?: any;
+  };
+  recentInvoices?: Array<{
+    id: string;
+    amount: number;
+    currency: string;
+    status: string;
+    date: number;
+    pdfUrl?: string;
+  }>;
+  upcomingInvoice?: {
+    amount: number;
+    currency: string;
+    date?: number;
+  };
+}
 
 export default function RedesignPage() {
   const { user } = useAuth();
@@ -1112,9 +1171,39 @@ Support Team`;
     );
   }
 
+  // Utility function to truncate text with specified maximum length
+  const truncateText = (text: string, maxLength: number = 60): string => {
+    if (!text) return '';
+    return text.length > maxLength ? `${text.substring(0, maxLength)}...` : text;
+  };
+
+  // Add a utility function to format dates
+  const formatDate = (timestamp: number) => {
+    return new Date(timestamp * 1000).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    });
+  };
+
+  // Add a utility function to format currency
+  const formatCurrency = (amount: number, currency: string) => {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: currency.toUpperCase(),
+    }).format(amount / 100);
+  };
+
   // Email detail component with back button for mobile
   const EmailDetail = ({ email, showReply = false }: { email: ExtendedEmail; showReply?: boolean }) => {
     const [quickReply, setQuickReply] = useState("")
+    const [isLoadingStripe, setIsLoadingStripe] = useState(false)
+    const [stripeInfo, setStripeInfo] = useState<StripeSubscriptionInfo | null>(null)
+    const [showStripeInfo, setShowStripeInfo] = useState(false)
+    const [showDebugInfo, setShowDebugInfo] = useState(false)
+    const [debugInfo, setDebugInfo] = useState<any>(null)
+    const [isDebugLoading, setIsDebugLoading] = useState(false)
+    const { user } = useAuth(); // Get the current user from auth context
 
     if (!email) {
       return (
@@ -1126,6 +1215,38 @@ Support Team`;
       );
     }
 
+    // Debug function to troubleshoot Stripe key issues
+    const debugStripeKey = async () => {
+      setIsDebugLoading(true);
+      setShowDebugInfo(false);
+      setDebugInfo(null);
+      
+      try {
+        if (!user || !user.email) {
+          toast.error('User email not available');
+          return;
+        }
+        
+        const response = await fetch(`/api/stripe/debug-key?userEmail=${encodeURIComponent(user.email)}`);
+        
+        if (!response.ok) {
+          throw new Error(`Server error: ${response.status} ${response.statusText}`);
+        }
+        
+        const data = await response.json();
+        console.log('Debug info:', data);
+        setDebugInfo(data);
+        setShowDebugInfo(true);
+      } catch (error: unknown) {
+        console.error('Error fetching debug info:', error);
+        const errorMessage = error instanceof Error ? error.message : 'Failed to get debug info';
+        setDebugInfo({ error: errorMessage });
+        setShowDebugInfo(true);
+      } finally {
+        setIsDebugLoading(false);
+      }
+    };
+    
     // Extract sender name from email
     const getSenderName = () => {
       try {
@@ -1139,16 +1260,320 @@ Support Team`;
       }
     };
 
-    // Customer data that would come from Stripe - this is just mock data
-    const customerData = {
-      name: getSenderName(),
-      email: email.sender,
-      subscription: "Premium Plan",
-      status: "Active",
-      since: "Jan 2023",
-      billingCycle: "Monthly",
-      nextBilling: "Aug 15, 2023",
-    }
+    // Function to extract clean email from sender format
+    const extractEmail = (sender: string): string => {
+      // Check if it's in the format "Name <email@example.com>"
+      const emailRegex = /<([^>]+)>/;
+      const match = sender.match(emailRegex);
+      
+      if (match && match[1]) {
+        return match[1].trim();
+      }
+      
+      // If not in that format, return the original (or attempt to find an email)
+      const anyEmailRegex = /[\w.-]+@[\w.-]+\.\w+/;
+      const anyMatch = sender.match(anyEmailRegex);
+      
+      if (anyMatch) {
+        return anyMatch[0].trim();
+      }
+      
+      // Just return the input if we can't extract anything
+      return sender.trim();
+    };
+
+    // Function to fetch Stripe subscription data
+    const checkStripeStatus = async () => {
+      setIsLoadingStripe(true);
+      try {
+        // Extract just the email part from the sender field
+        const senderEmail = extractEmail(email.sender);
+        
+        // Check if user is available
+        if (!user || !user.email) {
+          toast.error('User information not available. Please try again after logging in.');
+          return;
+        }
+        
+        // Log the request details for debugging
+        console.log('Checking Stripe status for email:', {
+          originalSender: email.sender,
+          extractedEmail: senderEmail,
+          currentUserEmail: user.email
+        });
+        
+        // We need to pass the current user's email to get their Stripe API key
+        const apiUrl = `/api/stripe/check-subscription?customerEmail=${encodeURIComponent(senderEmail)}&userEmail=${encodeURIComponent(user.email)}`;
+        console.log('Fetching from:', apiUrl);
+        
+        const response = await fetch(apiUrl);
+        
+        // Log the response status and headers for debugging
+        console.log('Response status:', response.status);
+        console.log('Response headers:', Object.fromEntries([...response.headers.entries()]));
+        
+        // If response is not OK, handle the error more carefully
+        if (!response.ok) {
+          // Check if the response is JSON or HTML
+          const contentType = response.headers.get('content-type') || '';
+          
+          if (contentType.includes('application/json')) {
+            // If it's JSON, parse it as usual
+            const errorData = await response.json();
+            console.error('API error response:', errorData);
+            throw new Error(errorData.error || errorData.details || 'Failed to check Stripe status');
+          } else {
+            // If it's not JSON (probably HTML), get the text and log it
+            const errorText = await response.text();
+            console.error('Non-JSON error response:', {
+              status: response.status,
+              contentType,
+              errorTextPreview: errorText.slice(0, 500) + '...'
+            });
+            throw new Error(`Server error: ${response.status} - Response was not JSON`);
+          }
+        }
+
+        // Try to parse the response as JSON with error handling
+        let data;
+        try {
+          const responseText = await response.text();
+          console.log('Response preview:', responseText.slice(0, 100) + '...');
+          data = JSON.parse(responseText);
+        } catch (parseError) {
+          console.error('Error parsing JSON response:', parseError);
+          throw new Error('Failed to parse response from server');
+        }
+        
+        console.log('Stripe data:', data);
+        setStripeInfo(data);
+        
+        if (!data.found) {
+          // Show toast and don't open dialog if no customer found
+          toast.info('No Stripe customer found for this email address');
+        } else {
+          // Only open dialog if customer found, no toast needed
+          setShowStripeInfo(true);
+        }
+      } catch (error: any) {
+        console.error('Error checking Stripe status:', error);
+        toast.error(error.message || 'Error checking Stripe status');
+        // Clear stripeInfo in case of errors
+        setStripeInfo(null);
+      } finally {
+        setIsLoadingStripe(false);
+      }
+    };
+
+    // Get customer data only if a Stripe customer was found
+    const getCustomerData = () => {
+      if (stripeInfo?.found) {
+        // Get next billing date - prefer upcoming invoice date if available
+        let nextBillingDate = 'N/A';
+        if (stripeInfo.upcomingInvoice?.date) {
+          nextBillingDate = formatDate(stripeInfo.upcomingInvoice.date);
+        } else if (stripeInfo.subscription?.currentPeriodEnd) {
+          nextBillingDate = formatDate(stripeInfo.subscription.currentPeriodEnd);
+        }
+
+        return {
+          name: stripeInfo.customer?.name || getSenderName(),
+          email: stripeInfo.customer?.email || email.sender,
+          subscription: stripeInfo.subscription?.plan?.name || 'No active plan',
+          status: stripeInfo.hasActiveSubscription ? 'Active' : (stripeInfo.subscription?.status || 'Inactive'),
+          since: stripeInfo.customer?.created ? formatDate(stripeInfo.customer.created) : 'Unknown',
+          billingCycle: stripeInfo.subscription?.plan ? 
+            `${stripeInfo.subscription.plan.intervalCount > 1 ? stripeInfo.subscription.plan.intervalCount : ''} ${stripeInfo.subscription.plan.interval}${stripeInfo.subscription.plan.intervalCount > 1 ? 's' : ''}` : 
+            'N/A',
+          nextBilling: nextBillingDate,
+          amount: stripeInfo.subscription?.plan?.amount ? 
+            formatCurrency(stripeInfo.subscription.plan.amount, stripeInfo.subscription.plan.currency) : 
+            'N/A'
+        };
+      }
+
+      // Return basic information when no Stripe customer is found
+      return {
+        name: getSenderName(),
+        email: email.sender,
+      };
+    };
+
+    const customerData = getCustomerData();
+
+    // Helper function to get initials from a name
+    const getInitials = (name: string): string => {
+      if (!name) return '?';
+      return name
+        .split(' ')
+        .map(part => part[0])
+        .join('')
+        .toUpperCase()
+        .substring(0, 2);
+    };
+
+    // The dialog content
+    const dialogContent = () => {
+      if (!stripeInfo) {
+        return (
+          <div className="p-6 text-center">
+            <Loader className="h-8 w-8 animate-spin mx-auto mb-4" />
+            <p>Loading customer information...</p>
+          </div>
+        );
+      }
+
+      if (!stripeInfo.found) {
+        // Display appropriate error message
+        return (
+          <div className="p-6 text-center">
+            <Ban className="h-12 w-12 text-red-500 mx-auto mb-4" />
+            <h2 className="text-lg font-semibold mb-2">No Customer Information</h2>
+            <p className="text-gray-500 mb-4">
+              {stripeInfo.error || "No Stripe customer was found for this email address."}
+            </p>
+            {stripeInfo.error?.includes('Stripe API key') && (
+              <div className="mt-2 text-sm">
+                <p className="font-medium mb-1">Need to set up Stripe?</p>
+                <Link 
+                  href="/settings" 
+                  className="text-blue-500 hover:text-blue-700 inline-flex items-center"
+                >
+                  <Settings className="h-4 w-4 mr-1" />
+                  Go to Settings
+                </Link>
+              </div>
+            )}
+          </div>
+        );
+      }
+
+      // Customer was found, display the information
+      const customer = stripeInfo.customer;
+      const subscription = stripeInfo.subscription;
+      const hasActiveSubscription = !!stripeInfo.hasActiveSubscription;
+
+      return (
+        <div className="p-6">
+          {/* Customer Information Section */}
+          <div className="mb-6">
+            <div className="flex items-start justify-between">
+              <div className="flex items-center">
+                <div className="h-12 w-12 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 font-medium text-lg mr-3">
+                  {customer?.name ? getInitials(customer.name) : '?'}
+                </div>
+                <div>
+                  <h2 className="text-lg font-semibold">{customer?.name || 'Customer'}</h2>
+                  <p className="text-gray-500">{customer?.email}</p>
+                </div>
+              </div>
+              {hasActiveSubscription ? (
+                <span className="inline-flex items-center bg-green-100 text-green-800 text-xs px-2.5 py-1 rounded-full">
+                  <CheckCircle className="w-3 h-3 mr-1" />
+                  Active
+                </span>
+              ) : (
+                <span className="inline-flex items-center bg-gray-100 text-gray-600 text-xs px-2.5 py-1 rounded-full">
+                  <Clock className="w-3 h-3 mr-1" />
+                  Inactive
+                </span>
+              )}
+            </div>
+            <div className="mt-2 text-sm text-gray-500">
+              Customer since {formatDate(customer?.created || 0)}
+            </div>
+            {customer?.metadata?.company && (
+              <div className="mt-2 text-sm">
+                <span className="font-medium">Company:</span> {customer.metadata.company}
+              </div>
+            )}
+          </div>
+
+          {/* Subscription Details Section */}
+          <div className="mb-6">
+            <h3 className="text-md font-semibold uppercase text-gray-500 border-b pb-2 mb-3">
+              SUBSCRIPTION DETAILS
+            </h3>
+            
+            <div className="grid grid-cols-2 gap-y-3">
+              <div className="text-sm font-medium">Plan</div>
+              <div className="text-sm">{subscription?.plan?.name || 'No active plan'}</div>
+              
+              <div className="text-sm font-medium">Status</div>
+              <div className="text-sm capitalize">{subscription?.status || 'Inactive'}</div>
+              
+              <div className="text-sm font-medium">Customer since</div>
+              <div className="text-sm">{formatDate(customer?.created || 0)}</div>
+              
+              <div className="text-sm font-medium">Billing cycle</div>
+              <div className="text-sm">
+                {subscription?.plan?.interval 
+                  ? `${subscription.plan.intervalCount} ${subscription.plan.interval}${subscription.plan.intervalCount > 1 ? 's' : ''}`
+                  : 'N/A'}
+              </div>
+              
+              <div className="text-sm font-medium">Payment method</div>
+              <div className="text-sm">
+                {getPaymentMethodDetails()}
+              </div>
+              
+              <div className="text-sm font-medium">Amount</div>
+              <div className="text-sm">
+                {subscription?.plan?.amount 
+                  ? formatCurrency(subscription.plan.amount, subscription.plan.currency)
+                  : 'N/A'}
+              </div>
+            </div>
+          </div>
+          
+          {/* Recent Payments Section */}
+          {stripeInfo.recentInvoices && stripeInfo.recentInvoices.length > 0 && (
+            <div>
+              <h3 className="text-md font-semibold uppercase text-gray-500 border-b pb-2 mb-3">
+                RECENT PAYMENTS
+              </h3>
+              
+              <div className="space-y-2">
+                {stripeInfo.recentInvoices.map(invoice => (
+                  <div key={invoice.id} className="flex justify-between items-center py-1 border-b border-gray-100">
+                    <div className="text-sm">{formatDate(invoice.date)}</div>
+                    <div className="flex items-center gap-2">
+                      <span className={`text-sm font-medium ${invoice.status === 'paid' ? 'text-green-600' : 'text-orange-500'}`}>
+                        {formatCurrency(invoice.amount, invoice.currency)}
+                      </span>
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-700 capitalize">
+                        {invoice.status}
+                      </span>
+                      {invoice.pdfUrl && (
+                        <a 
+                          href={invoice.pdfUrl} 
+                          target="_blank" 
+                          rel="noopener noreferrer" 
+                          className="text-gray-500 hover:text-blue-600"
+                        >
+                          <FileText className="h-4 w-4" />
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    };
+
+    // Get payment method details if available
+    const getPaymentMethodDetails = () => {
+      const paymentMethod = stripeInfo?.subscription?.paymentMethod;
+      if (!paymentMethod) return "Not available";
+      
+      if (paymentMethod.type === 'card') {
+        return `${paymentMethod.card.brand.toUpperCase()} •••• ${paymentMethod.card.last4}`;
+      }
+      return paymentMethod.type;
+    };
 
     return (
       <div className="h-full flex flex-col p-3 max-w-4xl mx-auto">
@@ -1186,7 +1611,12 @@ Support Team`;
             </div>
           </div>
 
-          <h2 className="text-lg font-semibold text-gray-900 mb-1">{email.subject}</h2>
+          <h2 
+            className="text-lg font-semibold text-gray-900 mb-1 cursor-help truncate" 
+            title={email.subject} // Full subject shown on hover
+          >
+            {truncateText(email.subject, 80)}
+          </h2>
 
           <div className="flex flex-wrap gap-2">
             <Dialog>
@@ -1195,15 +1625,16 @@ Support Team`;
                   variant="ghost"
                   size="sm"
                   className="h-7 px-2 rounded-full text-gray-600 hover:text-gray-900 hover:bg-gray-100 transition-all"
+                  onClick={checkStripeStatus}
                 >
-                  <svg className="h-4 w-4 mr-1" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
+                  <svg className={`h-4 w-4 mr-1 ${isLoadingStripe ? 'animate-spin' : ''}`} viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
                     <path
                       d="M32 13.414v5.172L28.414 22H3.586L0 18.586v-5.172L3.586 10h24.828L32 13.414z"
                       fill="#6772e5"
                     />
                     <path d="M21.5 20.5h-11v-9h11v9zm-7-3h4v-3h-4v3z" fill="#6772e5" />
                   </svg>
-                  Customer Info
+                  {isLoadingStripe ? 'Loading...' : 'Customer Info'}
                 </Button>
               </DialogTrigger>
               <DialogContent className="rounded-2xl border-0 shadow-lg p-0 overflow-hidden">
@@ -1211,47 +1642,23 @@ Support Team`;
                   <DialogTitle className="text-xl font-medium">Customer Information</DialogTitle>
                 </DialogHeader>
                 <div className="p-6">
-                  <div className="flex items-center gap-4 mb-8">
-                    <Avatar className="h-16 w-16 border-4 border-white shadow-md -mt-12">
-                      <AvatarFallback className="bg-blue-100 text-indigo-600 text-lg">
-                        {customerData.name
-                          .split(" ")
-                          .map((n) => n[0])
-                          .join("")}
-                      </AvatarFallback>
-                    </Avatar>
-                    <div>
-                      <div className="font-medium text-lg">{customerData.name}</div>
-                      <div className="text-sm text-gray-500">{customerData.email}</div>
-                    </div>
-                  </div>
-                  <div className="space-y-5">
-                    <div className="flex justify-between items-center py-2 border-b border-gray-100">
-                      <span className="text-gray-600 font-medium">Plan</span>
-                      <span className="text-gray-900">{customerData.subscription}</span>
-                    </div>
-                    <div className="flex justify-between items-center py-2 border-b border-gray-100">
-                      <span className="text-gray-600 font-medium">Status</span>
-                      <Badge className="bg-green-50 text-green-700 rounded-full px-3 py-0.5">
-                        {customerData.status}
-                      </Badge>
-                    </div>
-                    <div className="flex justify-between items-center py-2 border-b border-gray-100">
-                      <span className="text-gray-600 font-medium">Customer since</span>
-                      <span className="text-gray-900">{customerData.since}</span>
-                    </div>
-                    <div className="flex justify-between items-center py-2 border-b border-gray-100">
-                      <span className="text-gray-600 font-medium">Billing cycle</span>
-                      <span className="text-gray-900">{customerData.billingCycle}</span>
-                    </div>
-                    <div className="flex justify-between items-center py-2 border-b border-gray-100">
-                      <span className="text-gray-600 font-medium">Next billing</span>
-                      <span className="text-gray-900">{customerData.nextBilling}</span>
-                    </div>
-                  </div>
+                  {dialogContent()}
                 </div>
               </DialogContent>
             </Dialog>
+
+            {/* Add Stripe Debug button - only visible in development */}
+            {process.env.NODE_ENV === 'development' && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 px-2 rounded-full text-amber-600 hover:text-amber-900 hover:bg-amber-50 transition-all"
+                onClick={debugStripeKey}
+              >
+                <Lightbulb className="h-4 w-4 mr-1" />
+                Debug Stripe
+              </Button>
+            )}
 
             <Button
               variant="ghost"
@@ -1296,6 +1703,110 @@ Support Team`;
             isLoading={email.isRefreshing} 
           />
         </div>
+
+        {/* Debug Dialog */}
+        {showDebugInfo && (
+          <Dialog open={showDebugInfo} onOpenChange={setShowDebugInfo}>
+            <DialogContent className="max-w-4xl">
+              <DialogHeader>
+                <DialogTitle className="flex items-center">
+                  <Lightbulb className="h-5 w-5 mr-2 text-amber-500" />
+                  Stripe Connection Debug Info
+                </DialogTitle>
+              </DialogHeader>
+              <div className="overflow-auto max-h-[70vh]">
+                {debugInfo === null ? (
+                  <div className="animate-pulse space-y-3 p-4">
+                    <div className="h-4 bg-gray-100 rounded w-3/4"></div>
+                    <div className="h-4 bg-gray-100 rounded w-5/6"></div>
+                    <div className="h-4 bg-gray-100 rounded w-2/3"></div>
+                  </div>
+                ) : debugInfo.error ? (
+                  <div className="p-4 bg-red-50 text-red-700 rounded-md">
+                    <p className="font-medium">Error:</p>
+                    <p>{debugInfo.error}</p>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    <div className="bg-blue-50 p-4 rounded-md">
+                      <h3 className="font-medium text-blue-800 mb-2">User Info</h3>
+                      <div className="grid grid-cols-2 gap-2 text-sm">
+                        <div className="font-medium">Current User Email:</div>
+                        <div>{user?.email || 'Not signed in'}</div>
+                        <div className="font-medium">Looking up API key for:</div>
+                        <div>{debugInfo.email || 'N/A'}</div>
+                        <div className="font-medium">API Key Found:</div>
+                        <div className={debugInfo.keyExists ? 'text-green-600 font-medium' : 'text-red-600 font-medium'}>
+                          {debugInfo.keyExists ? 'Yes' : 'No'}
+                        </div>
+                        {debugInfo.keyExists && (
+                          <>
+                            <div className="font-medium">API Key Length:</div>
+                            <div>{debugInfo.keyLength || 0} characters</div>
+                            <div className="font-medium">API Key Prefix:</div>
+                            <div>{debugInfo.keyStartsWith || 'N/A'}</div>
+                          </>
+                        )}
+                      </div>
+                    </div>
+
+                    {debugInfo.steps && (
+                      <div className="border rounded-md">
+                        <h3 className="font-medium p-3 bg-gray-50 border-b">Debug Steps</h3>
+                        <ul className="divide-y">
+                          {debugInfo.steps.map((step: string, i: number) => (
+                            <li key={i} className={`p-2 text-sm ${step.includes('ERROR') ? 'text-red-600' : ''}`}>
+                              {i + 1}. {step}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {debugInfo.documents && debugInfo.documents.length > 0 && (
+                      <div className="border rounded-md">
+                        <h3 className="font-medium p-3 bg-gray-50 border-b">Found Documents</h3>
+                        <div className="p-3 space-y-3">
+                          {debugInfo.documents.map((doc: any, i: number) => (
+                            <div key={i} className="border p-3 rounded-md text-sm">
+                              <div className="grid grid-cols-2 gap-2">
+                                <div className="font-medium">Document ID:</div>
+                                <div>{doc.id}</div>
+                                <div className="font-medium">Match Type:</div>
+                                <div>{doc.match}</div>
+                                <div className="font-medium">User Email:</div>
+                                <div>{doc.userEmail}</div>
+                                <div className="font-medium">Has Stripe Key:</div>
+                                <div className={doc.hasStripeKey ? 'text-green-600' : 'text-red-600'}>
+                                  {doc.hasStripeKey ? 'Yes' : 'No'}
+                                </div>
+                                {doc.hasStripeKey && (
+                                  <>
+                                    <div className="font-medium">Key Length:</div>
+                                    <div>{doc.keyLength} characters</div>
+                                  </>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="flex justify-end gap-2 mt-4">
+                      <Button 
+                        variant="ghost" 
+                        onClick={() => setShowDebugInfo(false)}
+                      >
+                        Close
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </DialogContent>
+          </Dialog>
+        )}
 
         {/* Questions Section - Only show if there are questions */}
         {email.questions && email.questions.length > 0 && (
